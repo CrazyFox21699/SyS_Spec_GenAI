@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-05-16T04:27:08Z",
+  "metadata": {
+    "kind": "csv",
+    "path": "/Users/tranthaonguyen/TruongHuy/TMC/power-spec-kit/examples/sample_conditions_export.csv",
+    "label": null,
+    "warnings": []
+  },
+  "conditions": [
+    {
+      "id": "COND_001",
+      "title": "Synthetic ACC rail allow",
+      "applies_to": "Gateway ECU / power mgr v2",
+      "predicates": [
+        {
+          "signal": "IGN_AUX",
+          "comparator": "==",
+          "value": true
+        },
+        {
+          "signal": "BATT_VOLTAGE",
+          "comparator": ">=",
+          "value": 9.0
+        }
+      ],
+      "dependencies": [],
+      "source_evidence": [
+        {
+          "file": "SynthAcc.md",
+          "location": "$3.2"
+        }
+      ],
+      "source_row_csv": 2,
+      "references_raw": "See SPEC-9001 appendix"
+    },
+    {
+      "id": "COND_002",
+      "title": "Synthetic driver-door close",
+      "applies_to": "BCM retention",
+      "predicates": [
+        {
+          "signal": "ENGINE_STATE",
+          "comparator": "==",
+          "value": "OFF"
+        },
+        {
+          "signal": "DRIVER_DOOR",
+          "comparator": "==",
+          "value": "OPEN"
+        }
+      ],
+      "dependencies": [
+        "COND_001"
+      ],
+      "source_evidence": [
+        {
+          "file": "SynthRetention.txt",
+          "location": "B-4"
+        }
+      ],
+      "source_row_csv": 3,
+      "references_raw": "DOC_pwrmodes_v3.pdf"
+    },
+    {
+      "id": "COND_003",
+      "title": "Synthetic CAN sleep inhibit",
+      "applies_to": "Network coordinator",
+      "predicates": [
+        {
+          "signal": "AWAKE_CLIENT_BITMAP",
+          "comparator": "!=",
+          "value": 0
+        }
+      ],
+      "dependencies": [],
+      "source_evidence": [
+        {
+          "file": "SynthNetSleep.csv",
+          "location": "r17"
+        }
+      ],
+      "source_row_csv": 4,
+      "references_raw": "TBD REQ-5544"
+    }
+  ],
+  "unresolved_references": [
+    {
+      "text": "SPEC-9001",
+      "seen_in_rows": [
+        2
+      ]
+    },
+    {
+      "text": "See SPEC-9001 appendix",
+      "seen_in_rows": [
+        2
+      ]
+    },
+    {
+      "text": "DOC_pwrmodes_v3",
+      "seen_in_rows": [
+        3
+      ]
+    },
+    {
+      "text": "REQ-5544",
+      "seen_in_rows": [
+        4
+      ]
+    }
+  ]
+}

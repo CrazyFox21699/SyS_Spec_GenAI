@@ -1,0 +1,228 @@
+/* Adjustable borders — change --ui-border-width in tokens.css */
+
+#sidebar {
+  border-right: var(--ui-border-width-strong) solid var(--border-strong);
+}
+
+#topbar {
+  border-bottom: var(--ui-border-width-strong) solid var(--border-strong);
+}
+
+#content {
+  border-left: var(--ui-border-width) solid var(--border-subtle);
+}
+
+.card,
+.workbook-focus-card,
+.alex-primary-panel,
+.alex-side-panel,
+.alex-preview-card,
+.alex-io-block,
+.copilot-login-box,
+.copilot-verify-box {
+  border: var(--ui-border-width) solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.alex-preview-card {
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.alex-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--ui-border-width) solid var(--border-subtle);
+}
+
+.alex-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+@media (max-width: 900px) {
+  .alex-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.alex-io-block {
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  min-width: 0;
+}
+
+.alex-io-block h5 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.alex-io-pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.alex-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.workbook-grid .col-io {
+  min-width: 16rem;
+  max-width: 28rem;
+}
+
+.workbook-grid td.col-io-pre {
+  vertical-align: top;
+}
+
+.workbook-sheet {
+  width: 100%;
+}
+
+.workbook-grid-wrap {
+  width: 100%;
+  max-height: min(78vh, 860px);
+}
+
+.workbook-grid th {
+  position: relative;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.workbook-grid [data-col="review_status"] {
+  min-width: 6.75rem;
+}
+
+.workbook-grid [data-col="engineer_confirmation_required"] {
+  min-width: 7.75rem;
+}
+
+.workbook-grid [data-col="open_questions"] {
+  min-width: 10.5rem;
+}
+
+.workbook-grid .col-resize-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.workbook-grid [data-col="no"] {
+  width: 3.25rem;
+  min-width: 3rem;
+  max-width: 4rem;
+  text-align: center;
+}
+
+.workbook-grid [data-col="candidate_id"] {
+  width: 9rem;
+  min-width: 8rem;
+}
+
+.workbook-grid--spreadsheet thead th {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.workbook-grid--spreadsheet td {
+  overflow: hidden;
+  vertical-align: top;
+  word-wrap: break-word;
+}
+
+.workbook-grid--spreadsheet [data-col="save"] .btn {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* System spec workbook — full grid borders */
+.grid-wrap:has(.workbook-grid) {
+  border: var(--ui-border-width-strong) solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+table.data-grid.workbook-grid {
+  border-collapse: collapse;
+  background: var(--surface-raised);
+}
+
+table.data-grid.workbook-grid th,
+table.data-grid.workbook-grid td {
+  border: 1px solid var(--border-strong);
+  border-bottom-color: var(--border-strong);
+}
+
+table.data-grid.workbook-grid thead th {
+  background: var(--surface-muted);
+  border-bottom: 2px solid var(--border-strong);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+table.data-grid.workbook-grid tbody tr:nth-child(even) td {
+  background: #fafbfc;
+}
+
+table.data-grid.workbook-grid tbody tr:hover td {
+  background: #f1f5f9;
+}
+
+.copilot-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0.35rem 0 0;
+  line-height: 1.45;
+}
+
+.copilot-policy-hint {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.copilot-policy-hint p {
+  margin: 0 0 var(--space-2);
+}
+
+.copilot-policy-hint p:last-child {
+  margin-bottom: 0;
+}
+
+.copilot-error-detail {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.copilot-error-detail summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}

@@ -1,0 +1,143 @@
+states:
+- name: TR_PM_001
+  mode: null
+  description: null
+- name: ADM1_ACC
+  mode: null
+  description: null
+- name: TR_PM_002
+  mode: null
+  description: null
+- name: ADM1_OFF
+  mode: null
+  description: null
+- name: TR_PM_003
+  mode: null
+  description: null
+- name: TC_PM_001
+  mode: null
+  description: null
+- name: Power Mode Control
+  mode: null
+  description: null
+- name: TC_PM_002
+  mode: null
+  description: null
+- name: TC_PM_003
+  mode: null
+  description: null
+- name: TC_PM_004
+  mode: null
+  description: null
+transitions:
+- id: TR_001
+  from_state: TR_PM_001
+  to_state: ADM1_ACC
+  event: Shutdown request detected
+  raw_condition: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 2
+  confidence: low
+  review_required: true
+- id: TR_002
+  from_state: TR_PM_002
+  to_state: ADM1_OFF
+  event: ACC request detected
+  raw_condition: Mode_cmd = 2 AND Battery_OK = 1
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 3
+  confidence: low
+  review_required: true
+- id: TR_003
+  from_state: TR_PM_003
+  to_state: ADM1_ACC
+  event: Battery abnormal
+  raw_condition: Battery_OK = 0 OR T_trans exceeded
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 4
+  confidence: low
+  review_required: true
+- id: TR_004
+  from_state: TC_PM_001
+  to_state: Power Mode Control
+  event: Shutdown request active
+  raw_condition: Verify shutoff when all mandatory conditions are true and Condition_C
+    is true
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 2
+  confidence: low
+  review_required: true
+- id: TR_005
+  from_state: TC_PM_002
+  to_state: Power Mode Control
+  event: Shutdown timing not reached
+  raw_condition: Verify system does not shut off before timing threshold
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 3
+  confidence: low
+  review_required: true
+- id: TR_001
+  from_state: TC_PM_001
+  to_state: Power Mode Control
+  event: Shutdown request active
+  raw_condition: Verify shutoff when all mandatory conditions are satisfied and Condition_C
+    branch is true
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 2
+  confidence: low
+  review_required: true
+- id: TR_002
+  from_state: TC_PM_002
+  to_state: Power Mode Control
+  event: Shutdown request active
+  raw_condition: Verify shutoff when OR branch Condition_D is true
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 3
+  confidence: low
+  review_required: true
+- id: TR_003
+  from_state: TC_PM_003
+  to_state: Power Mode Control
+  event: Timing boundary
+  raw_condition: Verify no shutoff before shutdown timer threshold
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 4
+  confidence: low
+  review_required: true
+- id: TR_004
+  from_state: TC_PM_004
+  to_state: Power Mode Control
+  event: Mandatory condition false
+  raw_condition: Verify no shutoff when vehicle speed is not zero
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 5
+  confidence: low
+  review_required: true
+source_files:
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_Behavior_Logic_Sample.xlsx
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_Condition_Tree_Diagram.png
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_StateFlow_Timing_Sample.pdf
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_State_Machine_Diagram.png
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_System_Spec_Sample.docx
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_TestSpec_Reference_Sample.xlsx
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/PM_Timing_Chart.png
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/pm_controller_sample.cpp
+- /Users/tranthaonguyen/TruongHuy/TMC/pm_sample_inputs/input/power_mode_gtest_sample.cpp

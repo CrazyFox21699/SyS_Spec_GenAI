@@ -1,0 +1,23 @@
+/*
+ * Automatically drafted from prompts/generate_gtest.md — expand before compiling.
+ */
+
+// test_id      : REPLACE_WITH_TST_PWR_YYYYMMDD_###
+// source_evidence :
+//   - file       : REPLACE_WITH_DOC_PATH_OR_URL
+//   - location   : REPLACE_WITH_SECTION_PAGE_SHEET
+//   - quote_note : SHORT_VERBATIM_SNIPPET_IF_ALLOWED
+
+TEST_F(/*FixtureName*/PowerModeFsmTest, /*TestName*/REPLACE_SNAKE_CASE) {
+  constexpr const char kTestId[] = "REPLACE_WITH_TST_PWR_YYYYMMDD_###";
+
+  // Arrange
+  // TODO(pwrmgr): Instantiate stimuli / mocks consistent with Approved Spec YAML `given`.
+
+  // Act
+  // TODO(pwrmgr): Trigger the single observable transition exercised by this testcase.
+
+  // Assert
+  // EXPECT_TRUE(...) << kTestId;
+  // EXPECT_EQ(...) << kTestId;
+}

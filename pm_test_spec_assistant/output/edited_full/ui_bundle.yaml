@@ -1,0 +1,5107 @@
+version: '0.1'
+strict_mode: true
+classified_files:
+- file: ../pm_sample_inputs/edited_Shutoff_Condition_Spec.docx
+  role: system_spec
+  confidence: high
+  reason:
+  - 'Word table: Logic + Condition columns'
+  - 'Signal/interface keyword in Word: value'
+  user_confirmation_suggested: false
+ingest_skipped: []
+signals: []
+states:
+- name: NORMAL
+  mode: null
+  description: null
+  id: state_0001
+  type: state
+  review_status: pending
+  review_required: true
+  source_status: missing
+  source_refs: []
+  confidence: low
+  issues: []
+- name: SHUT_OFF
+  mode: null
+  description: null
+  id: state_0002
+  type: state
+  review_status: pending
+  review_required: true
+  source_status: missing
+  source_refs: []
+  confidence: low
+  issues: []
+transitions:
+- id: SM_P_001
+  from_state: NORMAL
+  to_state: SHUT_OFF
+  event: OK_SHUTOFF
+  raw_condition: OK_SHUTOFF = TRUE
+  source: &id001
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 24
+    kind: paragraph
+  confidence: medium
+  review_required: true
+  derivation: paragraph_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id001
+  issues: []
+- id: SM_P_002
+  from_state: NORMAL
+  to_state: NORMAL
+  event: NOK_SHUTOFF
+  raw_condition: NOK_SHUTOFF = TRUE
+  source: &id002
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 25
+    kind: paragraph
+  confidence: medium
+  review_required: true
+  derivation: paragraph_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id002
+  issues: []
+- id: SM_P_003
+  from_state: NORMAL
+  to_state: SHUT_OFF
+  event: RESET_SHUTOFF
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  source: &id003
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 26
+    kind: paragraph
+  confidence: medium
+  review_required: true
+  derivation: paragraph_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id003
+  issues: []
+- id: SM_D_001
+  from_state: NORMAL
+  to_state: SHUT_OFF
+  event: OK_SHUTOFF
+  raw_condition: OK_SHUTOFF = TRUE
+  source: &id004
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 24
+    kind: diagram_narrative
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id004
+  issues: []
+- id: SM_D_002
+  from_state: NORMAL
+  to_state: NORMAL
+  event: NOK_SHUTOFF
+  raw_condition: NOK_SHUTOFF = TRUE
+  source: &id005
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 25
+    kind: diagram_narrative
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id005
+  issues: []
+- id: SM_D_003
+  from_state: NORMAL
+  to_state: NORMAL
+  event: RESET_SHUTOFF
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  source: &id006
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 26
+    kind: diagram_narrative
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id006
+  issues: []
+- id: SM_D_001
+  from_state: NORMAL
+  to_state: SHUT_OFF
+  event: OK_SHUTOFF
+  raw_condition: OK_SHUTOFF = TRUE
+  source: *id004
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id004
+  issues: []
+- id: SM_D_002
+  from_state: NORMAL
+  to_state: NORMAL
+  event: NOK_SHUTOFF
+  raw_condition: NOK_SHUTOFF = TRUE
+  source: *id005
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id005
+  issues: []
+- id: SM_D_003
+  from_state: NORMAL
+  to_state: NORMAL
+  event: RESET_SHUTOFF
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  source: *id006
+  confidence: medium
+  review_required: true
+  derivation: diagram_state_rule
+  type: transition
+  review_status: pending
+  source_status: present
+  source_refs:
+  - *id006
+  issues: []
+logic_blocks:
+- id: TC2_T1_01
+  name: SHUTOFF_DECISION
+  raw_expression: (OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)
+  tree: &id011
+    id: op_678bc3e6
+    type: OR
+    children:
+    - id: op_7a09a943
+      type: AND
+      children:
+      - id: ref_88fee9c6
+        type: condition
+        name: OK_SHUTOFF
+        raw_text: OK_SHUTOFF
+        footnotes: []
+        source: &id007
+          file: edited_Shutoff_Condition_Spec.docx
+          document: edited_Shutoff_Condition_Spec.docx
+          table: table_1
+          control: SHUTOFF_DECISION
+          table_id: T1_01
+      - id: not_0c58ed67
+        type: NOT
+        children:
+        - id: ref_43c479be
+          type: condition
+          name: NOK_SHUTOFF
+          raw_text: NOT NOK_SHUTOFF
+          footnotes: []
+          source: *id007
+        raw_text: NOT NOK_SHUTOFF
+        source: *id007
+      - id: ref_4a01fae1
+        type: condition
+        name: FORCE_SHUTOFF
+        raw_text: FORCE_SHUTOFF
+        footnotes: []
+        source: *id007
+      - id: ref_742c7f57
+        type: condition
+        name: CND_FORCE_ALLOWED
+        raw_text: CND_FORCE_ALLOWED
+        footnotes: []
+        source: *id007
+      raw_text: AND
+      source: *id007
+    raw_text: OR
+    source: *id007
+    parse_status: ok
+  block_type: two_column_control
+  parse_status: ok
+  review_required: true
+  source: *id007
+  table_kind: logic
+  row_paths:
+  - &id063
+    - OR
+    - AND
+    - OK_SHUTOFF
+  - &id064
+    - OR
+    - AND
+    - NOT NOK_SHUTOFF
+  - &id065
+    - OR
+    - AND
+    - FORCE_SHUTOFF
+  - &id066
+    - OR
+    - AND
+    - CND_FORCE_ALLOWED
+  issues: &id100 []
+  unresolved_refs:
+  - OK_SHUTOFF
+  - NOK_SHUTOFF
+  - FORCE_SHUTOFF
+- id: TC2_T2_01
+  name: OK_SHUTOFF
+  raw_expression: (CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE
+    OR (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+  tree: &id012
+    id: or_cd8bea20
+    type: OR
+    children:
+    - id: op_8193dd3d
+      type: AND
+      children:
+      - id: ref_e6a16d80
+        type: condition
+        name: CND_REQ_GROUP
+        raw_text: CND_REQ_GROUP
+        footnotes: []
+        source: &id008
+          file: edited_Shutoff_Condition_Spec.docx
+          document: edited_Shutoff_Condition_Spec.docx
+          table: table_2
+          control: OK_SHUTOFF
+          table_id: T2_01
+      raw_text: AND
+      source: *id008
+    - id: op_43890512
+      type: AND
+      children:
+      - id: ref_2539f40a
+        type: condition
+        name: CND_SAFE_GROUP
+        raw_text: CND_SAFE_GROUP
+        footnotes: []
+        source: *id008
+      raw_text: AND
+      source: *id008
+    - id: op_24cbe79a
+      type: AND
+      children:
+      - id: op_75452923
+        type: OR
+        children:
+        - id: ref_dd9a84fa
+          type: condition
+          name: CND_NORMAL_ROUTE
+          raw_text: CND_NORMAL_ROUTE
+          footnotes: []
+          source: *id008
+        raw_text: OR
+        source: *id008
+      raw_text: AND
+      source: *id008
+    - id: op_a9ca1335
+      type: AND
+      children:
+      - id: op_246c393c
+        type: OR
+        children:
+        - id: op_18643e47
+          type: AND
+          children:
+          - id: ref_c00d6705
+            type: condition
+            name: CND_BACKUP_ROUTE
+            raw_text: CND_BACKUP_ROUTE
+            footnotes: []
+            source: *id008
+          raw_text: AND
+          source: *id008
+        raw_text: OR
+        source: *id008
+      raw_text: AND
+      source: *id008
+    - id: op_40c8e1b6
+      type: OR
+      children:
+      - id: and_65175424
+        type: AND
+        children:
+        - id: ref_badbd358
+          type: condition
+          name: CND_BACKUP_TIMER_OK
+          raw_text: CND_BACKUP_TIMER_OK
+          footnotes: []
+          source: *id008
+        - id: op_b7a279c3
+          type: AND
+          children:
+          - id: ref_492f013d
+            type: condition
+            name: POWER=OFF
+            raw_text: POWER=OFF
+            footnotes: []
+            source: *id008
+          raw_text: AND
+          source: *id008
+        source: *id008
+      raw_text: OR
+      source: *id008
+    - id: op_769552c8
+      type: OR
+      children:
+      - id: ref_674e822e
+        type: condition
+        name: CND_OUTPUT_READY
+        raw_text: CND_OUTPUT_READY
+        footnotes: []
+        source: *id008
+      raw_text: OR
+      source: *id008
+    source: *id008
+    parse_status: partial
+  block_type: two_column_control
+  parse_status: partial
+  review_required: true
+  source: *id008
+  table_kind: logic
+  row_paths:
+  - &id067
+    - AND
+    - CND_REQ_GROUP
+  - &id068
+    - AND
+    - CND_SAFE_GROUP
+  - &id069
+    - AND
+    - OR
+    - CND_NORMAL_ROUTE
+  - &id070
+    - AND
+    - OR
+    - AND
+    - CND_BACKUP_ROUTE
+  - &id071
+    - OR
+    - CND_BACKUP_TIMER_OK
+    - AND
+    - POWER=OFF
+  - &id072
+    - OR
+    - CND_OUTPUT_READY
+  issues: &id101
+  - type: unsupported_logic_format
+    message: Partial merge for `OK_SHUTOFF` — verify nested groups
+    severity: warning
+  unresolved_refs:
+  - CND_NORMAL_ROUTE
+  - CND_BACKUP_ROUTE
+  - CND_BACKUP_TIMER_OK
+  - POWER=OFF
+- id: TC2_T3_01
+  name: CND_REQ_GROUP
+  raw_expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2)
+    OR REQ_SRC_B_VALID (*3)))
+  tree: &id013
+    id: op_b0514031
+    type: AND
+    children:
+    - id: ref_50ce8306
+      type: condition
+      name: REQ_MAIN_OK (*1)
+      raw_text: REQ_MAIN_OK (*1)
+      footnotes:
+      - '1'
+      source: &id009
+        file: edited_Shutoff_Condition_Spec.docx
+        document: edited_Shutoff_Condition_Spec.docx
+        table: table_3
+        control: CND_REQ_GROUP
+        table_id: T3_01
+    - id: ref_38d64dc2
+      type: condition
+      name: REQ_STABLE (*4)
+      raw_text: REQ_STABLE (*4)
+      footnotes:
+      - '4'
+      source: *id009
+    - id: op_690acb76
+      type: OR
+      children:
+      - id: ref_53d2dbfc
+        type: condition
+        name: REQ_SRC_A_VALID (*2)
+        raw_text: REQ_SRC_A_VALID (*2)
+        footnotes:
+        - '2'
+        source: *id009
+      - id: ref_99b181b3
+        type: condition
+        name: REQ_SRC_B_VALID (*3)
+        raw_text: REQ_SRC_B_VALID (*3)
+        footnotes:
+        - '3'
+        source: *id009
+      raw_text: OR
+      source: *id009
+    raw_text: AND
+    source: *id009
+    parse_status: ok
+  block_type: two_column_control
+  parse_status: ok
+  review_required: true
+  source: *id009
+  table_kind: logic
+  row_paths:
+  - &id073
+    - AND
+    - REQ_MAIN_OK (*1)
+  - &id074
+    - AND
+    - OR
+    - REQ_SRC_A_VALID (*2)
+  - &id075
+    - AND
+    - OR
+    - REQ_SRC_B_VALID (*3)
+  - &id076
+    - AND
+    - REQ_STABLE (*4)
+  issues: &id102 []
+- id: TC2_T4_01
+  name: CND_SAFE_GROUP
+  raw_expression: (VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
+    (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+  tree: &id014
+    id: op_b74c8a86
+    type: AND
+    children:
+    - id: ref_e087bb25
+      type: condition
+      name: VEHICLE_STOPPED (*1)
+      raw_text: VEHICLE_STOPPED (*1)
+      footnotes:
+      - '1'
+      source: &id010
+        file: edited_Shutoff_Condition_Spec.docx
+        document: edited_Shutoff_Condition_Spec.docx
+        table: table_4
+        control: CND_SAFE_GROUP
+        table_id: T4_01
+    - id: ref_ebe5c3a3
+      type: condition
+      name: DRIVER_SAFE (*2)
+      raw_text: DRIVER_SAFE (*2)
+      footnotes:
+      - '2'
+      source: *id010
+    - id: not_24a31563
+      type: NOT
+      children:
+      - id: ref_fd6920ed
+        type: condition
+        name: SAFETY_LOCKED (*5)
+        raw_text: NOT SAFETY_LOCKED (*5)
+        footnotes:
+        - '5'
+        source: *id010
+      raw_text: NOT SAFETY_LOCKED (*5)
+      source: *id010
+    - id: op_183c6133
+      type: OR
+      children:
+      - id: ref_d4fc0630
+        type: condition
+        name: PROCESS_IDLE (*3)
+        raw_text: PROCESS_IDLE (*3)
+        footnotes:
+        - '3'
+        source: *id010
+      - id: ref_b022787b
+        type: condition
+        name: PROCESS_PREPARED (*4)
+        raw_text: PROCESS_PREPARED (*4)
+        footnotes:
+        - '4'
+        source: *id010
+      raw_text: OR
+      source: *id010
+    raw_text: AND
+    source: *id010
+    parse_status: ok
+  block_type: two_column_control
+  parse_status: ok
+  review_required: true
+  source: *id010
+  table_kind: logic
+  row_paths:
+  - &id077
+    - AND
+    - VEHICLE_STOPPED (*1)
+  - &id078
+    - AND
+    - DRIVER_SAFE (*2)
+  - &id079
+    - AND
+    - OR
+    - PROCESS_IDLE (*3)
+  - &id080
+    - AND
+    - OR
+    - PROCESS_PREPARED (*4)
+  - &id081
+    - AND
+    - NOT SAFETY_LOCKED (*5)
+  issues: &id103 []
+condition_definitions:
+- name: T_REQ_STABLE
+  definition: Request stable confirmation time | 120 [ms]  5
+  source: &id082
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 2
+  constant_value: value_ms=120 unit=ms ambiguous_trailing=5
+- name: T_BACKUP_TIMER
+  definition: Backup route confirmation time | 300 [ms]
+  source: &id083
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 3
+  constant_value: 300 [ms]
+- name: T_HW_WAKEUP
+  definition: Hardware standby wakeup time | 450 [ms]
+  source: &id084
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 4
+  constant_value: 450 [ms]
+- name: T_CANCEL
+  definition: Operator cancel filter time | 700 [ms]  20
+  source: &id085
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 5
+  constant_value: value_ms=700 unit=ms ambiguous_trailing=20
+- name: T_SENSOR_CONFIRM
+  definition: Sensor invalid confirmation time | 232 [ms]
+  source: &id086
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 6
+  constant_value: 232 [ms]
+- name: T_COMM_TIMEOUT
+  definition: Communication lost timeout | 123 [ms]  3
+  source: &id087
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 7
+  constant_value: value_ms=123 unit=ms ambiguous_trailing=3
+- name: T_FORCE_WAIT
+  definition: Force request waiting time | 50 [ms]
+  source: &id088
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+    row: 8
+  constant_value: 50 [ms]
+- name: CND_REQ_GROUP
+  definition: Composite condition group (members defined below)
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 10
+    kind: group_header
+- name: REQ_MAIN_OK
+  definition: req.main == TRUE
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 12
+    kind: code_definition
+- name: REQ_SRC_A_VALID
+  definition: source == SRC_A && req.auth == PASS
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 13
+    kind: code_definition
+- name: REQ_SRC_B_VALID
+  definition: req.source == SRC_B && req.level >= MIN_LEVEL
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 14
+    kind: code_definition
+- name: REQ_STABLE
+  definition: remains active until timer >= T_REQ_STABLE
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 15
+    kind: code_definition
+- name: CND_SAFE_GROUP
+  definition: Composite condition group (members defined below)
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 16
+    kind: group_header
+- name: VEHICLE_STOPPED
+  definition: Vehicle motion state is zero.
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 18
+    kind: word_definition
+- name: DRIVER_SAFE
+  definition: Operator override is not active.
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 19
+    kind: word_definition
+- name: PROCESS_IDLE
+  definition: Processing state is IDLE.
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 20
+    kind: word_definition
+- name: PROCESS_PREPARED
+  definition: Processing state is PREPARED.
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 21
+    kind: word_definition
+- name: SAFETY_LOCKED
+  definition: Safety interlock is active. The condition line is written as NOT SAFETY_LOCKED.
+    The tool must preserve the NOT operator.
+  group: CND_SAFE_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 22
+    kind: word_definition
+test_reference_rows: []
+condition_trees:
+- transition_id: TC2_T1_01
+  name: SHUTOFF_DECISION
+  raw_condition: (OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)
+  tree: *id011
+  timing_normalizations: []
+  source: *id007
+  block_type: two_column_control
+  parse_status: ok
+- transition_id: TC2_T2_01
+  name: OK_SHUTOFF
+  raw_condition: (CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE
+    OR (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+  tree: *id012
+  timing_normalizations: []
+  source: *id008
+  block_type: two_column_control
+  parse_status: partial
+- transition_id: TC2_T3_01
+  name: CND_REQ_GROUP
+  raw_condition: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR
+    REQ_SRC_B_VALID (*3)))
+  tree: *id013
+  timing_normalizations: []
+  source: *id009
+  block_type: two_column_control
+  parse_status: ok
+- transition_id: TC2_T4_01
+  name: CND_SAFE_GROUP
+  raw_condition: (VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
+    (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+  tree: *id014
+  timing_normalizations: []
+  source: *id010
+  block_type: two_column_control
+  parse_status: ok
+- transition_id: SM_P_001
+  raw_condition: OK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: OK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: OK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id001
+- transition_id: SM_P_002
+  raw_condition: NOK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: NOK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: NOK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id002
+- transition_id: SM_P_003
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  tree:
+    type: OR
+    children:
+    - type: signal_condition
+      signal: RESET_SHUTOFF
+      operator: ==
+      value: 'TRUE'
+      raw_condition: RESET_SHUTOFF = TRUE
+      parse_status: ok
+    - type: signal_condition
+      signal: SHUTOFF_DECISION
+      operator: ==
+      value: 'FALSE'
+      raw_condition: SHUTOFF_DECISION = FALSE
+      parse_status: ok
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    parse_status: partial
+  timing_normalizations: []
+  source: *id003
+- transition_id: SM_D_001
+  raw_condition: OK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: OK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: OK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id004
+- transition_id: SM_D_002
+  raw_condition: NOK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: NOK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: NOK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id005
+- transition_id: SM_D_003
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  tree:
+    type: OR
+    children:
+    - type: signal_condition
+      signal: RESET_SHUTOFF
+      operator: ==
+      value: 'TRUE'
+      raw_condition: RESET_SHUTOFF = TRUE
+      parse_status: ok
+    - type: signal_condition
+      signal: SHUTOFF_DECISION
+      operator: ==
+      value: 'FALSE'
+      raw_condition: SHUTOFF_DECISION = FALSE
+      parse_status: ok
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    parse_status: partial
+  timing_normalizations: []
+  source: *id006
+- transition_id: SM_D_001
+  raw_condition: OK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: OK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: OK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id004
+- transition_id: SM_D_002
+  raw_condition: NOK_SHUTOFF = TRUE
+  tree:
+    type: signal_condition
+    signal: NOK_SHUTOFF
+    operator: ==
+    value: 'TRUE'
+    raw_condition: NOK_SHUTOFF = TRUE
+    parse_status: ok
+  timing_normalizations: []
+  source: *id005
+- transition_id: SM_D_003
+  raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+  tree:
+    type: OR
+    children:
+    - type: signal_condition
+      signal: RESET_SHUTOFF
+      operator: ==
+      value: 'TRUE'
+      raw_condition: RESET_SHUTOFF = TRUE
+      parse_status: ok
+    - type: signal_condition
+      signal: SHUTOFF_DECISION
+      operator: ==
+      value: 'FALSE'
+      raw_condition: SHUTOFF_DECISION = FALSE
+      parse_status: ok
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    parse_status: partial
+  timing_normalizations: []
+  source: *id006
+timing_constraints: []
+outputs: []
+japanese_interpretations: []
+traceability:
+  transition_context:
+  - transition_id: SM_P_001
+    signals_mentioned: []
+    raw_condition: OK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - *id001
+    confidence: medium
+    review_required: true
+  - transition_id: SM_P_002
+    signals_mentioned: []
+    raw_condition: NOK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: NORMAL
+    outputs: []
+    source_evidence:
+    - *id002
+    confidence: medium
+    review_required: true
+  - transition_id: SM_P_003
+    signals_mentioned: []
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    from_state: NORMAL
+    to_state: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - *id003
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_001
+    signals_mentioned: []
+    raw_condition: OK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - *id004
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_002
+    signals_mentioned: []
+    raw_condition: NOK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: NORMAL
+    outputs: []
+    source_evidence:
+    - *id005
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_003
+    signals_mentioned: []
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    from_state: NORMAL
+    to_state: NORMAL
+    outputs: []
+    source_evidence:
+    - *id006
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_001
+    signals_mentioned: []
+    raw_condition: OK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - *id004
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_002
+    signals_mentioned: []
+    raw_condition: NOK_SHUTOFF = TRUE
+    from_state: NORMAL
+    to_state: NORMAL
+    outputs: []
+    source_evidence:
+    - *id005
+    confidence: medium
+    review_required: true
+  - transition_id: SM_D_003
+    signals_mentioned: []
+    raw_condition: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    from_state: NORMAL
+    to_state: NORMAL
+    outputs: []
+    source_evidence:
+    - *id006
+    confidence: medium
+    review_required: true
+  test_traceability:
+  - test_candidate_id: TC_PM_001
+    signals:
+    - OK_SHUTOFF
+    conditions:
+    - OK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: OK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_003
+    signals:
+    - NOK_SHUTOFF
+    conditions:
+    - NOK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: NORMAL
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: NOK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_005
+    signals:
+    - RESET_SHUTOFF
+    - SHUTOFF_DECISION
+    conditions:
+    - RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    states:
+      from: NORMAL
+      to: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_007
+    signals:
+    - OK_SHUTOFF
+    conditions:
+    - OK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: OK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_009
+    signals:
+    - NOK_SHUTOFF
+    conditions:
+    - NOK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: NORMAL
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: NOK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_011
+    signals:
+    - RESET_SHUTOFF
+    - SHUTOFF_DECISION
+    conditions:
+    - RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    states:
+      from: NORMAL
+      to: NORMAL
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_013
+    signals:
+    - OK_SHUTOFF
+    conditions:
+    - OK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: SHUT_OFF
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: OK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_015
+    signals:
+    - NOK_SHUTOFF
+    conditions:
+    - NOK_SHUTOFF = TRUE
+    states:
+      from: NORMAL
+      to: NORMAL
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: NOK_SHUTOFF = TRUE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_017
+    signals:
+    - RESET_SHUTOFF
+    - SHUTOFF_DECISION
+    conditions:
+    - RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    states:
+      from: NORMAL
+      to: NORMAL
+    outputs: []
+    source_evidence:
+    - file: edited_Shutoff_Condition_Spec.docx
+      location: sheet None row None
+      evidence: RESET_SHUTOFF = TRUE or SHUTOFF_DECISION = FALSE
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_019
+    signals: []
+    conditions:
+    - (OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id007
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_020
+    signals: []
+    conditions:
+    - (CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR
+      (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id008
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_021
+    signals: []
+    conditions:
+    - (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
+      (*3)))
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id009
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_022
+    signals: []
+    conditions:
+    - (VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE
+      (*3) OR PROCESS_PREPARED (*4)))
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id010
+    confidence: medium
+    review_required: true
+  - test_candidate_id: TC_PM_023
+    signals: []
+    conditions:
+    - NOT NOK_SHUTOFF
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id007
+    confidence: low
+    review_required: true
+  - test_candidate_id: TC_PM_024
+    signals: []
+    conditions:
+    - NOT SAFETY_LOCKED (*5)
+    states: {}
+    outputs: []
+    source_evidence:
+    - *id010
+    confidence: low
+    review_required: true
+test_candidates:
+- id: TC_PM_001
+  status: candidate
+  test_function: Power mode / state behavior
+  event: OK_SHUTOFF
+  use_case_description: Positive path for transition SM_P_001 (NORMAL -> SHUT_OFF)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with SHUT_OFF
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_P_001
+    source_evidence: &id016
+    - *id001
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_P_001 (NORMAL -> SHUT_OFF)
+    suggested_description: 'Positive path for transition SM_P_001 (NORMAL -> SHUT_OFF).
+      when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+      as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id015
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id015
+    added_information: &id104
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id016
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_002
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal OK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_P_001
+    source_evidence: &id018
+    - *id001
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal OK_SHUTOFF
+    suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id017
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id017
+    added_information: &id105
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id018
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_003
+  status: candidate
+  test_function: Power mode / state behavior
+  event: NOK_SHUTOFF
+  use_case_description: Positive path for transition SM_P_002 (NORMAL -> NORMAL)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with NORMAL
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_P_002
+    source_evidence: &id020
+    - *id002
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_P_002 (NORMAL -> NORMAL)
+    suggested_description: 'Positive path for transition SM_P_002 (NORMAL -> NORMAL).
+      when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including
+      timing as interpreted''}. then Reach state or output consistent with NORMAL.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id019
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id019
+    added_information: &id106
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id020
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_004
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal NOK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_P_002
+    source_evidence: &id022
+    - *id002
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal NOK_SHUTOFF
+    suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id021
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id021
+    added_information: &id107
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id022
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_005
+  status: candidate
+  test_function: Power mode / state behavior
+  event: RESET_SHUTOFF
+  use_case_description: Positive path for transition SM_P_003 (NORMAL -> SHUT_OFF)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    - signal: SHUTOFF_DECISION
+      value: 'FALSE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with SHUT_OFF
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_P_003
+    source_evidence: &id024
+    - *id003
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_P_003 (NORMAL -> SHUT_OFF)
+    suggested_description: 'Positive path for transition SM_P_003 (NORMAL -> SHUT_OFF).
+      when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+      all guards including timing as interpreted''}. then Reach state or output consistent
+      with SHUT_OFF.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id023
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id023
+    added_information: &id108
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id024
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_006
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal RESET_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_P_003
+    source_evidence: &id026
+    - *id003
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal RESET_SHUTOFF
+    suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Timing condition not stated in description
+    missing_information: &id025
+    - Timing condition not stated in description
+    missing_in_current: *id025
+    added_information: &id109
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id026
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_007
+  status: candidate
+  test_function: Power mode / state behavior
+  event: OK_SHUTOFF
+  use_case_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with SHUT_OFF
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_001
+    source_evidence: &id028
+    - *id004
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+    suggested_description: 'Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF).
+      when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+      as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id027
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id027
+    added_information: &id110
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id028
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_008
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal OK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_001
+    source_evidence: &id030
+    - *id004
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal OK_SHUTOFF
+    suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id029
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id029
+    added_information: &id111
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id030
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_009
+  status: candidate
+  test_function: Power mode / state behavior
+  event: NOK_SHUTOFF
+  use_case_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with NORMAL
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_002
+    source_evidence: &id032
+    - *id005
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+    suggested_description: 'Positive path for transition SM_D_002 (NORMAL -> NORMAL).
+      when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including
+      timing as interpreted''}. then Reach state or output consistent with NORMAL.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id031
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id031
+    added_information: &id112
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id032
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_010
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal NOK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_002
+    source_evidence: &id034
+    - *id005
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal NOK_SHUTOFF
+    suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id033
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id033
+    added_information: &id113
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id034
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_011
+  status: candidate
+  test_function: Power mode / state behavior
+  event: RESET_SHUTOFF
+  use_case_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    - signal: SHUTOFF_DECISION
+      value: 'FALSE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with NORMAL
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_003
+    source_evidence: &id036
+    - *id006
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+    suggested_description: 'Positive path for transition SM_D_003 (NORMAL -> NORMAL).
+      when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+      all guards including timing as interpreted''}. then Reach state or output consistent
+      with NORMAL.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id035
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id035
+    added_information: &id114
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id036
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_012
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal RESET_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_003
+    source_evidence: &id038
+    - *id006
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal RESET_SHUTOFF
+    suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Timing condition not stated in description
+    missing_information: &id037
+    - Timing condition not stated in description
+    missing_in_current: *id037
+    added_information: &id115
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id038
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_013
+  status: candidate
+  test_function: Power mode / state behavior
+  event: OK_SHUTOFF
+  use_case_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with SHUT_OFF
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_001
+    source_evidence: &id040
+    - *id004
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+    suggested_description: 'Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF).
+      when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+      as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id039
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id039
+    added_information: &id116
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id040
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_014
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal OK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: OK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_001
+    source_evidence: &id042
+    - *id004
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal OK_SHUTOFF
+    suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id041
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id041
+    added_information: &id117
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id042
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_015
+  status: candidate
+  test_function: Power mode / state behavior
+  event: NOK_SHUTOFF
+  use_case_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with NORMAL
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_002
+    source_evidence: &id044
+    - *id005
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+    suggested_description: 'Positive path for transition SM_D_002 (NORMAL -> NORMAL).
+      when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including
+      timing as interpreted''}. then Reach state or output consistent with NORMAL.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id043
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id043
+    added_information: &id118
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id044
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_016
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal NOK_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: NOK_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_002
+    source_evidence: &id046
+    - *id005
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal NOK_SHUTOFF
+    suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Description is too short for customer-facing spec; Timing condition not
+      stated in description
+    missing_information: &id045
+    - Description is too short for customer-facing spec
+    - Timing condition not stated in description
+    missing_in_current: *id045
+    added_information: &id119
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id046
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_017
+  status: candidate
+  test_function: Power mode / state behavior
+  event: RESET_SHUTOFF
+  use_case_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: 'TRUE'
+      operator: ==
+    - signal: SHUTOFF_DECISION
+      value: 'FALSE'
+      operator: ==
+    when:
+    - description: Satisfy all guards including timing as interpreted
+  expectation:
+  - description: Reach state or output consistent with NORMAL
+    review_note: Refine to concrete interface values
+  traceability:
+    transition: SM_D_003
+    source_evidence: &id048
+    - *id006
+  why_recommended:
+  - Covers stated transition row from behavior workbook
+  - Exercises combined guard expression
+  confidence: medium
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+    suggested_description: 'Positive path for transition SM_D_003 (NORMAL -> NORMAL).
+      when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+      all guards including timing as interpreted''}. then Reach state or output consistent
+      with NORMAL.'
+    reason: Concrete expected outputs (e.g. Mode_STS=0)
+    missing_information: &id047
+    - Concrete expected outputs (e.g. Mode_STS=0)
+    missing_in_current: *id047
+    added_information: &id120
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id048
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_018
+  status: candidate
+  test_function: Power mode / state behavior
+  event: guard_false_signal
+  use_case_description: Negate primary guard signal RESET_SHUTOFF
+  precondition:
+  - current_state: NORMAL
+  operation:
+    given:
+    - signal: RESET_SHUTOFF
+      value: '0'
+      note: invert primary guard
+    when:
+    - description: Hold other guards as appropriate
+  expectation:
+  - description: Transition must not occur while guard false
+  traceability:
+    transition: SM_D_003
+    source_evidence: &id050
+    - *id006
+  why_recommended:
+  - Mandatory condition false branch
+  confidence: low
+  review_required: true
+  source: deterministic_candidate_generator
+  review_status: pending
+  improvement_suggestion:
+    current_description: Negate primary guard signal RESET_SHUTOFF
+    suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+      and {''description'': ''Hold other guards as appropriate''}. then Transition
+      must not occur while guard false.'
+    reason: Timing condition not stated in description
+    missing_information: &id049
+    - Timing condition not stated in description
+    missing_in_current: *id049
+    added_information: &id121
+    - explicit signal values in Given
+    - timing / stability condition
+    - concrete expected result
+    - source/target state context
+    source_evidence: *id050
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_019
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: evaluate_SHUTOFF_DECISION
+  use_case_description: 'Verify logic for SHUTOFF_DECISION: (OK_SHUTOFF AND NOT NOK_SHUTOFF
+    AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)'
+  precondition: []
+  operation:
+    given:
+    - note: (OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)
+    when:
+    - description: Evaluate control judgment
+  expectation:
+  - description: Outcome matches control definition
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T1_01
+    source_evidence: &id052
+    - *id007
+  why_recommended:
+  - Derived from two-column control table
+  confidence: medium
+  review_required: true
+  review_status: pending
+  block_reason: null
+  source: two_column_logic_block
+  improvement_suggestion:
+    current_description: 'Verify logic for SHUTOFF_DECISION: (OK_SHUTOFF AND NOT NOK_SHUTOFF
+      AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)'
+    suggested_description: 'Verify logic for SHUTOFF_DECISION: (OK_SHUTOFF AND NOT
+      NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED). and {''description'':
+      ''Evaluate control judgment''}. then Outcome matches control definition.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id051
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id051
+    added_information: &id122
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id052
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_020
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: evaluate_OK_SHUTOFF
+  use_case_description: 'Verify logic for OK_SHUTOFF: (CND_REQ_GROUP OR CND_SAFE_GROUP
+    OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF)
+    OR CND_O'
+  precondition: []
+  operation:
+    given:
+    - note: (CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE
+        OR (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+    when:
+    - description: Evaluate control judgment
+  expectation:
+  - description: Outcome matches control definition
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T2_01
+    source_evidence: &id054
+    - *id008
+  why_recommended:
+  - Derived from two-column control table
+  confidence: medium
+  review_required: true
+  review_status: pending
+  block_reason: null
+  source: two_column_logic_block
+  improvement_suggestion:
+    current_description: 'Verify logic for OK_SHUTOFF: (CND_REQ_GROUP OR CND_SAFE_GROUP
+      OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF)
+      OR CND_O'
+    suggested_description: 'Verify logic for OK_SHUTOFF: (CND_REQ_GROUP OR CND_SAFE_GROUP
+      OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF)
+      OR CND_O. and {''description'': ''Evaluate control judgment''}. then Outcome
+      matches control definition.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id053
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id053
+    added_information: &id123
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id054
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_021
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: evaluate_CND_REQ_GROUP
+  use_case_description: 'Verify logic for CND_REQ_GROUP: (REQ_MAIN_OK (*1) AND REQ_STABLE
+    (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID (*3)))'
+  precondition: []
+  operation:
+    given:
+    - note: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
+        (*3)))
+    when:
+    - description: Evaluate control judgment
+  expectation:
+  - description: Outcome matches control definition
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T3_01
+    source_evidence: &id056
+    - *id009
+  why_recommended:
+  - Derived from two-column control table
+  confidence: medium
+  review_required: true
+  review_status: pending
+  block_reason: null
+  source: two_column_logic_block
+  improvement_suggestion:
+    current_description: 'Verify logic for CND_REQ_GROUP: (REQ_MAIN_OK (*1) AND REQ_STABLE
+      (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID (*3)))'
+    suggested_description: 'Verify logic for CND_REQ_GROUP: (REQ_MAIN_OK (*1) AND
+      REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID (*3))). and {''description'':
+      ''Evaluate control judgment''}. then Outcome matches control definition.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id055
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id055
+    added_information: &id124
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id056
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_022
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: evaluate_CND_SAFE_GROUP
+  use_case_description: 'Verify logic for CND_SAFE_GROUP: (VEHICLE_STOPPED (*1) AND
+    DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED
+    (*4)))'
+  precondition: []
+  operation:
+    given:
+    - note: (VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5)
+        AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+    when:
+    - description: Evaluate control judgment
+  expectation:
+  - description: Outcome matches control definition
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T4_01
+    source_evidence: &id058
+    - *id010
+  why_recommended:
+  - Derived from two-column control table
+  confidence: medium
+  review_required: true
+  review_status: pending
+  block_reason: null
+  source: two_column_logic_block
+  improvement_suggestion:
+    current_description: 'Verify logic for CND_SAFE_GROUP: (VEHICLE_STOPPED (*1) AND
+      DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED
+      (*4)))'
+    suggested_description: 'Verify logic for CND_SAFE_GROUP: (VEHICLE_STOPPED (*1)
+      AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED
+      (*4))). and {''description'': ''Evaluate control judgment''}. then Outcome matches
+      control definition.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id057
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id057
+    added_information: &id125
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id058
+    confidence: medium
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_023
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: negative_not_branch
+  use_case_description: Verify behavior when NOT NOK_SHUTOFF (negative guard for SHUTOFF_DECISION)
+  precondition: []
+  operation:
+    given:
+    - note: NOT NOK_SHUTOFF active / guard false
+    when:
+    - description: Evaluate while NOT condition holds
+  expectation:
+  - description: Must not satisfy SHUTOFF_DECISION permission
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T1_01
+    source_evidence: &id060
+    - *id007
+  why_recommended:
+  - Mandatory NOT branch coverage
+  - negative_condition_review_required
+  confidence: low
+  review_required: true
+  review_status: pending
+  source: not_branch_generator
+  improvement_suggestion:
+    current_description: Verify behavior when NOT NOK_SHUTOFF (negative guard for
+      SHUTOFF_DECISION)
+    suggested_description: 'Verify behavior when NOT NOK_SHUTOFF (negative guard for
+      SHUTOFF_DECISION). and {''description'': ''Evaluate while NOT condition holds''}.
+      then Must not satisfy SHUTOFF_DECISION permission.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id059
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id059
+    added_information: &id126
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id060
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+- id: TC_PM_024
+  status: candidate
+  test_function: Power mode / shutoff control
+  event: negative_not_branch
+  use_case_description: Verify behavior when NOT SAFETY_LOCKED (*5) (negative guard
+    for CND_SAFE_GROUP)
+  precondition: []
+  operation:
+    given:
+    - note: NOT SAFETY_LOCKED (*5) active / guard false
+    when:
+    - description: Evaluate while NOT condition holds
+  expectation:
+  - description: Must not satisfy CND_SAFE_GROUP permission
+    review_note: Refine
+  traceability:
+    logic_block: TC2_T4_01
+    source_evidence: &id062
+    - *id010
+  why_recommended:
+  - Mandatory NOT branch coverage
+  - negative_condition_review_required
+  confidence: low
+  review_required: true
+  review_status: pending
+  source: not_branch_generator
+  improvement_suggestion:
+    current_description: Verify behavior when NOT SAFETY_LOCKED (*5) (negative guard
+      for CND_SAFE_GROUP)
+    suggested_description: 'Verify behavior when NOT SAFETY_LOCKED (*5) (negative
+      guard for CND_SAFE_GROUP). and {''description'': ''Evaluate while NOT condition
+      holds''}. then Must not satisfy CND_SAFE_GROUP permission.'
+    reason: Timing condition not stated in description; No explicit signal values
+      in Given
+    missing_information: &id061
+    - Timing condition not stated in description
+    - No explicit signal values in Given
+    missing_in_current: *id061
+    added_information: &id127
+    - timing / stability condition
+    - concrete expected result
+    source_evidence: *id062
+    confidence: low
+    review_required: true
+    source: deterministic_improver
+  strict_mode_note: Unresolved errors exist — export not approved
+issues:
+- id: ERR_TC_001
+  severity: warning
+  type: ambiguous_constant_value
+  message: 'Constant `T_REQ_STABLE` needs review: Request stable confirmation time
+    | 120 [ms]  5'
+  source_ref: {}
+  affected_items:
+  - T_REQ_STABLE
+  required_action: Confirm value and unit in engineer review
+  can_export: true
+- id: ERR_TC_002
+  severity: warning
+  type: ambiguous_constant_value
+  message: 'Constant `T_CANCEL` needs review: Operator cancel filter time | 700 [ms]  20'
+  source_ref: {}
+  affected_items:
+  - T_CANCEL
+  required_action: Confirm value and unit in engineer review
+  can_export: true
+- id: ERR_TC_003
+  severity: warning
+  type: ambiguous_constant_value
+  message: 'Constant `T_COMM_TIMEOUT` needs review: Communication lost timeout | 123
+    [ms]  3'
+  source_ref: {}
+  affected_items:
+  - T_COMM_TIMEOUT
+  required_action: Confirm value and unit in engineer review
+  can_export: true
+- id: ERR_REF_004
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `OK_SHUTOFF` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T1_01
+  - OK_SHUTOFF
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_REF_005
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `NOK_SHUTOFF` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T1_01
+  - NOK_SHUTOFF
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_REF_006
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `FORCE_SHUTOFF` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T1_01
+  - FORCE_SHUTOFF
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_LB_007
+  severity: warning
+  type: unsupported_logic_format
+  message: Partial merge for `OK_SHUTOFF` — verify nested groups
+  source_ref: *id008
+  affected_items:
+  - TC2_T2_01
+  required_action: Review two-column logic interpretation
+  can_export: true
+- id: ERR_REF_008
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `CND_NORMAL_ROUTE` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T2_01
+  - CND_NORMAL_ROUTE
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_REF_009
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `CND_BACKUP_ROUTE` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T2_01
+  - CND_BACKUP_ROUTE
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_REF_010
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `CND_BACKUP_TIMER_OK` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T2_01
+  - CND_BACKUP_TIMER_OK
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+- id: ERR_REF_011
+  severity: error
+  type: unresolved_condition
+  message: Referenced condition `POWER=OFF` has no definition in spec tables
+  source_ref: {}
+  affected_items:
+  - TC2_T2_01
+  - POWER=OFF
+  required_action: Add definition or alias mapping before approval
+  can_export: false
+unresolved_items:
+- type: unresolved_condition
+  raw_text: OK_SHUTOFF
+  reason: No definition for OK_SHUTOFF
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: NOK_SHUTOFF
+  reason: No definition for NOK_SHUTOFF
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: FORCE_SHUTOFF
+  reason: No definition for FORCE_SHUTOFF
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: CND_NORMAL_ROUTE
+  reason: No definition for CND_NORMAL_ROUTE
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: CND_BACKUP_ROUTE
+  reason: No definition for CND_BACKUP_ROUTE
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: CND_BACKUP_TIMER_OK
+  reason: No definition for CND_BACKUP_TIMER_OK
+  required_action: Add to condition definition or alias table
+- type: unresolved_condition
+  raw_text: POWER=OFF
+  reason: No definition for POWER=OFF
+  required_action: Add to condition definition or alias table
+diagrams: []
+code_references: []
+two_column_tables:
+- table_id: T1_01
+  control_name: SHUTOFF_DECISION
+  table_kind: logic
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_1
+  rows:
+  - row_no: 2
+    control: SHUTOFF_DECISION
+    condition_raw: OR / AND / OK_SHUTOFF
+    condition_cells: *id063
+    indentation_level: 2
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> AND -> OK_SHUTOFF
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_1
+      path_index: 0
+  - row_no: 3
+    control: SHUTOFF_DECISION
+    condition_raw: OR / AND / NOT NOK_SHUTOFF
+    condition_cells: *id064
+    indentation_level: 2
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> AND -> NOT NOK_SHUTOFF
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_1
+      path_index: 1
+  - row_no: 4
+    control: SHUTOFF_DECISION
+    condition_raw: OR / AND / FORCE_SHUTOFF
+    condition_cells: *id065
+    indentation_level: 2
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> AND -> FORCE_SHUTOFF
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_1
+      path_index: 2
+  - row_no: 5
+    control: SHUTOFF_DECISION
+    condition_raw: OR / AND / CND_FORCE_ALLOWED
+    condition_cells: *id066
+    indentation_level: 2
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> AND -> CND_FORCE_ALLOWED
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_1
+      path_index: 3
+- table_id: T2_01
+  control_name: OK_SHUTOFF
+  table_kind: logic
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_2
+  rows:
+  - row_no: 2
+    control: OK_SHUTOFF
+    condition_raw: AND / CND_REQ_GROUP
+    condition_cells: *id067
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> CND_REQ_GROUP
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 0
+  - row_no: 3
+    control: OK_SHUTOFF
+    condition_raw: AND / CND_SAFE_GROUP
+    condition_cells: *id068
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> CND_SAFE_GROUP
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 1
+  - row_no: 4
+    control: OK_SHUTOFF
+    condition_raw: AND / OR / CND_NORMAL_ROUTE
+    condition_cells: *id069
+    indentation_level: 2
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> CND_NORMAL_ROUTE
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 2
+  - row_no: 5
+    control: OK_SHUTOFF
+    condition_raw: AND / OR / AND / CND_BACKUP_ROUTE
+    condition_cells: *id070
+    indentation_level: 3
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> AND -> CND_BACKUP_ROUTE
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 3
+  - row_no: 6
+    control: OK_SHUTOFF
+    condition_raw: OR / CND_BACKUP_TIMER_OK / AND / POWER=OFF
+    condition_cells: *id071
+    indentation_level: 3
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> CND_BACKUP_TIMER_OK -> AND -> POWER=OFF
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 4
+  - row_no: 7
+    control: OK_SHUTOFF
+    condition_raw: OR / CND_OUTPUT_READY
+    condition_cells: *id072
+    indentation_level: 1
+    detected_type: logic_gate_OR
+    parsed_hint: OR -> CND_OUTPUT_READY
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_2
+      path_index: 5
+- table_id: T3_01
+  control_name: CND_REQ_GROUP
+  table_kind: logic
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_3
+  rows:
+  - row_no: 2
+    control: CND_REQ_GROUP
+    condition_raw: AND / REQ_MAIN_OK (*1)
+    condition_cells: *id073
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> REQ_MAIN_OK (*1)
+    issue_status: ok
+    source: &id095
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_3
+      path_index: 0
+  - row_no: 3
+    control: CND_REQ_GROUP
+    condition_raw: AND / OR / REQ_SRC_A_VALID (*2)
+    condition_cells: *id074
+    indentation_level: 2
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> REQ_SRC_A_VALID (*2)
+    issue_status: ok
+    source: &id096
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_3
+      path_index: 1
+  - row_no: 4
+    control: CND_REQ_GROUP
+    condition_raw: AND / OR / REQ_SRC_B_VALID (*3)
+    condition_cells: *id075
+    indentation_level: 2
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> REQ_SRC_B_VALID (*3)
+    issue_status: ok
+    source: &id097
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_3
+      path_index: 2
+  - row_no: 5
+    control: CND_REQ_GROUP
+    condition_raw: AND / REQ_STABLE (*4)
+    condition_cells: *id076
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> REQ_STABLE (*4)
+    issue_status: ok
+    source: &id098
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_3
+      path_index: 3
+- table_id: T4_01
+  control_name: CND_SAFE_GROUP
+  table_kind: logic
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_4
+  rows:
+  - row_no: 2
+    control: CND_SAFE_GROUP
+    condition_raw: AND / VEHICLE_STOPPED (*1)
+    condition_cells: *id077
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> VEHICLE_STOPPED (*1)
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_4
+      path_index: 0
+  - row_no: 3
+    control: CND_SAFE_GROUP
+    condition_raw: AND / DRIVER_SAFE (*2)
+    condition_cells: *id078
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> DRIVER_SAFE (*2)
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_4
+      path_index: 1
+  - row_no: 4
+    control: CND_SAFE_GROUP
+    condition_raw: AND / OR / PROCESS_IDLE (*3)
+    condition_cells: *id079
+    indentation_level: 2
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> PROCESS_IDLE (*3)
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_4
+      path_index: 2
+  - row_no: 5
+    control: CND_SAFE_GROUP
+    condition_raw: AND / OR / PROCESS_PREPARED (*4)
+    condition_cells: *id080
+    indentation_level: 2
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> OR -> PROCESS_PREPARED (*4)
+    issue_status: ok
+    source:
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_4
+      path_index: 3
+  - row_no: 6
+    control: CND_SAFE_GROUP
+    condition_raw: AND / NOT SAFETY_LOCKED (*5)
+    condition_cells: *id081
+    indentation_level: 1
+    detected_type: logic_gate_AND
+    parsed_hint: AND -> NOT SAFETY_LOCKED (*5)
+    issue_status: ok
+    source: &id099
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_4
+      path_index: 4
+- table_id: T5
+  control_name: ALIAS_MAP
+  table_kind: alias
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_5
+  rows:
+  - row_no: 2
+    control: request_group_ok
+    condition_raw: Alias of CND_REQ_GROUP
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_REQ_GROUP
+    issue_status: ok
+    source: &id089
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 2
+  - row_no: 3
+    control: SafeBaseCondition
+    condition_raw: Alias of CND_SAFE_GROUP
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_SAFE_GROUP
+    issue_status: ok
+    source: &id090
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 3
+  - row_no: 4
+    control: OutputReadyCondition
+    condition_raw: Alias of CND_OUTPUT_READY
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_OUTPUT_READY
+    issue_status: ok
+    source: &id091
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 4
+  - row_no: 5
+    control: cancel_group_ng
+    condition_raw: Alias of CND_CANCEL_GROUP
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_CANCEL_GROUP
+    issue_status: ok
+    source: &id092
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 5
+  - row_no: 6
+    control: CommLostCondition
+    condition_raw: Alias of CND_COMM_LOST
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_COMM_LOST
+    issue_status: ok
+    source: &id093
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 6
+  - row_no: 7
+    control: force_allowed_condition
+    condition_raw: Alias of CND_FORCE_ALLOWED
+    condition_cells: []
+    indentation_level: 0
+    detected_type: alias_mapping
+    parsed_hint: CND_FORCE_ALLOWED
+    issue_status: ok
+    source: &id094
+      file: edited_Shutoff_Condition_Spec.docx
+      document: edited_Shutoff_Condition_Spec.docx
+      table: table_5
+      row: 7
+- table_id: T6
+  control_name: CONSTANTS
+  table_kind: constant
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_6
+  rows:
+  - row_no: 2
+    control: T_REQ_STABLE
+    condition_raw: Request stable confirmation time | 120 [ms]  5
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: value_ms=120 unit=ms ambiguous_trailing=5
+    issue_status: review_required
+    source: *id082
+  - row_no: 3
+    control: T_BACKUP_TIMER
+    condition_raw: Backup route confirmation time | 300 [ms]
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: 300 [ms]
+    issue_status: ok
+    source: *id083
+  - row_no: 4
+    control: T_HW_WAKEUP
+    condition_raw: Hardware standby wakeup time | 450 [ms]
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: 450 [ms]
+    issue_status: ok
+    source: *id084
+  - row_no: 5
+    control: T_CANCEL
+    condition_raw: Operator cancel filter time | 700 [ms]  20
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: value_ms=700 unit=ms ambiguous_trailing=20
+    issue_status: review_required
+    source: *id085
+  - row_no: 6
+    control: T_SENSOR_CONFIRM
+    condition_raw: Sensor invalid confirmation time | 232 [ms]
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: 232 [ms]
+    issue_status: ok
+    source: *id086
+  - row_no: 7
+    control: T_COMM_TIMEOUT
+    condition_raw: Communication lost timeout | 123 [ms]  3
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: value_ms=123 unit=ms ambiguous_trailing=3
+    issue_status: review_required
+    source: *id087
+  - row_no: 8
+    control: T_FORCE_WAIT
+    condition_raw: Force request waiting time | 50 [ms]
+    condition_cells: []
+    indentation_level: 0
+    detected_type: timing_constant
+    parsed_hint: 50 [ms]
+    issue_status: ok
+    source: *id088
+alias_map:
+- alias: request_group_ok
+  target: CND_REQ_GROUP
+  raw_text: Alias of CND_REQ_GROUP
+  source: *id089
+  review_required: false
+- alias: SafeBaseCondition
+  target: CND_SAFE_GROUP
+  raw_text: Alias of CND_SAFE_GROUP
+  source: *id090
+  review_required: false
+- alias: OutputReadyCondition
+  target: CND_OUTPUT_READY
+  raw_text: Alias of CND_OUTPUT_READY
+  source: *id091
+  review_required: false
+- alias: cancel_group_ng
+  target: CND_CANCEL_GROUP
+  raw_text: Alias of CND_CANCEL_GROUP
+  source: *id092
+  review_required: false
+- alias: CommLostCondition
+  target: CND_COMM_LOST
+  raw_text: Alias of CND_COMM_LOST
+  source: *id093
+  review_required: false
+- alias: force_allowed_condition
+  target: CND_FORCE_ALLOWED
+  raw_text: Alias of CND_FORCE_ALLOWED
+  source: *id094
+  review_required: false
+footnote_definitions:
+- ref: (*1)
+  raw_text: AND / REQ_MAIN_OK (*1)
+  control: CND_REQ_GROUP
+  source: *id095
+  definition: null
+  review_required: true
+- ref: (*2)
+  raw_text: AND / OR / REQ_SRC_A_VALID (*2)
+  control: CND_REQ_GROUP
+  source: *id096
+  definition: null
+  review_required: true
+- ref: (*3)
+  raw_text: AND / OR / REQ_SRC_B_VALID (*3)
+  control: CND_REQ_GROUP
+  source: *id097
+  definition: null
+  review_required: true
+- ref: (*4)
+  raw_text: AND / REQ_STABLE (*4)
+  control: CND_REQ_GROUP
+  source: *id098
+  definition: null
+  review_required: true
+- ref: (*5)
+  raw_text: AND / NOT SAFETY_LOCKED (*5)
+  control: CND_SAFE_GROUP
+  source: *id099
+  definition: null
+  review_required: true
+code_definitions:
+- name: REQ_MAIN_OK
+  definition: req.main == TRUE
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 12
+    kind: code_definition
+  review_required: false
+- name: REQ_SRC_A_VALID
+  definition: source == SRC_A && req.auth == PASS
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 13
+    kind: code_definition
+  review_required: false
+- name: REQ_SRC_B_VALID
+  definition: req.source == SRC_B && req.level >= MIN_LEVEL
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 14
+    kind: code_definition
+  review_required: false
+- name: REQ_STABLE
+  definition: remains active until timer >= T_REQ_STABLE
+  group: CND_REQ_GROUP
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 15
+    kind: code_definition
+  review_required: false
+state_rules:
+- name: OK_SHUTOFF
+  expression: 'TRUE'
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 24
+    kind: state_rule
+- name: NOK_SHUTOFF
+  expression: 'TRUE'
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 25
+    kind: state_rule
+- name: RESET_SHUTOFF
+  expression: TRUE or SHUTOFF_DECISION = FALSE
+  source:
+    file: edited_Shutoff_Condition_Spec.docx
+    paragraph: 26
+    kind: state_rule
+traceability_matrix:
+- trace_id: TR_0001
+  test_candidate_id: TC_PM_001
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0002
+  test_candidate_id: TC_PM_002
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0003
+  test_candidate_id: TC_PM_003
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0004
+  test_candidate_id: TC_PM_004
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0005
+  test_candidate_id: TC_PM_005
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0006
+  test_candidate_id: TC_PM_006
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_P_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0007
+  test_candidate_id: TC_PM_007
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0008
+  test_candidate_id: TC_PM_008
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0009
+  test_candidate_id: TC_PM_009
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0010
+  test_candidate_id: TC_PM_010
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0011
+  test_candidate_id: TC_PM_011
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0012
+  test_candidate_id: TC_PM_012
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0013
+  test_candidate_id: TC_PM_013
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0014
+  test_candidate_id: TC_PM_014
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_001
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0015
+  test_candidate_id: TC_PM_015
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0016
+  test_candidate_id: TC_PM_016
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_002
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0017
+  test_candidate_id: TC_PM_017
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Covers stated transition row from behavior workbook; Exercises combined
+    guard expression
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0018
+  test_candidate_id: TC_PM_018
+  signal_input: ''
+  condition: ''
+  parent_condition_group: SM_D_003
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx  row
+  reason: Mandatory condition false branch
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0019
+  test_candidate_id: TC_PM_019
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Derived from two-column control table
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0020
+  test_candidate_id: TC_PM_020
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Derived from two-column control table
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0021
+  test_candidate_id: TC_PM_021
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Derived from two-column control table
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0022
+  test_candidate_id: TC_PM_022
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Derived from two-column control table
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0023
+  test_candidate_id: TC_PM_023
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Mandatory NOT branch coverage; negative_condition_review_required
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0024
+  test_candidate_id: TC_PM_024
+  signal_input: ''
+  condition: ''
+  parent_condition_group: ''
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Mandatory NOT branch coverage; negative_condition_review_required
+  confidence: low
+  review_status: pending
+  issue_link: ''
+  candidate_status: candidate
+- trace_id: TR_0025
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 0
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0026
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0027
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OK_SHUTOFF
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0028
+  test_candidate_id: ''
+  signal_input: ''
+  condition: NOT NOK_SHUTOFF
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: NOT
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0029
+  test_candidate_id: ''
+  signal_input: ''
+  condition: NOK_SHUTOFF
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 3
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0030
+  test_candidate_id: ''
+  signal_input: ''
+  condition: FORCE_SHUTOFF
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0031
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_FORCE_ALLOWED
+  parent_condition_group: SHUTOFF_DECISION
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_1 row
+  reason: Logic block `SHUTOFF_DECISION` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_006
+  candidate_status: logic_only
+- trace_id: TR_0032
+  test_candidate_id: ''
+  signal_input: ''
+  condition: ''
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 0
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0033
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0034
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_REQ_GROUP
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0035
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0036
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_SAFE_GROUP
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0037
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0038
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0039
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_NORMAL_ROUTE
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 3
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0040
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0041
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0042
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 3
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0043
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_BACKUP_ROUTE
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 4
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0044
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0045
+  test_candidate_id: ''
+  signal_input: ''
+  condition: ''
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0046
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_BACKUP_TIMER_OK
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 3
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0047
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 3
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0048
+  test_candidate_id: ''
+  signal_input: ''
+  condition: POWER=OFF
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 4
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0049
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0050
+  test_candidate_id: ''
+  signal_input: ''
+  condition: CND_OUTPUT_READY
+  parent_condition_group: OK_SHUTOFF
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_2 row
+  reason: Logic block `OK_SHUTOFF` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ERR_REF_011
+  candidate_status: logic_only
+- trace_id: TR_0051
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 0
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0052
+  test_candidate_id: ''
+  signal_input: ''
+  condition: REQ_MAIN_OK (*1)
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0053
+  test_candidate_id: ''
+  signal_input: ''
+  condition: REQ_STABLE (*4)
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0054
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0055
+  test_candidate_id: ''
+  signal_input: ''
+  condition: REQ_SRC_A_VALID (*2)
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0056
+  test_candidate_id: ''
+  signal_input: ''
+  condition: REQ_SRC_B_VALID (*3)
+  parent_condition_group: CND_REQ_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_3 row
+  reason: Logic block `CND_REQ_GROUP` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0057
+  test_candidate_id: ''
+  signal_input: ''
+  condition: AND
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: AND
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 0
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0058
+  test_candidate_id: ''
+  signal_input: ''
+  condition: VEHICLE_STOPPED (*1)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0059
+  test_candidate_id: ''
+  signal_input: ''
+  condition: DRIVER_SAFE (*2)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0060
+  test_candidate_id: ''
+  signal_input: ''
+  condition: NOT SAFETY_LOCKED (*5)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: NOT
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0061
+  test_candidate_id: ''
+  signal_input: ''
+  condition: SAFETY_LOCKED (*5)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0062
+  test_candidate_id: ''
+  signal_input: ''
+  condition: OR
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: OR
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 1
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0063
+  test_candidate_id: ''
+  signal_input: ''
+  condition: PROCESS_IDLE (*3)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+- trace_id: TR_0064
+  test_candidate_id: ''
+  signal_input: ''
+  condition: PROCESS_PREPARED (*4)
+  parent_condition_group: CND_SAFE_GROUP
+  logic_operator: ''
+  state_transition: ''
+  output: ''
+  constant_timing: ''
+  source_evidence: edited_Shutoff_Condition_Spec.docx table_4 row
+  reason: Logic block `CND_SAFE_GROUP` depth 2
+  confidence: medium
+  review_status: pending
+  issue_link: ''
+  candidate_status: logic_only
+logic_ast_rows:
+- tree_id: TC2_T1_01
+  node_id: op_678bc3e6
+  parent_node_id: null
+  depth: 0
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: op_7a09a943
+  parent_node_id: op_678bc3e6
+  depth: 1
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: ref_88fee9c6
+  parent_node_id: op_7a09a943
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: OK_SHUTOFF
+  raw_text: OK_SHUTOFF
+  normalized_text: OK_SHUTOFF
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: not_0c58ed67
+  parent_node_id: op_7a09a943
+  depth: 2
+  node_type: NOT
+  operator: NOT
+  condition_name: ''
+  raw_text: NOT NOK_SHUTOFF
+  normalized_text: NOT NOK_SHUTOFF
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: ref_43c479be
+  parent_node_id: not_0c58ed67
+  depth: 3
+  node_type: condition
+  operator: ''
+  condition_name: NOK_SHUTOFF
+  raw_text: NOT NOK_SHUTOFF
+  normalized_text: NOK_SHUTOFF
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: ref_4a01fae1
+  parent_node_id: op_7a09a943
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: FORCE_SHUTOFF
+  raw_text: FORCE_SHUTOFF
+  normalized_text: FORCE_SHUTOFF
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T1_01
+  node_id: ref_742c7f57
+  parent_node_id: op_7a09a943
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: CND_FORCE_ALLOWED
+  raw_text: CND_FORCE_ALLOWED
+  normalized_text: CND_FORCE_ALLOWED
+  source: *id007
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: or_cd8bea20
+  parent_node_id: null
+  depth: 0
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: ''
+  normalized_text: ''
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_8193dd3d
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_e6a16d80
+  parent_node_id: op_8193dd3d
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: CND_REQ_GROUP
+  raw_text: CND_REQ_GROUP
+  normalized_text: CND_REQ_GROUP
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_43890512
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_2539f40a
+  parent_node_id: op_43890512
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: CND_SAFE_GROUP
+  raw_text: CND_SAFE_GROUP
+  normalized_text: CND_SAFE_GROUP
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_24cbe79a
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_75452923
+  parent_node_id: op_24cbe79a
+  depth: 2
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_dd9a84fa
+  parent_node_id: op_75452923
+  depth: 3
+  node_type: condition
+  operator: ''
+  condition_name: CND_NORMAL_ROUTE
+  raw_text: CND_NORMAL_ROUTE
+  normalized_text: CND_NORMAL_ROUTE
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_a9ca1335
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_246c393c
+  parent_node_id: op_a9ca1335
+  depth: 2
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_18643e47
+  parent_node_id: op_246c393c
+  depth: 3
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_c00d6705
+  parent_node_id: op_18643e47
+  depth: 4
+  node_type: condition
+  operator: ''
+  condition_name: CND_BACKUP_ROUTE
+  raw_text: CND_BACKUP_ROUTE
+  normalized_text: CND_BACKUP_ROUTE
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_40c8e1b6
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: and_65175424
+  parent_node_id: op_40c8e1b6
+  depth: 2
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: ''
+  normalized_text: ''
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_badbd358
+  parent_node_id: and_65175424
+  depth: 3
+  node_type: condition
+  operator: ''
+  condition_name: CND_BACKUP_TIMER_OK
+  raw_text: CND_BACKUP_TIMER_OK
+  normalized_text: CND_BACKUP_TIMER_OK
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_b7a279c3
+  parent_node_id: and_65175424
+  depth: 3
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_492f013d
+  parent_node_id: op_b7a279c3
+  depth: 4
+  node_type: condition
+  operator: ''
+  condition_name: POWER=OFF
+  raw_text: POWER=OFF
+  normalized_text: POWER=OFF
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: op_769552c8
+  parent_node_id: or_cd8bea20
+  depth: 1
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T2_01
+  node_id: ref_674e822e
+  parent_node_id: op_769552c8
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: CND_OUTPUT_READY
+  raw_text: CND_OUTPUT_READY
+  normalized_text: CND_OUTPUT_READY
+  source: *id008
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: op_b0514031
+  parent_node_id: null
+  depth: 0
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: ref_50ce8306
+  parent_node_id: op_b0514031
+  depth: 1
+  node_type: condition
+  operator: ''
+  condition_name: REQ_MAIN_OK (*1)
+  raw_text: REQ_MAIN_OK (*1)
+  normalized_text: REQ_MAIN_OK (*1)
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: ref_38d64dc2
+  parent_node_id: op_b0514031
+  depth: 1
+  node_type: condition
+  operator: ''
+  condition_name: REQ_STABLE (*4)
+  raw_text: REQ_STABLE (*4)
+  normalized_text: REQ_STABLE (*4)
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: op_690acb76
+  parent_node_id: op_b0514031
+  depth: 1
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: ref_53d2dbfc
+  parent_node_id: op_690acb76
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: REQ_SRC_A_VALID (*2)
+  raw_text: REQ_SRC_A_VALID (*2)
+  normalized_text: REQ_SRC_A_VALID (*2)
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T3_01
+  node_id: ref_99b181b3
+  parent_node_id: op_690acb76
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: REQ_SRC_B_VALID (*3)
+  raw_text: REQ_SRC_B_VALID (*3)
+  normalized_text: REQ_SRC_B_VALID (*3)
+  source: *id009
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: op_b74c8a86
+  parent_node_id: null
+  depth: 0
+  node_type: AND
+  operator: AND
+  condition_name: ''
+  raw_text: AND
+  normalized_text: AND
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: ref_e087bb25
+  parent_node_id: op_b74c8a86
+  depth: 1
+  node_type: condition
+  operator: ''
+  condition_name: VEHICLE_STOPPED (*1)
+  raw_text: VEHICLE_STOPPED (*1)
+  normalized_text: VEHICLE_STOPPED (*1)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: ref_ebe5c3a3
+  parent_node_id: op_b74c8a86
+  depth: 1
+  node_type: condition
+  operator: ''
+  condition_name: DRIVER_SAFE (*2)
+  raw_text: DRIVER_SAFE (*2)
+  normalized_text: DRIVER_SAFE (*2)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: not_24a31563
+  parent_node_id: op_b74c8a86
+  depth: 1
+  node_type: NOT
+  operator: NOT
+  condition_name: ''
+  raw_text: NOT SAFETY_LOCKED (*5)
+  normalized_text: NOT SAFETY_LOCKED (*5)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: ref_fd6920ed
+  parent_node_id: not_24a31563
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: SAFETY_LOCKED (*5)
+  raw_text: NOT SAFETY_LOCKED (*5)
+  normalized_text: SAFETY_LOCKED (*5)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: op_183c6133
+  parent_node_id: op_b74c8a86
+  depth: 1
+  node_type: OR
+  operator: OR
+  condition_name: ''
+  raw_text: OR
+  normalized_text: OR
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: ref_d4fc0630
+  parent_node_id: op_183c6133
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: PROCESS_IDLE (*3)
+  raw_text: PROCESS_IDLE (*3)
+  normalized_text: PROCESS_IDLE (*3)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+- tree_id: TC2_T4_01
+  node_id: ref_b022787b
+  parent_node_id: op_183c6133
+  depth: 2
+  node_type: condition
+  operator: ''
+  condition_name: PROCESS_PREPARED (*4)
+  raw_text: PROCESS_PREPARED (*4)
+  normalized_text: PROCESS_PREPARED (*4)
+  source: *id010
+  confidence: medium
+  review_status: pending
+  issue_status: ok
+logic_tree_views:
+- tree_id: TC2_T1_01
+  name: SHUTOFF_DECISION
+  expression: (OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)
+  lines:
+  - └── OR
+  - '    └── AND'
+  - '        ├── OK_SHUTOFF'
+  - '        ├── NOT'
+  - '        │   └── NOK_SHUTOFF'
+  - '        ├── FORCE_SHUTOFF'
+  - '        └── CND_FORCE_ALLOWED'
+  issues: *id100
+- tree_id: TC2_T2_01
+  name: OK_SHUTOFF
+  expression: (CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE
+    OR (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+  lines:
+  - └── OR
+  - '    ├── AND'
+  - '    │   └── CND_REQ_GROUP'
+  - '    ├── AND'
+  - '    │   └── CND_SAFE_GROUP'
+  - '    ├── AND'
+  - '    │   └── OR'
+  - '    │       └── CND_NORMAL_ROUTE'
+  - '    ├── AND'
+  - '    │   └── OR'
+  - '    │       └── AND'
+  - '    │           └── CND_BACKUP_ROUTE'
+  - '    ├── OR'
+  - '    │   └── AND'
+  - '    │       ├── CND_BACKUP_TIMER_OK'
+  - '    │       └── AND'
+  - '    │           └── POWER=OFF'
+  - '    └── OR'
+  - '        └── CND_OUTPUT_READY'
+  issues: *id101
+- tree_id: TC2_T3_01
+  name: CND_REQ_GROUP
+  expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
+    (*3)))
+  lines:
+  - └── AND
+  - '    ├── REQ_MAIN_OK (*1)'
+  - '    ├── REQ_STABLE (*4)'
+  - '    └── OR'
+  - '        ├── REQ_SRC_A_VALID (*2)'
+  - '        └── REQ_SRC_B_VALID (*3)'
+  issues: *id102
+- tree_id: TC2_T4_01
+  name: CND_SAFE_GROUP
+  expression: (VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5)
+    AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+  lines:
+  - └── AND
+  - '    ├── VEHICLE_STOPPED (*1)'
+  - '    ├── DRIVER_SAFE (*2)'
+  - '    ├── NOT'
+  - '    │   └── SAFETY_LOCKED (*5)'
+  - '    └── OR'
+  - '        ├── PROCESS_IDLE (*3)'
+  - '        └── PROCESS_PREPARED (*4)'
+  issues: *id103
+logic_path_coverage:
+- test_candidate_id: TC_PM_001
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_002
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''0'', ''note'': ''invert
+    primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_003
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_004
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_005
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}, {''signal'': ''SHUTOFF_DECISION'', ''value'': ''FALSE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_006
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_007
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_008
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''0'', ''note'': ''invert
+    primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_009
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_010
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_011
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}, {''signal'': ''SHUTOFF_DECISION'', ''value'': ''FALSE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_012
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_013
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_014
+  covered_logic_path: '[{''signal'': ''OK_SHUTOFF'', ''value'': ''0'', ''note'': ''invert
+    primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_015
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_016
+  covered_logic_path: '[{''signal'': ''NOK_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_017
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''TRUE'', ''operator'':
+    ''==''}, {''signal'': ''SHUTOFF_DECISION'', ''value'': ''FALSE'', ''operator'':
+    ''==''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: false
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_018
+  covered_logic_path: '[{''signal'': ''RESET_SHUTOFF'', ''value'': ''0'', ''note'':
+    ''invert primary guard''}]'
+  positive_negative: positive
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_019
+  covered_logic_path: '[{''note'': ''(OK_SHUTOFF AND NOT NOK_SHUTOFF AND FORCE_SHUTOFF
+    AND CND_FORCE_ALLOWED)''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_020
+  covered_logic_path: '[{''note'': ''(CND_REQ_GROUP OR CND_SAFE_GROUP OR CND_NORMAL_ROUTE
+    OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: true
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_021
+  covered_logic_path: '[{''note'': ''(REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID
+    (*2) OR REQ_SRC_B_VALID (*3)))''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_022
+  covered_logic_path: '[{''note'': ''(VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND
+    NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))''}]'
+  positive_negative: positive
+  or_branch: true
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_023
+  covered_logic_path: '[{''note'': ''NOT NOK_SHUTOFF active / guard false''}]'
+  positive_negative: negative
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+- test_candidate_id: TC_PM_024
+  covered_logic_path: '[{''note'': ''NOT SAFETY_LOCKED (*5) active / guard false''}]'
+  positive_negative: negative
+  or_branch: false
+  not_condition_covered: true
+  timing_covered: false
+  fallback_covered: false
+  missing_coverage: ''
+  review_status: pending
+description_improvements:
+- test_case_id: TC_PM_001
+  current_description: Positive path for transition SM_P_001 (NORMAL -> SHUT_OFF)
+  suggested_description: 'Positive path for transition SM_P_001 (NORMAL -> SHUT_OFF).
+    when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id015
+  added_information: *id104
+  source_evidence: *id016
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_002
+  current_description: Negate primary guard signal OK_SHUTOFF
+  suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id017
+  added_information: *id105
+  source_evidence: *id018
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_003
+  current_description: Positive path for transition SM_P_002 (NORMAL -> NORMAL)
+  suggested_description: 'Positive path for transition SM_P_002 (NORMAL -> NORMAL).
+    when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with NORMAL.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id019
+  added_information: *id106
+  source_evidence: *id020
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_004
+  current_description: Negate primary guard signal NOK_SHUTOFF
+  suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id021
+  added_information: *id107
+  source_evidence: *id022
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_005
+  current_description: Positive path for transition SM_P_003 (NORMAL -> SHUT_OFF)
+  suggested_description: 'Positive path for transition SM_P_003 (NORMAL -> SHUT_OFF).
+    when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+    all guards including timing as interpreted''}. then Reach state or output consistent
+    with SHUT_OFF.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id023
+  added_information: *id108
+  source_evidence: *id024
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_006
+  current_description: Negate primary guard signal RESET_SHUTOFF
+  suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Timing condition not stated in description
+  missing_information: *id025
+  added_information: *id109
+  source_evidence: *id026
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_007
+  current_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+  suggested_description: 'Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF).
+    when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id027
+  added_information: *id110
+  source_evidence: *id028
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_008
+  current_description: Negate primary guard signal OK_SHUTOFF
+  suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id029
+  added_information: *id111
+  source_evidence: *id030
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_009
+  current_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+  suggested_description: 'Positive path for transition SM_D_002 (NORMAL -> NORMAL).
+    when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with NORMAL.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id031
+  added_information: *id112
+  source_evidence: *id032
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_010
+  current_description: Negate primary guard signal NOK_SHUTOFF
+  suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id033
+  added_information: *id113
+  source_evidence: *id034
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_011
+  current_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+  suggested_description: 'Positive path for transition SM_D_003 (NORMAL -> NORMAL).
+    when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+    all guards including timing as interpreted''}. then Reach state or output consistent
+    with NORMAL.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id035
+  added_information: *id114
+  source_evidence: *id036
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_012
+  current_description: Negate primary guard signal RESET_SHUTOFF
+  suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Timing condition not stated in description
+  missing_information: *id037
+  added_information: *id115
+  source_evidence: *id038
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_013
+  current_description: Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF)
+  suggested_description: 'Positive path for transition SM_D_001 (NORMAL -> SHUT_OFF).
+    when OK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with SHUT_OFF.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id039
+  added_information: *id116
+  source_evidence: *id040
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_014
+  current_description: Negate primary guard signal OK_SHUTOFF
+  suggested_description: 'Negate primary guard signal OK_SHUTOFF. when OK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id041
+  added_information: *id117
+  source_evidence: *id042
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_015
+  current_description: Positive path for transition SM_D_002 (NORMAL -> NORMAL)
+  suggested_description: 'Positive path for transition SM_D_002 (NORMAL -> NORMAL).
+    when NOK_SHUTOFF=TRUE. and {''description'': ''Satisfy all guards including timing
+    as interpreted''}. then Reach state or output consistent with NORMAL.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id043
+  added_information: *id118
+  source_evidence: *id044
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_016
+  current_description: Negate primary guard signal NOK_SHUTOFF
+  suggested_description: 'Negate primary guard signal NOK_SHUTOFF. when NOK_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Description is too short for customer-facing spec; Timing condition not
+    stated in description
+  missing_information: *id045
+  added_information: *id119
+  source_evidence: *id046
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_017
+  current_description: Positive path for transition SM_D_003 (NORMAL -> NORMAL)
+  suggested_description: 'Positive path for transition SM_D_003 (NORMAL -> NORMAL).
+    when RESET_SHUTOFF=TRUE, SHUTOFF_DECISION=FALSE. and {''description'': ''Satisfy
+    all guards including timing as interpreted''}. then Reach state or output consistent
+    with NORMAL.'
+  reason: Concrete expected outputs (e.g. Mode_STS=0)
+  missing_information: *id047
+  added_information: *id120
+  source_evidence: *id048
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_018
+  current_description: Negate primary guard signal RESET_SHUTOFF
+  suggested_description: 'Negate primary guard signal RESET_SHUTOFF. when RESET_SHUTOFF=0.
+    and {''description'': ''Hold other guards as appropriate''}. then Transition must
+    not occur while guard false.'
+  reason: Timing condition not stated in description
+  missing_information: *id049
+  added_information: *id121
+  source_evidence: *id050
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_019
+  current_description: 'Verify logic for SHUTOFF_DECISION: (OK_SHUTOFF AND NOT NOK_SHUTOFF
+    AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED)'
+  suggested_description: 'Verify logic for SHUTOFF_DECISION: (OK_SHUTOFF AND NOT NOK_SHUTOFF
+    AND FORCE_SHUTOFF AND CND_FORCE_ALLOWED). and {''description'': ''Evaluate control
+    judgment''}. then Outcome matches control definition.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id051
+  added_information: *id122
+  source_evidence: *id052
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_020
+  current_description: 'Verify logic for OK_SHUTOFF: (CND_REQ_GROUP OR CND_SAFE_GROUP
+    OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF)
+    OR CND_O'
+  suggested_description: 'Verify logic for OK_SHUTOFF: (CND_REQ_GROUP OR CND_SAFE_GROUP
+    OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR (CND_BACKUP_TIMER_OK AND POWER=OFF)
+    OR CND_O. and {''description'': ''Evaluate control judgment''}. then Outcome matches
+    control definition.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id053
+  added_information: *id123
+  source_evidence: *id054
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_021
+  current_description: 'Verify logic for CND_REQ_GROUP: (REQ_MAIN_OK (*1) AND REQ_STABLE
+    (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID (*3)))'
+  suggested_description: 'Verify logic for CND_REQ_GROUP: (REQ_MAIN_OK (*1) AND REQ_STABLE
+    (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID (*3))). and {''description'':
+    ''Evaluate control judgment''}. then Outcome matches control definition.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id055
+  added_information: *id124
+  source_evidence: *id056
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_022
+  current_description: 'Verify logic for CND_SAFE_GROUP: (VEHICLE_STOPPED (*1) AND
+    DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED
+    (*4)))'
+  suggested_description: 'Verify logic for CND_SAFE_GROUP: (VEHICLE_STOPPED (*1) AND
+    DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED
+    (*4))). and {''description'': ''Evaluate control judgment''}. then Outcome matches
+    control definition.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id057
+  added_information: *id125
+  source_evidence: *id058
+  confidence: medium
+  review_status: pending
+- test_case_id: TC_PM_023
+  current_description: Verify behavior when NOT NOK_SHUTOFF (negative guard for SHUTOFF_DECISION)
+  suggested_description: 'Verify behavior when NOT NOK_SHUTOFF (negative guard for
+    SHUTOFF_DECISION). and {''description'': ''Evaluate while NOT condition holds''}.
+    then Must not satisfy SHUTOFF_DECISION permission.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id059
+  added_information: *id126
+  source_evidence: *id060
+  confidence: low
+  review_status: pending
+- test_case_id: TC_PM_024
+  current_description: Verify behavior when NOT SAFETY_LOCKED (*5) (negative guard
+    for CND_SAFE_GROUP)
+  suggested_description: 'Verify behavior when NOT SAFETY_LOCKED (*5) (negative guard
+    for CND_SAFE_GROUP). and {''description'': ''Evaluate while NOT condition holds''}.
+    then Must not satisfy CND_SAFE_GROUP permission.'
+  reason: Timing condition not stated in description; No explicit signal values in
+    Given
+  missing_information: *id061
+  added_information: *id127
+  source_evidence: *id062
+  confidence: low
+  review_status: pending
+review_questions:
+- Referenced condition `OK_SHUTOFF` has no definition in spec tables
+- Referenced condition `NOK_SHUTOFF` has no definition in spec tables
+- Referenced condition `FORCE_SHUTOFF` has no definition in spec tables
+- Referenced condition `CND_NORMAL_ROUTE` has no definition in spec tables
+- Referenced condition `CND_BACKUP_ROUTE` has no definition in spec tables
+- Referenced condition `CND_BACKUP_TIMER_OK` has no definition in spec tables
+- Referenced condition `POWER=OFF` has no definition in spec tables
+summary:
+  files_selected: 1
+  signals: 0
+  states: 2
+  transitions: 9
+  logic_blocks: 4
+  condition_definitions: 18
+  ingest_skipped: 0
+  test_candidates: 24
+  errors: 7
+  warnings: 4
+  review_required: 24
+excel_exports:
+  generated_test_spec: output/edited_full/generated_test_spec.xlsx
+  review_package: output/edited_full/review_package.xlsx
+  logic_traceability: output/edited_full/logic_traceability.xlsx
+  issue_list: output/edited_full/issue_list.xlsx

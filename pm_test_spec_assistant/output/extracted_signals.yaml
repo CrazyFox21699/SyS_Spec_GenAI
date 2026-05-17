@@ -1,0 +1,113 @@
+signals:
+- name: Mode_cmd
+  description: Customer command for power mode transition.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '2'
+  confidence: medium
+  review_required: true
+- name: IGN_SW
+  description: Ignition switch status.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '3'
+  confidence: medium
+  review_required: true
+- name: VehicleSpeed
+  description: Vehicle speed value.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '4'
+  confidence: medium
+  review_required: true
+- name: Battery_OK
+  description: Battery voltage and BMS availability status.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '5'
+  confidence: medium
+  review_required: true
+- name: DoorLock_STS
+  description: Door lock status used as optional shutdown precondition.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '6'
+  confidence: medium
+  review_required: true
+- name: Mode_STS
+  description: External published power mode status.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '7'
+  confidence: medium
+  review_required: true
+- name: ACC_Relay
+  description: Hardware ACC relay command.
+  direction: unknown
+  data_length: null
+  sender: null
+  receiver: null
+  values: []
+  initial_value: null
+  fail_safe_value: null
+  source:
+    file: PM_System_Spec_Sample.docx
+    section: null
+    table: table_3
+    row: '8'
+  confidence: medium
+  review_required: true

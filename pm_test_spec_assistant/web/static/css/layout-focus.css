@@ -1,0 +1,455 @@
+/* ALEX purpose-driven layout — primary content first */
+
+/* Evidence — collapsed notes; chips visible on expand or hover */
+.alex-ev-notes {
+  margin-top: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+.alex-ev-notes--nav {
+  margin-top: var(--space-2);
+}
+.alex-ev-notes__summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.alex-ev-notes__summary::-webkit-details-marker {
+  display: none;
+}
+.alex-ev-notes__summary::before {
+  content: "▸";
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+.alex-ev-notes[open] > .alex-ev-notes__summary::before {
+  transform: rotate(90deg);
+}
+.alex-ev-notes__count {
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.alex-ev-notes__body {
+  padding: 0 var(--space-3) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.alex-ev-notes--nav .evidence-nav-card {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+}
+.alex-ev-notes--nav .evidence-nav-head {
+  display: none;
+}
+
+/* Evidence chips — compact row, full text on hover */
+.alex-ev-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.alex-ev-chip {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  line-height: 1.35;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  cursor: help;
+  vertical-align: middle;
+}
+.alex-ev-chip--logic {
+  border-left: 3px solid #2563eb;
+}
+.alex-ev-chip--transition,
+.alex-ev-chip--diagram {
+  border-left: 3px solid #0d9488;
+}
+.alex-ev-chip--output {
+  border-left: 3px solid #7c3aed;
+}
+.alex-ev-chip--source,
+.alex-ev-chip--file {
+  border-left: 3px solid #64748b;
+}
+.alex-ev-chip--note,
+.alex-ev-chip--alias {
+  border-left: 3px solid #94a3b8;
+}
+.focus-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.35rem 0.75rem;
+}
+.focus-evidence b {
+  flex: 0 0 auto;
+  margin-top: 0.2rem;
+}
+.focus-evidence .alex-ev-row {
+  flex: 1 1 12rem;
+}
+.workbook-grid td:has(.alex-ev-row) {
+  min-width: 12rem;
+  max-width: 22rem;
+}
+
+/* Compact stats (replaces tag strips for metadata) */
+.alex-meta-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+.alex-meta-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 4.5rem;
+}
+.alex-meta-stats dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0;
+}
+.alex-meta-stats dd {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.alex-meta-stats.is-compact {
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Hero bar — control / job focus */
+.alex-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-5);
+  background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.alex-hero__title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.alex-hero__sub {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.alex-hero__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.alex-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* Logic page — structure is king */
+.alex-layout-logic .alex-primary-panel {
+  margin-bottom: var(--space-5);
+  padding: var(--space-5);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.alex-primary-panel__label {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.alex-primary-panel .logic-tree-pre,
+.alex-primary-panel .gate-diagram {
+  min-height: 200px;
+  max-height: 360px;
+  overflow: auto;
+  padding: var(--space-4);
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: var(--radius-md);
+  border: none;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.alex-primary-panel .expr-block {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  font-size: 0.95rem;
+  background: var(--surface-muted);
+  border-left: 4px solid var(--accent);
+}
+
+.alex-secondary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-5);
+  align-items: start;
+  margin-bottom: var(--space-5);
+}
+@media (max-width: 1100px) {
+  .alex-secondary-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.alex-evidence-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.alex-source-card {
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.alex-source-card__file {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.alex-source-card__loc {
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.alex-source-card code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-raised);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.alex-side-panel {
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  position: sticky;
+  top: var(--space-2);
+}
+.alex-side-panel h4 {
+  margin-top: 0;
+}
+
+/* State machine page */
+.alex-state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.alex-state-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  padding: var(--space-3);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.alex-state-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+.alex-state-card.is-active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.alex-state-card__name {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.alex-diagram-main {
+  display: grid;
+  grid-template-columns: minmax(280px, 36%) 1fr;
+  gap: var(--space-5);
+  align-items: start;
+  margin-bottom: var(--space-5);
+}
+@media (max-width: 1000px) {
+  .alex-diagram-main {
+    grid-template-columns: 1fr;
+  }
+}
+.alex-diagram-list {
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+.diagram-edge-card {
+  margin-bottom: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+.alex-diagram-detail {
+  min-height: 320px;
+}
+.alex-diagram-detail .diagram-focus-card {
+  margin: 0;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+.alex-diagram-detail .diagram-focus-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.alex-diagram-detail .diagram-overlay-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+.alex-diagram-detail .diagram-overlay-grid > div {
+  width: 100%;
+}
+.alex-flow-panel {
+  margin-top: var(--space-4);
+}
+.alex-flow-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: var(--space-2) 0;
+}
+.alex-flow-panel .logic-tree-pre {
+  max-height: 200px;
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+/* Queue as table not pills */
+.alex-queue-table td,
+.alex-queue-table th {
+  vertical-align: middle;
+}
+.alex-queue-table .col-status {
+  width: 140px;
+}
+
+/* Guide — readable */
+.alex-guide-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  line-height: 1.7;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+.alex-guide-steps li {
+  margin-bottom: var(--space-2);
+}
+.alex-guide-steps b {
+  color: var(--text-primary);
+}
+details.alex-ref-panel {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+details.alex-ref-panel summary {
+  padding: var(--space-3) var(--space-4);
+  font-weight: 600;
+  cursor: pointer;
+}
+details.alex-ref-panel .alex-ref-body {
+  padding: 0 var(--space-4) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* Hide old cramped 3-col */
+.alex-workspace-3 {
+  display: none !important;
+}
+
+/* Definition workbench full width below */
+.alex-definitions-block {
+  margin-bottom: var(--space-5);
+}
+.alex-definitions-block .definition-workbench {
+  grid-template-columns: 220px 1fr;
+}
+
+/* Content uses full width */
+#content {
+  max-width: none;
+  padding: var(--space-5) var(--space-6);
+}
+
+/* Trace table readable */
+.alex-trace-table .col-term {
+  width: 28%;
+}
+.alex-trace-table .col-status {
+  width: 110px;
+}
+.alex-trace-table td {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}

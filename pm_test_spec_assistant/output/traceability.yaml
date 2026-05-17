@@ -1,0 +1,268 @@
+transition_context:
+- transition_id: TR_001
+  signals_mentioned: []
+  raw_condition: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  from_state: TR_PM_001
+  to_state: ADM1_ACC
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 2
+  confidence: low
+  review_required: true
+- transition_id: TR_002
+  signals_mentioned:
+  - Battery_OK
+  - Mode_cmd
+  raw_condition: Mode_cmd = 2 AND Battery_OK = 1
+  from_state: TR_PM_002
+  to_state: ADM1_OFF
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 3
+  confidence: low
+  review_required: true
+- transition_id: TR_003
+  signals_mentioned:
+  - Battery_OK
+  raw_condition: Battery_OK = 0 OR T_trans exceeded
+  from_state: TR_PM_003
+  to_state: ADM1_ACC
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 4
+  confidence: low
+  review_required: true
+- transition_id: TR_004
+  signals_mentioned: []
+  raw_condition: Verify shutoff when all mandatory conditions are true and Condition_C
+    is true
+  from_state: TC_PM_001
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 2
+  confidence: low
+  review_required: true
+- transition_id: TR_005
+  signals_mentioned: []
+  raw_condition: Verify system does not shut off before timing threshold
+  from_state: TC_PM_002
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 3
+  confidence: low
+  review_required: true
+- transition_id: TR_001
+  signals_mentioned: []
+  raw_condition: Verify shutoff when all mandatory conditions are satisfied and Condition_C
+    branch is true
+  from_state: TC_PM_001
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 2
+  confidence: low
+  review_required: true
+- transition_id: TR_002
+  signals_mentioned: []
+  raw_condition: Verify shutoff when OR branch Condition_D is true
+  from_state: TC_PM_002
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 3
+  confidence: low
+  review_required: true
+- transition_id: TR_003
+  signals_mentioned: []
+  raw_condition: Verify no shutoff before shutdown timer threshold
+  from_state: TC_PM_003
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 4
+  confidence: low
+  review_required: true
+- transition_id: TR_004
+  signals_mentioned: []
+  raw_condition: Verify no shutoff when vehicle speed is not zero
+  from_state: TC_PM_004
+  to_state: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 5
+  confidence: low
+  review_required: true
+test_traceability:
+- test_candidate_id: TC_PM_001
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  states:
+    from: TR_PM_001
+    to: ADM1_ACC
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    location: sheet 02_State_Machine row 2
+    evidence: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_002
+  signals:
+  - Mode_cmd
+  - Battery_OK
+  conditions:
+  - Mode_cmd = 2 AND Battery_OK = 1
+  states:
+    from: TR_PM_002
+    to: ADM1_OFF
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    location: sheet 02_State_Machine row 3
+    evidence: Mode_cmd = 2 AND Battery_OK = 1
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_004
+  signals:
+  - Battery_OK
+  conditions:
+  - Battery_OK = 0 OR T_trans exceeded
+  states:
+    from: TR_PM_003
+    to: ADM1_ACC
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    location: sheet 02_State_Machine row 4
+    evidence: Battery_OK = 0 OR T_trans exceeded
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_006
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify shutoff when all mandatory conditions are true and Condition_C is true
+  states:
+    from: TC_PM_001
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    location: sheet 05_TestSpec_Reference row 2
+    evidence: Verify shutoff when all mandatory conditions are true and Condition_C
+      is true
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_007
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify system does not shut off before timing threshold
+  states:
+    from: TC_PM_002
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_Behavior_Logic_Sample.xlsx
+    location: sheet 05_TestSpec_Reference row 3
+    evidence: Verify system does not shut off before timing threshold
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_008
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify shutoff when all mandatory conditions are satisfied and Condition_C branch
+    is true
+  states:
+    from: TC_PM_001
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    location: sheet TestSpec_Format row 2
+    evidence: Verify shutoff when all mandatory conditions are satisfied and Condition_C
+      branch is true
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_009
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify shutoff when OR branch Condition_D is true
+  states:
+    from: TC_PM_002
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    location: sheet TestSpec_Format row 3
+    evidence: Verify shutoff when OR branch Condition_D is true
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_010
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify no shutoff before shutdown timer threshold
+  states:
+    from: TC_PM_003
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    location: sheet TestSpec_Format row 4
+    evidence: Verify no shutoff before shutdown timer threshold
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_011
+  signals:
+  - Mode_cmd
+  - IGN_SW
+  - VehicleSpeed
+  conditions:
+  - Verify no shutoff when vehicle speed is not zero
+  states:
+    from: TC_PM_004
+    to: Power Mode Control
+  outputs: []
+  source_evidence:
+  - file: PM_TestSpec_Reference_Sample.xlsx
+    location: sheet TestSpec_Format row 5
+    evidence: Verify no shutoff when vehicle speed is not zero
+  confidence: medium
+  review_required: true

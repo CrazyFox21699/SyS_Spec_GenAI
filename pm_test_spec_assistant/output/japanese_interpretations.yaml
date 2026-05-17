@@ -1,0 +1,47 @@
+japanese_interpretations:
+- raw_source_text: 'SAMPLE SYSTEM SPECIFICATION - Power Mode Control Signal Contract
+
+    Purpose: fake/non-confidential sample input for the Power Mode Test Spec Assistant.
+    This Word file defines signals, value domains, initial values, fail-safe values,
+    and a Japanese excerpt for review.
+
+    1. Metadata
+
+    2. System Overview
+
+    Power Mode Control receives input requests and vehicle conditions, evaluates transition
+    condition trees, updates internal states, controls hardware outputs, and publishes
+    interface status.
+
+    3. Glossary
+
+    4. Interface Definitions
+
+    The assistant should extract signal name, direction, value domain, initial value,
+    and fail-safe value from this table.
+
+    5. Japanese Source Excerpt for Review
+
+    Original Japanese requirement excerpt: Mode_cmd が 1 の状態で T_shutdown が 100ms 以上継続した場合、Mode_STS
+    は 0 を出力すること。
+
+    Expected AI technical interpretation candidate: Given Mode_cmd = 1; When T_shutdown
+    >= 100ms; Then Mode_STS = 0. Mark as comtor_review_required and engineer_review_required.
+
+    6. Fail-safe Notes
+
+    If Battery_OK = 0 or timeout is detected during shutdown transition, the system
+    shall fall back to ADM1_OFF and publish Mode_STS = 0. Undefined values shall use
+    fail-safe value if no explicit behavior is defined.
+
+    Document'
+  ai_translation_en: ''
+  ai_technical_interpretation:
+    given: []
+    when: []
+    then: []
+  confidence: low
+  review_required:
+    comtor: true
+    engineer: true
+  source: not_translated_llm_disabled

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/power-spec/condition_ir.schema.json",
+  "$defs": {
+    "condition_ir": {
+      "type": "object",
+      "title": "Power-mode condition intermediate representation",
+      "description": "Canonical IR for ECU power-mode conditions: signals, thresholds, dependencies, and traceable evidence.",
+      "required": ["id", "title", "applies_to", "predicates", "dependencies", "source_evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier for this condition node (e.g. COND_001 or domain-specific slug).",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "description": "Short human-readable title.",
+          "minLength": 1
+        },
+        "applies_to": {
+          "type": "string",
+          "description": "Scope: ECU variant, feature line, or subsystem this condition applies to.",
+          "minLength": 1
+        },
+        "predicates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["signal", "comparator", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "signal": {
+                "type": "string",
+                "description": "Logical signal or state name (e.g. IGN_STATUS, kl15_rising).",
+                "minLength": 1
+              },
+              "comparator": {
+                "type": "string",
+                "description": "Comparison operator (e.g. ==, !=, <, <=, >, >=, in, not_in).",
+                "minLength": 1
+              },
+              "value": {
+                "description": "Compared value: scalar, string, or array for in/not_in.",
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "number" },
+                  { "type": "boolean" },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": ["string", "number", "boolean"] }
+                  }
+                ]
+              },
+              "unit": {
+                "type": "string",
+                "description": "Physical or logical unit for numeric values (e.g. V, ms, %).",
+                "minLength": 1
+              },
+              "timing": {
+                "type": "object",
+                "description": "Optional timing/debounce/hold requirement for this predicate.",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "description": "e.g. debounce, hold, timeout, hysteresis.",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "description": "Other condition IDs or logical prerequisites that must hold.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "source_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["file"],
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Source document path or identifier.",
+                "minLength": 1
+              },
+              "location": {
+                "type": "string",
+                "description": "Sheet, section, page, clause, or line range.",
+                "minLength": 1
+              },
+              "quote": {
+                "type": "string",
+                "description": "Verbatim excerpt (optional)."
+              }
+            }
+          }
+        },
+        "source_row_csv": {
+          "type": ["integer", "null"],
+          "description": "1-based workbook row from CSV ingest (tooling metadata)."
+        },
+        "references_raw": {
+          "type": "string",
+          "description": "Original references column text before resolution."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ingest / LLM triage notes."
+        }
+      }
+    }
+  },
+  "$ref": "#/$defs/condition_ir",
+  "$comment": "Canonical single-node IR. For bundled files (e.g. condition_index.json), validate each element with #/$defs/condition_ir."
+}

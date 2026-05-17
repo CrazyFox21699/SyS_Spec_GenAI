@@ -1,0 +1,61 @@
+transition_context: []
+test_traceability:
+- test_candidate_id: TC_PM_001
+  signals: []
+  conditions:
+  - ((OK_SHUTOFF AND NOT NOK_SHUTOFF) OR (FORCE_SHUTOFF AND CND_FORCE_ALLOWED))
+  states: {}
+  outputs: []
+  source_evidence:
+  - file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_1
+    control: SHUTOFF_DECISION
+    table_id: T1_01
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_002
+  signals: []
+  conditions:
+  - ((CND_REQ_GROUP AND CND_SAFE_GROUP) OR CND_NORMAL_ROUTE OR CND_BACKUP_ROUTE OR
+    (CND_BACKUP_TIMER_OK AND POWER=OFF) OR CND_OUTPUT_READY)
+  states: {}
+  outputs: []
+  source_evidence:
+  - file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_2
+    control: OK_SHUTOFF
+    table_id: T2_01
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_003
+  signals: []
+  conditions:
+  - ((REQ_MAIN_OK (*1) AND REQ_STABLE (*4)) OR (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
+    (*3)))
+  states: {}
+  outputs: []
+  source_evidence:
+  - file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_3
+    control: CND_REQ_GROUP
+    table_id: T3_01
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_004
+  signals: []
+  conditions:
+  - ((VEHICLE_STOPPED (*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED (*5)) OR (PROCESS_IDLE
+    (*3) OR PROCESS_PREPARED (*4)))
+  states: {}
+  outputs: []
+  source_evidence:
+  - file: edited_Shutoff_Condition_Spec.docx
+    document: edited_Shutoff_Condition_Spec.docx
+    table: table_4
+    control: CND_SAFE_GROUP
+    table_id: T4_01
+  confidence: medium
+  review_required: true

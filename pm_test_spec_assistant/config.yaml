@@ -1,0 +1,91 @@
+product:
+  name: ALEX
+  display_name: ALEX
+  version: "0.2"
+project:
+  name: alex
+  legacy_folder: pm_test_spec_assistant
+features:
+  evidence_registry: true
+  validator: true
+  add_clone_tc: true
+  source_index: true
+  term_roles: true
+  ollama_assist: true
+  atom_model: true
+  understanding_gate: true
+test_generation:
+  mode: legacy
+  coverage: mcdc
+  max_expansion_factor: 32
+deployment:
+  mode: local
+security:
+  enabled: false
+  require_token: false
+  max_upload_mb: 50
+  rate_limit_per_minute: 120
+export:
+  strict: false
+assist:
+  default_provider: ollama
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:latest
+  copilot:
+    enabled: false
+    require_preview: true
+classification:
+  state_name_patterns:
+  - ADM\d+_[A-Z0-9_]+
+  gtest_patterns:
+  - TEST_F
+  - EXPECT_EQ
+  - ASSERT_EQ
+  behavior_keywords:
+  - state
+  - transition
+  - condition
+  - event
+  - output
+  - next state
+  - fail
+  - timeout
+  signal_keywords:
+  - signal
+  - interface
+  - sender
+  - receiver
+  - initial
+  - fail-safe
+  - fail safe
+  - value
+  test_spec_keywords:
+  - test case
+  - testcase
+  - expected
+  - result
+  - pass/fail
+timing:
+  default_interpret_equal_time_as: '>='
+  review_required_for_equal_time: true
+  patterns:
+  - T\s*=\s*\d+\s*ms
+  - T\s*>=\s*\d+\s*ms
+  - After\s+\d+\s*ms
+  - Within\s+\d+\s*ms
+  - not elapsed
+  - elapsed
+  - timeout
+  - exceeded
+llm:
+  enabled: true
+  provider: ollama
+  base_url: http://localhost:11434
+  model: qwen2.5:latest
+  timeout_seconds: 120
+output:
+  backup_existing_files: true
+ui:
+  strict_mode: true
+  default_input_dir: ../pm_sample_inputs/input

@@ -1,0 +1,70 @@
+/* ALEX design tokens */
+:root {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+
+  --surface-base: #f1f5f9;
+  --surface-raised: #ffffff;
+  --surface-sidebar: #e8eef6;
+  --surface-muted: #f8fafc;
+
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --ui-border-width: 1px;
+  --ui-border-width-strong: 2px;
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-bg: #eff6ff;
+
+  --status-ok: #15803d;
+  --status-ok-bg: #ecfdf3;
+  --status-warn: #b45309;
+  --status-warn-bg: #fffbeb;
+  --status-error: #dc2626;
+  --status-error-bg: #fef2f2;
+  --status-info: #2563eb;
+  --status-info-bg: #eff6ff;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+
+  /* Legacy aliases (existing style.css) */
+  --bg: var(--surface-base);
+  --panel: var(--surface-raised);
+  --panel-soft: var(--surface-muted);
+  --border: var(--border-subtle);
+  --text: var(--text-primary);
+  --muted: var(--text-muted);
+  --green: var(--status-ok);
+  --green-bg: var(--status-ok-bg);
+  --yellow: var(--status-warn);
+  --yellow-bg: var(--status-warn-bg);
+  --red: var(--status-error);
+  --red-bg: var(--status-error-bg);
+  --blue: var(--accent);
+  --blue-bg: var(--accent-bg);
+  --gray: #94a3b8;
+}

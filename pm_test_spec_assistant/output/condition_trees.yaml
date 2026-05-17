@@ -1,0 +1,173 @@
+condition_trees:
+- transition_id: TR_001
+  raw_condition: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  tree:
+    type: AND
+    children:
+    - type: reference
+      name: Condition_E
+    - type: reference
+      name: Condition_A
+    - type: reference
+      name: Condition_B
+    - type: OR
+      children:
+      - type: reference
+        name: Condition_C
+        raw_condition: Condition_C
+        parse_status: ok
+      - type: reference
+        name: Condition_D
+        raw_condition: Condition_D
+        parse_status: ok
+      raw_condition: (Condition_C OR Condition_D)
+      parse_status: partial
+    raw_condition: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR
+      Condition_D)
+    parse_status: partial
+  timing_normalizations: []
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 2
+- transition_id: TR_002
+  raw_condition: Mode_cmd = 2 AND Battery_OK = 1
+  tree:
+    type: AND
+    children:
+    - type: signal_condition
+      signal: Mode_cmd
+      operator: ==
+      value: '2'
+    - type: signal_condition
+      signal: Battery_OK
+      operator: ==
+      value: '1'
+    raw_condition: Mode_cmd = 2 AND Battery_OK = 1
+    parse_status: partial
+  timing_normalizations: []
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 3
+- transition_id: TR_003
+  raw_condition: Battery_OK = 0 OR T_trans exceeded
+  tree:
+    type: OR
+    children:
+    - type: signal_condition
+      signal: Battery_OK
+      operator: ==
+      value: '0'
+      raw_condition: Battery_OK = 0
+      parse_status: ok
+    - type: timing_condition
+      raw_text: T_trans exceeded
+      raw_condition: T_trans exceeded
+      parse_status: ok
+    raw_condition: Battery_OK = 0 OR T_trans exceeded
+    parse_status: partial
+  timing_normalizations:
+  - raw_text: exceeded
+    source: deterministic
+    confidence: medium
+    review_required: true
+    interpreted_as: exceeded
+    reason:
+    - Pattern matched; manual interpretation needed.
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 02_State_Machine
+    row_hint: 4
+- transition_id: TR_004
+  raw_condition: Verify shutoff when all mandatory conditions are true and Condition_C
+    is true
+  tree:
+    type: AND
+    children:
+    - type: opaque
+      raw_text: Verify shutoff when all mandatory conditions are true
+    - type: opaque
+      raw_text: Condition_C is true
+    raw_condition: Verify shutoff when all mandatory conditions are true and Condition_C
+      is true
+    parse_status: partial
+  timing_normalizations: []
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 2
+- transition_id: TR_005
+  raw_condition: Verify system does not shut off before timing threshold
+  tree:
+    type: opaque
+    raw_text: Verify system does not shut off before timing threshold
+    raw_condition: Verify system does not shut off before timing threshold
+    parse_status: ok
+  timing_normalizations: []
+  source:
+    file: PM_Behavior_Logic_Sample.xlsx
+    sheet: 05_TestSpec_Reference
+    row_hint: 3
+- transition_id: TR_001
+  raw_condition: Verify shutoff when all mandatory conditions are satisfied and Condition_C
+    branch is true
+  tree:
+    type: AND
+    children:
+    - type: opaque
+      raw_text: Verify shutoff when all mandatory conditions are satisfied
+    - type: opaque
+      raw_text: Condition_C branch is true
+    raw_condition: Verify shutoff when all mandatory conditions are satisfied and
+      Condition_C branch is true
+    parse_status: partial
+  timing_normalizations: []
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 2
+- transition_id: TR_002
+  raw_condition: Verify shutoff when OR branch Condition_D is true
+  tree:
+    type: OR
+    children:
+    - type: opaque
+      raw_text: Verify shutoff when
+      raw_condition: Verify shutoff when
+      parse_status: ok
+    - type: opaque
+      raw_text: branch Condition_D is true
+      raw_condition: branch Condition_D is true
+      parse_status: ok
+    raw_condition: Verify shutoff when OR branch Condition_D is true
+    parse_status: partial
+  timing_normalizations: []
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 3
+- transition_id: TR_003
+  raw_condition: Verify no shutoff before shutdown timer threshold
+  tree:
+    type: opaque
+    raw_text: Verify no shutoff before shutdown timer threshold
+    raw_condition: Verify no shutoff before shutdown timer threshold
+    parse_status: ok
+  timing_normalizations: []
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 4
+- transition_id: TR_004
+  raw_condition: Verify no shutoff when vehicle speed is not zero
+  tree:
+    type: opaque
+    raw_text: Verify no shutoff when vehicle speed is not zero
+    raw_condition: Verify no shutoff when vehicle speed is not zero
+    parse_status: ok
+  timing_normalizations: []
+  source:
+    file: PM_TestSpec_Reference_Sample.xlsx
+    sheet: TestSpec_Format
+    row_hint: 5

@@ -1,0 +1,77 @@
+# Sample bundle illustrating IR → customer spec triplets → gtest linkage.
+# Validate with: jq / yq vs schemas/condition-ir.schema.json (or your CI).
+
+project_id: SAMPLE_PWR_MODE
+revision: "Excel:R3; Word:SRS Appendix A v0.9"
+
+conditions:
+  - id: COND_NormalToSleepAllMet
+    title: Enter sleep mode when combined row N conditions satisfied
+    applies_to: "GlobalPowerManager / Transition Normal → Sleep"
+    predicates:
+      - id: P_ign
+        subject: IGN_STABLE_OFF
+        comparator: asserted_true
+        unit: "-"
+      - id: P_lid
+        subject: DOOR_CLOSED
+        comparator: asserted_true
+        timing_notes: Held ≥ 3s per debounce sheet
+      - id: P_batt
+        subject: BAT_VOLTAGE
+        comparator: ">="
+        value: 11500
+        unit: "mV"
+    dependencies:
+      - kind: doc_ref
+        doc_pointer:
+          file: PowerMode_definition.xlsx
+          location: "Logic!CombinedConditions_row12"
+          snippet: >-
+            Transition to Sleep when IGN off and door latch closed...
+    source_evidence:
+      - file: PowerMode_definition.xlsx
+        location: Logic!D12:G15
+      - file: SRS_Power_Mode.docx
+        location: "/Headings/Abbreviations/IGN_STABLE_OFF"
+
+test_cases:
+  - test_id: ST_PWR_Sleep_Normal_001
+    linked_conditions:
+      - COND_NormalToSleepAllMet
+    neighbors_similar_ids:
+      - ST_PWR_Sleep_Normal_002
+      - ST_PWR_Sleep_Boundary_Vbat
+    ir_predicates_cover:
+      - subject: IGN_STABLE_OFF
+        comparator: asserted_true
+      - subject: DOOR_CLOSED
+        comparator: asserted_true
+        timing_notes: Held ≥ 3s
+      - subject: BAT_VOLTAGE
+        comparator: ">="
+        value: 11500
+        unit: "mV"
+    stimulus:
+      - subject: TIME_ADVANCE_MS
+        comparator: ">="
+        value: 3010
+        unit: ms
+        timing_notes: After stable Given, advance scheduler
+    expected_observable:
+      - assertion_summary: "Power mode becomes SLEEP within allowed deadline"
+        maps_to_signals:
+          - PWR_MODE_ENUM
+          - SLEEP_ENTRY_FLAG
+    spec_trilingual_fields:
+      description_ja_or_en_choice: |-
+        【Normal→Sleep】IG-OFFおよびドアクローズ状態が規定時間維持され、電源電圧が閾値以上である場合に、システムはスリープ移行許可状態へ遷移する。
+      description_alt_language: |-
+        Preconditions for Normal→Sleep: stable IG-OFF, door closed latch held ≥ 3 s, battery above 11.5 V; after time advances, Sleep must be permitted.
+      given_text: |-
+        IGN_STABLE_OFF = true; door fully closed latch = true (held ≥ 3 s); BAT_VOLTAGE ≥ 11500 mV;
+        initial mode = NORMAL; watchdog and unrelated faults = none.
+      expectation_text: |-
+        Within documented transition deadline, PWR_MODE_ENUM == SLEEP and SLEEP_ENTRY_FLAG == true,
+        without intermediate forbidden mode hops.
+    gtest_fixture: "PowerModeSystemTest"

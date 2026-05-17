@@ -1,0 +1,285 @@
+"""Word document extraction: signals, logic tables, formulas, transitions."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
+
+from src.engine.two_column_logic_parser import (
+    build_alias_map,
+    extract_footnote_refs,
+    parse_table_to_logic_block,
+)
+from src.parsers.diagram_parser import extract_diagram_transitions
+from src.parsers.ocr_local import analyze_docx_embedded_images
+from src.parsers.paragraph_extractor import extract_from_paragraphs, link_footnotes
+from src.parsers.table_logic_parser import (
+    LogicBlock,
+    extract_formulas_from_text,
+    parse_transition_table,
+    rows_from_grid,
+    transitions_from_logic_blocks,
+)
+from src.parsers.two_column_table_parser import parse_control_condition_grid, tables_to_dicts
+
+
+def peek_word_text(path: Path, max_chars: int = 8000) -> str:
+    try:
+        doc = Document(str(path))
+    except PackageNotFoundError:
+        return ""
+    parts: list[str] = []
+    for p in doc.paragraphs[:200]:
+        if p.text.strip():
+            parts.append(p.text.strip())
+    for table in doc.tables[:30]:
+        for row in table.rows[:40]:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)[:max_chars]
+
+
+def _table_to_grid(table) -> list[list[str]]:
+    return [[c.text.strip() for c in row.cells] for row in table.rows]
+
+
+def extract_word_document(path: Path) -> dict[str, Any]:
+    """
+    Full Word extraction: signals, condition definitions, logic blocks (merged tables),
+    paragraph formulas, state transitions, embedded test reference rows.
+    """
+    try:
+        doc = Document(str(path))
+    except PackageNotFoundError as exc:
+        return {
+            "error": "invalid_docx_package",
+            "message": str(exc),
+            "signals": [],
+            "logic_blocks": [],
+            "transitions": [],
+            "condition_definitions": [],
+            "test_reference_rows": [],
+            "two_column_tables": [],
+            "alias_map": [],
+            "footnote_definitions": [],
+        }
+
+    src_base = {"file": path.name, "document": path.name}
+    signals: list[dict[str, Any]] = []
+    logic_blocks: list[LogicBlock] = []
+    two_column_logic_dicts: list[dict[str, Any]] = []
+    parsed_tc_tables: list[Any] = []
+    transitions: list[dict[str, Any]] = []
+    condition_definitions: list[dict[str, Any]] = []
+    test_reference_rows: list[dict[str, Any]] = []
+    full_text_parts: list[str] = []
+
+    header_keywords = ("signal", "name", "interface", "direction", "sender", "receiver", "initial", "fail")
+
+    for ti, table in enumerate(doc.tables):
+        grid = _table_to_grid(table)
+        if not grid:
+            continue
+        header = [c.lower() for c in grid[0]]
+        source_tbl = {**src_base, "table": f"table_{ti + 1}"}
+
+        # Two-column Control | Condition (gates embedded in condition column(s))
+        hdr_joined = " ".join(header)
+        if "control" in hdr_joined and "condition" in hdr_joined and "logic" not in header:
+            tc_parsed = parse_control_condition_grid(grid, source_tbl, table_id=f"T{ti+1}")
+            parsed_tc_tables.extend(tc_parsed)
+            for pt in tc_parsed:
+                if pt.table_kind == "logic":
+                    two_column_logic_dicts.append(parse_table_to_logic_block(pt))
+                elif pt.table_kind == "constant":
+                    for row in pt.rows:
+                        condition_definitions.append(
+                            {
+                                "name": row.control,
+                                "definition": row.condition_raw,
+                                "source": row.source,
+                                "constant_value": row.parsed_hint,
+                            }
+                        )
+            continue
+
+        # Logic / control tables (separate Logic column)
+        if "logic" in header and "condition" in header:
+            blocks = rows_from_grid(grid, source_tbl, block_id_prefix=f"WD{ti+1}")
+            logic_blocks.extend(blocks)
+            continue
+
+        # Condition definition table
+        if header[0] == "condition" and len(header) > 1 and "definition" in header[1]:
+            for ri, cells in enumerate(grid[1:], start=2):
+                if len(cells) < 2 or not cells[0]:
+                    continue
+                condition_definitions.append(
+                    {
+                        "name": cells[0],
+                        "definition": cells[1],
+                        "source": {**source_tbl, "row": ri},
+                    }
+                )
+            continue
+
+        # Test reference (Given / When / Expected)
+        if "given" in " ".join(header) and ("expected" in " ".join(header) or "when" in " ".join(header)):
+            hdr_map = {h: i for i, h in enumerate(header)}
+            for ri, cells in enumerate(grid[1:], start=2):
+                if not any(cells):
+                    continue
+                test_reference_rows.append(
+                    {
+                        "id": cells[hdr_map.get("no", 0)] if "no" in hdr_map else cells[0],
+                        "given": cells[hdr_map.get("given", 1)] if "given" in hdr_map else "",
+                        "when": cells[hdr_map.get("when", 2)] if "when" in hdr_map else "",
+                        "expected": cells[hdr_map.get("expected", 3)] if "expected" in hdr_map else "",
+                        "source": {**source_tbl, "row": ri},
+                    }
+                )
+            continue
+
+        # State transition outcome table (header may be Item | Expected Value)
+        body_text_joined = " ".join(" ".join(r) for r in grid[1:6]).lower()
+        if (
+            "previous" in " ".join(header)
+            or "next" in " ".join(header)
+            or "previous state" in body_text_joined
+        ):
+            transitions.extend(parse_transition_table(grid, source_tbl))
+            continue
+
+        # Signal-like tables
+        if any(any(k in h for k in header_keywords) for h in header):
+            signals.extend(_extract_signal_rows_from_grid(grid, source_tbl))
+
+    paragraph_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    full_text_parts = paragraph_lines
+
+    para_data = extract_from_paragraphs(paragraph_lines, path.name)
+    condition_definitions.extend(para_data.get("condition_definitions", []))
+    transitions.extend(para_data.get("transitions", []))
+
+    body_text = "\n".join(full_text_parts)
+    logic_blocks.extend(
+        extract_formulas_from_text(body_text, {**src_base, "kind": "paragraph"})
+    )
+
+    # Transition narrative: "NORMAL → SHUT_OFF"
+    for m in re.finditer(
+        r"transition[s]?\s+(?:from\s+)?(\w+)\s*(?:→|->)\s*(\w+)",
+        body_text,
+        re.I,
+    ):
+        transitions.append(
+            {
+                "id": f"SM_P_{len(transitions)+1:03d}",
+                "from_state": m.group(1).upper(),
+                "to_state": m.group(2).upper(),
+                "event": "narrative_transition",
+                "raw_condition": m.group(0),
+                "source": {**src_base, "kind": "paragraph"},
+                "confidence": "medium",
+                "review_required": True,
+            }
+        )
+
+    logic_dicts = [_block_to_dict(b) for b in logic_blocks]
+    logic_dicts.extend(two_column_logic_dicts)
+    transitions.extend(transitions_from_logic_blocks(logic_dicts))
+    alias_map = build_alias_map(parsed_tc_tables)
+    footnote_refs = extract_footnote_refs(parsed_tc_tables)
+    footnotes = link_footnotes(
+        footnote_refs,
+        para_data.get("footnote_map", {}),
+        condition_definitions,
+    )
+    diagram_transitions = extract_diagram_transitions(paragraph_lines, path.name)
+    embedded_image_analysis = analyze_docx_embedded_images(path)
+    for analysis in embedded_image_analysis:
+        condition_definitions.extend(analysis.get("condition_definitions", []))
+        transitions.extend(analysis.get("transitions", []))
+        code_definitions.extend(analysis.get("code_definitions", []))
+        state_rules.extend(analysis.get("state_rules", []))
+    transitions.extend(diagram_transitions)
+
+    return {
+        "signals": signals,
+        "logic_blocks": logic_dicts,
+        "transitions": transitions,
+        "condition_definitions": condition_definitions,
+        "test_reference_rows": test_reference_rows,
+        "two_column_tables": tables_to_dicts(parsed_tc_tables),
+        "alias_map": alias_map,
+        "footnote_definitions": footnotes,
+        "code_definitions": para_data.get("code_definitions", []),
+        "state_rules": para_data.get("state_rules", []),
+        "diagram_transitions": diagram_transitions,
+        "embedded_image_analysis": embedded_image_analysis,
+        "full_text_sample": body_text[:4000],
+    }
+
+
+def _block_to_dict(b: LogicBlock) -> dict[str, Any]:
+    return {
+        "id": b.id,
+        "name": b.name,
+        "raw_expression": b.raw_expression,
+        "tree": b.tree,
+        "block_type": b.block_type,
+        "parse_status": b.parse_status,
+        "review_required": b.review_required,
+        "source": b.source,
+        "rows": [
+            {"control": r.control, "logic": r.logic, "condition": r.condition, "detail": r.detail}
+            for r in b.rows
+        ],
+    }
+
+
+def _extract_signal_rows_from_grid(grid: list[list[str]], source: dict[str, Any]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    if not grid:
+        return signals
+    header = [c.lower() for c in grid[0]]
+
+    def col(*keys: str) -> int | None:
+        for i, h in enumerate(header):
+            if any(k in h for k in keys):
+                return i
+        return None
+
+    i_name = col("signal", "name", "sig")
+    if i_name is None:
+        i_name = 0
+    i_desc = col("description", "desc")
+    for ri, cells in enumerate(grid[1:101], start=2):
+        if not any(cells):
+            continue
+        name = cells[i_name] if i_name < len(cells) else ""
+        if not name or len(name) > 80:
+            continue
+        desc = cells[i_desc] if i_desc is not None and i_desc < len(cells) else ""
+        signals.append(
+            {
+                "name": name,
+                "description": desc,
+                "direction": "unknown",
+                "values": [],
+                "source": {**source, "row": str(ri)},
+                "confidence": "medium",
+                "review_required": True,
+            }
+        )
+    return signals
+
+
+def extract_word_signals(path: Path) -> list[dict[str, Any]]:
+    """Backward-compatible: signals only."""
+    return extract_word_document(path).get("signals", [])

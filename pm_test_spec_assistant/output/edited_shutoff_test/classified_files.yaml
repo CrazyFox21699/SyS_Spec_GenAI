@@ -1,0 +1,8 @@
+classified_files:
+- file: ../pm_sample_inputs/edited_Shutoff_Condition_Spec.docx
+  role: system_spec
+  confidence: high
+  reason:
+  - 'Word table: Logic + Condition columns'
+  - 'Signal/interface keyword in Word: value'
+  user_confirmation_suggested: false
