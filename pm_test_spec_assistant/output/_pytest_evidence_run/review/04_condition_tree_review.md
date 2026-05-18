@@ -330,7 +330,7 @@ children:
     comparator_value: '1'
     confidence: medium
     footnotes: []
-    id: ref_a1b7077b
+    id: ref_4ca27b50
     issue_status: ok
     name: OK_SHUTOFF
     parser_reason: Detected as condition reference from row path leaf token.
@@ -352,7 +352,7 @@ children:
       confidence: medium
       footnotes:
       - '1'
-      id: ref_dc7a8e49
+      id: ref_e5f1555f
       issue_status: ok
       name: NOK_SHUTOFF
       parser_reason: Detected as NOT condition because token starts with NOT.
@@ -361,7 +361,7 @@ children:
       source: *id001
       type: condition
     confidence: medium
-    id: not_610c2466
+    id: not_f7a8fe5d
     issue_status: ok
     parser_reason: Detected as NOT gate because row text starts with NOT.
     raw_text: NOT NOK_SHUTOFF = (*1)
@@ -369,7 +369,7 @@ children:
     source: *id001
     type: NOT
   confidence: high
-  id: and_b197d5ba
+  id: and_1131cdcb
   issue_status: ok
   parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under AND.
   review_status: parsed
@@ -388,7 +388,7 @@ children:
     comparator_value: '150'
     confidence: medium
     footnotes: []
-    id: ref_df1b12bb
+    id: ref_07baf230
     issue_status: ok
     name: FORCE_SHUTOFF
     parser_reason: Detected as condition reference from row path leaf token.
@@ -408,7 +408,7 @@ children:
     comparator_value: '0'
     confidence: medium
     footnotes: []
-    id: ref_cb14e14e
+    id: ref_764c75a6
     issue_status: ok
     name: CND_FORCE_ALLOWED
     parser_reason: Detected as condition reference from row path leaf token.
@@ -417,14 +417,14 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: and_b54630b3
+  id: and_34d220f6
   issue_status: ok
   parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under AND.
   review_status: parsed
   source: *id001
   type: AND
 confidence: high
-id: or_400618e2
+id: or_a47ae205
 issue_status: ok
 parse_status: ok
 parser_reason: Multiple OR/AND row branches detected; combined as OR of AND groups.
@@ -461,7 +461,7 @@ children:
   comparator_value: '1'
   confidence: medium
   footnotes: []
-  id: ref_df03c9e9
+  id: ref_aaee1505
   issue_status: ok
   name: CND_REQ_GROUP
   parser_reason: Detected as condition reference from row path leaf token.
@@ -481,7 +481,7 @@ children:
   comparator_value: '1'
   confidence: medium
   footnotes: []
-  id: ref_04f179d5
+  id: ref_7830958b
   issue_status: ok
   name: CND_SAFE_GROUP
   parser_reason: Detected as condition reference from row path leaf token.
@@ -502,7 +502,7 @@ children:
     comparator_value: '1'
     confidence: medium
     footnotes: []
-    id: ref_f0ed68a6
+    id: ref_6f400942
     issue_status: ok
     name: CND_NORMAL_ROUTE
     parser_reason: Detected as condition reference from row path leaf token.
@@ -523,7 +523,7 @@ children:
       comparator_value: '1'
       confidence: medium
       footnotes: []
-      id: ref_13cd77ad
+      id: ref_30093750
       issue_status: ok
       name: CND_BACKUP_ROUTE
       parser_reason: Detected as condition reference from row path leaf token.
@@ -532,7 +532,7 @@ children:
       source: *id001
       type: condition
     confidence: high
-    id: op_a035ec5b
+    id: op_2b44d71e
     issue_status: ok
     parser_reason: Detected `AND` gate at column depth 1 (nesting level 1).
     raw_text: AND
@@ -551,7 +551,7 @@ children:
     comparator_value: '2'
     confidence: medium
     footnotes: []
-    id: ref_18cfa807
+    id: ref_573ccf9a
     issue_status: ok
     name: CND_BACKUP_TIMER_OK
     parser_reason: Detected as condition reference from row path leaf token.
@@ -572,7 +572,7 @@ children:
       comparator_value: 'OFF'
       confidence: medium
       footnotes: []
-      id: ref_196fa6c1
+      id: ref_6e3412c2
       issue_status: ok
       name: POWER
       parser_reason: Detected as condition reference from row path leaf token.
@@ -581,7 +581,7 @@ children:
       source: *id001
       type: condition
     confidence: high
-    id: op_c17e6b36
+    id: op_0fc3cd0d
     issue_status: ok
     parser_reason: Detected `AND` gate at column depth 2 (nesting level 2).
     raw_text: AND
@@ -600,7 +600,7 @@ children:
     comparator_value: '2'
     confidence: medium
     footnotes: []
-    id: ref_d66c2571
+    id: ref_c25165c7
     issue_status: ok
     name: CND_OUTPUT_READY
     parser_reason: Detected as condition reference from row path leaf token.
@@ -609,7 +609,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_9984d74e
+  id: or_e283e148
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -617,7 +617,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_6a09f9b7
+id: and_f0e2ef12
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined
@@ -656,7 +656,7 @@ children:
   confidence: medium
   footnotes:
   - '1'
-  id: ref_4b104c6d
+  id: ref_2c5a456e
   issue_status: ok
   name: REQ_MAIN_OK
   parser_reason: Detected as condition reference from row path leaf token.
@@ -677,7 +677,7 @@ children:
   confidence: medium
   footnotes:
   - '4'
-  id: ref_6590b775
+  id: ref_a102dd47
   issue_status: ok
   name: REQ_STABLE
   parser_reason: Detected as condition reference from row path leaf token.
@@ -699,7 +699,7 @@ children:
     confidence: medium
     footnotes:
     - '2'
-    id: ref_aa4b028a
+    id: ref_a51b5ca8
     issue_status: ok
     name: REQ_SRC_A_VALID
     parser_reason: Detected as condition reference from row path leaf token.
@@ -720,7 +720,7 @@ children:
     confidence: medium
     footnotes:
     - '3'
-    id: ref_2679e743
+    id: ref_df50a6f9
     issue_status: ok
     name: REQ_SRC_B_VALID
     parser_reason: Detected as condition reference from row path leaf token.
@@ -729,7 +729,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_cc358963
+  id: or_d8552ee3
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -737,7 +737,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_18d91826
+id: and_38a55ddf
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined
@@ -777,7 +777,7 @@ children:
   confidence: medium
   footnotes:
   - '1'
-  id: ref_63aefe8b
+  id: ref_00bd5ccd
   issue_status: ok
   name: VEHICLE_STOPPED
   parser_reason: Detected as condition reference from row path leaf token.
@@ -798,7 +798,7 @@ children:
   confidence: medium
   footnotes:
   - '2'
-  id: ref_525b38ed
+  id: ref_53906bbf
   issue_status: ok
   name: DRIVER_SAFE
   parser_reason: Detected as condition reference from row path leaf token.
@@ -820,7 +820,7 @@ children:
     confidence: medium
     footnotes:
     - '5'
-    id: ref_82cedba0
+    id: ref_36faad91
     issue_status: ok
     name: SAFETY_LOCKED
     parser_reason: Detected as NOT condition because token starts with NOT.
@@ -829,7 +829,7 @@ children:
     source: *id001
     type: condition
   confidence: medium
-  id: not_5aa1fc2d
+  id: not_81e31aee
   issue_status: ok
   parser_reason: Detected as NOT gate because row text starts with NOT.
   raw_text: NOT SAFETY_LOCKED (*5)
@@ -850,7 +850,7 @@ children:
     confidence: medium
     footnotes:
     - '3'
-    id: ref_6e6fbf82
+    id: ref_592fed35
     issue_status: ok
     name: PROCESS_IDLE
     parser_reason: Detected as condition reference from row path leaf token.
@@ -871,7 +871,7 @@ children:
     confidence: medium
     footnotes:
     - '4'
-    id: ref_de313db7
+    id: ref_db9bb636
     issue_status: ok
     name: PROCESS_PREPARED
     parser_reason: Detected as condition reference from row path leaf token.
@@ -880,7 +880,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_b7c8a1bc
+  id: or_3df34742
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -888,7 +888,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_c8b630cb
+id: and_ed25f8fb
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined
@@ -927,7 +927,7 @@ children:
     comparator_value: '1'
     confidence: medium
     footnotes: []
-    id: ref_c3589585
+    id: ref_1b69b228
     issue_status: ok
     name: OK_SHUTOFF
     parser_reason: Detected as condition reference from row path leaf token.
@@ -949,7 +949,7 @@ children:
       confidence: medium
       footnotes:
       - '1'
-      id: ref_be1d17be
+      id: ref_17c770c8
       issue_status: ok
       name: NOK_SHUTOFF
       parser_reason: Detected as NOT condition because token starts with NOT.
@@ -958,7 +958,7 @@ children:
       source: *id001
       type: condition
     confidence: medium
-    id: not_e2453789
+    id: not_44d128be
     issue_status: ok
     parser_reason: Detected as NOT gate because row text starts with NOT.
     raw_text: NOT NOK_SHUTOFF = (*1)
@@ -966,7 +966,7 @@ children:
     source: *id001
     type: NOT
   confidence: high
-  id: and_8fe5ddc3
+  id: and_3faf1d5c
   issue_status: ok
   parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under AND.
   review_status: parsed
@@ -985,7 +985,7 @@ children:
     comparator_value: '150'
     confidence: medium
     footnotes: []
-    id: ref_cc235960
+    id: ref_16fa05a5
     issue_status: ok
     name: FORCE_SHUTOFF
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1005,7 +1005,7 @@ children:
     comparator_value: '0'
     confidence: medium
     footnotes: []
-    id: ref_a5101e50
+    id: ref_836e8070
     issue_status: ok
     name: CND_FORCE_ALLOWED
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1014,14 +1014,14 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: and_05e146bc
+  id: and_b5cb4b3b
   issue_status: ok
   parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under AND.
   review_status: parsed
   source: *id001
   type: AND
 confidence: high
-id: or_9795a242
+id: or_63031b5b
 issue_status: ok
 parse_status: ok
 parser_reason: Multiple OR/AND row branches detected; combined as OR of AND groups.
@@ -1058,7 +1058,7 @@ children:
   comparator_value: '1'
   confidence: medium
   footnotes: []
-  id: ref_0b1431ef
+  id: ref_b692b4f5
   issue_status: ok
   name: CND_REQ_GROUP
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1078,7 +1078,7 @@ children:
   comparator_value: '1'
   confidence: medium
   footnotes: []
-  id: ref_e98a3c61
+  id: ref_00e4f522
   issue_status: ok
   name: CND_SAFE_GROUP
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1099,7 +1099,7 @@ children:
     comparator_value: '1'
     confidence: medium
     footnotes: []
-    id: ref_d94b2e4d
+    id: ref_e354e98c
     issue_status: ok
     name: CND_NORMAL_ROUTE
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1120,7 +1120,7 @@ children:
       comparator_value: '1'
       confidence: medium
       footnotes: []
-      id: ref_137b1e40
+      id: ref_f81a17fb
       issue_status: ok
       name: CND_BACKUP_ROUTE
       parser_reason: Detected as condition reference from row path leaf token.
@@ -1129,7 +1129,7 @@ children:
       source: *id001
       type: condition
     confidence: high
-    id: op_52965c5b
+    id: op_1608a685
     issue_status: ok
     parser_reason: Detected `AND` gate at column depth 1 (nesting level 1).
     raw_text: AND
@@ -1148,7 +1148,7 @@ children:
     comparator_value: '2'
     confidence: medium
     footnotes: []
-    id: ref_cea2b651
+    id: ref_52964cf3
     issue_status: ok
     name: CND_BACKUP_TIMER_OK
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1169,7 +1169,7 @@ children:
       comparator_value: 'OFF'
       confidence: medium
       footnotes: []
-      id: ref_102d2ec8
+      id: ref_984a1cf2
       issue_status: ok
       name: POWER
       parser_reason: Detected as condition reference from row path leaf token.
@@ -1178,7 +1178,7 @@ children:
       source: *id001
       type: condition
     confidence: high
-    id: op_624864bc
+    id: op_21351268
     issue_status: ok
     parser_reason: Detected `AND` gate at column depth 2 (nesting level 2).
     raw_text: AND
@@ -1197,7 +1197,7 @@ children:
     comparator_value: '2'
     confidence: medium
     footnotes: []
-    id: ref_8245a972
+    id: ref_e4e7c6d8
     issue_status: ok
     name: CND_OUTPUT_READY
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1206,7 +1206,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_d8cb5140
+  id: or_85a49f29
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -1214,7 +1214,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_76f35c60
+id: and_47ec2d1c
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined
@@ -1253,7 +1253,7 @@ children:
   confidence: medium
   footnotes:
   - '1'
-  id: ref_5bea73c2
+  id: ref_cd1ab74f
   issue_status: ok
   name: REQ_MAIN_OK
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1274,7 +1274,7 @@ children:
   confidence: medium
   footnotes:
   - '4'
-  id: ref_595c6851
+  id: ref_3e5d7f07
   issue_status: ok
   name: REQ_STABLE
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1296,7 +1296,7 @@ children:
     confidence: medium
     footnotes:
     - '2'
-    id: ref_cdd7c824
+    id: ref_630cb450
     issue_status: ok
     name: REQ_SRC_A_VALID
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1317,7 +1317,7 @@ children:
     confidence: medium
     footnotes:
     - '3'
-    id: ref_8e69051c
+    id: ref_75b453d3
     issue_status: ok
     name: REQ_SRC_B_VALID
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1326,7 +1326,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_04c046ad
+  id: or_9ce52774
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -1334,7 +1334,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_dcf7928a
+id: and_829a8b7e
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined
@@ -1374,7 +1374,7 @@ children:
   confidence: medium
   footnotes:
   - '1'
-  id: ref_0d727e04
+  id: ref_ab3941bc
   issue_status: ok
   name: VEHICLE_STOPPED
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1395,7 +1395,7 @@ children:
   confidence: medium
   footnotes:
   - '2'
-  id: ref_0f2ff2f7
+  id: ref_a276f7a1
   issue_status: ok
   name: DRIVER_SAFE
   parser_reason: Detected as condition reference from row path leaf token.
@@ -1417,7 +1417,7 @@ children:
     confidence: medium
     footnotes:
     - '5'
-    id: ref_0c249b98
+    id: ref_d3508609
     issue_status: ok
     name: SAFETY_LOCKED
     parser_reason: Detected as NOT condition because token starts with NOT.
@@ -1426,7 +1426,7 @@ children:
     source: *id001
     type: condition
   confidence: medium
-  id: not_9368d3c9
+  id: not_fc92940b
   issue_status: ok
   parser_reason: Detected as NOT gate because row text starts with NOT.
   raw_text: NOT SAFETY_LOCKED (*5)
@@ -1447,7 +1447,7 @@ children:
     confidence: medium
     footnotes:
     - '3'
-    id: ref_826cef47
+    id: ref_9e7730f9
     issue_status: ok
     name: PROCESS_IDLE
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1468,7 +1468,7 @@ children:
     confidence: medium
     footnotes:
     - '4'
-    id: ref_7ebaa6f9
+    id: ref_dc91f90a
     issue_status: ok
     name: PROCESS_PREPARED
     parser_reason: Detected as condition reference from row path leaf token.
@@ -1477,7 +1477,7 @@ children:
     source: *id001
     type: condition
   confidence: high
-  id: or_ddc6193f
+  id: or_5f98ea25
   issue_status: ok
   parser_reason: Multiple table rows share OR at the same nesting depth; merged into
     one OR group under AND.
@@ -1485,7 +1485,7 @@ children:
   source: *id001
   type: OR
 confidence: high
-id: and_16ad5ec4
+id: and_b798001a
 issue_status: ok
 parse_status: ok
 parser_reason: All rows begin with AND; each row parsed by column depth and combined

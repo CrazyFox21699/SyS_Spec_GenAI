@@ -28,10 +28,22 @@ security:
 export:
   strict: false
 assist:
-  default_provider: ollama
+  default_provider: m365
+  require_m365_login: true
+  allow_ollama_fallback: false
+  validation_retries: 1
+  knowledge_batch_size: 15
+  orchestrator: deterministic
   ollama:
     base_url: http://localhost:11434
     model: qwen2.5:latest
+    role: fallback_inference
+  m365:
+    enabled: true
+    # Azure app registration (Mobile/desktop, public client). IT must grant Graph delegated permissions.
+    client_id: ""
+    tenant_id: common
+    timezone: Asia/Tokyo
   copilot:
     enabled: false
     require_preview: true

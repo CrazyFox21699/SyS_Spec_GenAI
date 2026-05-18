@@ -36,13 +36,14 @@
 }
 .btn.secondary,
 .alex-btn--secondary {
-  background: var(--surface-raised);
+  background: var(--surface-muted);
   color: var(--text-primary);
   border-color: var(--border-strong);
 }
 .btn.secondary:hover:not(:disabled),
 .alex-btn--secondary:hover:not(:disabled) {
-  background: var(--surface-muted);
+  background: var(--surface-hover);
+  border-color: var(--text-muted);
 }
 .btn.danger,
 .alex-btn--danger {
@@ -81,7 +82,7 @@
 }
 .gap-card {
   background: var(--status-warn-bg);
-  border-color: #fde68a;
+  border-color: var(--status-warn);
 }
 
 /* Page chrome */
@@ -111,6 +112,15 @@
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
+.export-lang-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+.export-lang-actions label {
+  margin: 0;
+}
 .toolbar-row__start,
 .toolbar-row__end {
   display: flex;
@@ -126,10 +136,13 @@
   min-height: 22px;
   padding: 0 var(--space-2);
   border-radius: 999px;
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
   font-weight: 600;
   line-height: 1;
   vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .tag.high { background: var(--status-ok-bg); color: var(--status-ok); }
 .tag.medium { background: var(--status-warn-bg); color: var(--status-warn); }
@@ -188,7 +201,7 @@ table.data-grid td,
   word-break: break-word;
 }
 table.data-grid tr:hover td {
-  background: #f8fafc;
+  background: var(--surface-hover);
 }
 .sources-grid .col-chk {
   width: 48px;
@@ -277,13 +290,14 @@ tr.source-row.selected td {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--surface-raised);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   cursor: pointer;
 }
 .logic-pick.active {
   border-color: var(--accent);
   background: var(--accent-bg);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
 }
 
 /* Forms */
@@ -296,13 +310,21 @@ textarea {
   font-size: var(--text-sm);
 }
 select,
-input[type="text"] {
+input[type="text"],
+.clarify-box,
+textarea {
   min-height: 36px;
-  padding: 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  background: var(--surface-input);
   color: var(--text-primary);
+}
+textarea,
+.clarify-box {
+  min-height: 100px;
+  resize: vertical;
+  line-height: 1.5;
 }
 select:focus-visible,
 input:focus-visible,
@@ -314,7 +336,7 @@ textarea:focus-visible {
 .tree-view,
 .expr-block,
 .logic-tree-pre {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   line-height: 1.55;
 }
@@ -338,8 +360,136 @@ textarea:focus-visible {
   transition: width 0.25s ease;
 }
 
+.m365-setup-panel label {
+  display: block;
+  margin-top: var(--space-2);
+}
+.m365-user-code {
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.4rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}
+.m365-login-panel a {
+  font-weight: 600;
+}
+.detail.warn {
+  color: var(--status-warn);
+  border-left: 3px solid var(--status-warn);
+  padding-left: var(--space-2);
+}
+.m365-setup-steps {
+  margin: 0.25rem 0 0.5rem 1.1rem;
+}
+
+.login-hub-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+@media (max-width: 900px) {
+  .login-hub-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.login-hub h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.login-tile {
+  border: var(--ui-border-width) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--surface-muted);
+}
+.login-tile h4 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+}
+.login-compact-label input {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-1);
+}
+.login-tile .m365-login-panel {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: var(--ui-border-width) dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
 @media (max-width: 1100px) {
   .alex-workspace-3 {
     grid-template-columns: 1fr;
   }
+}
+
+/* Metric stat cards (analysis results, dashboards) */
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  min-height: 72px;
+}
+.metric-card__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.metric-card__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.metric-card--ok .metric-card__value { color: var(--status-ok); }
+.metric-card--error .metric-card__value { color: var(--status-error); }
+.metric-card--warn .metric-card__value { color: var(--status-warn); }
+.metric-card--info .metric-card__value { color: var(--status-info); }
+.metric-card--cyan .metric-card__value { color: var(--status-cyan); }
+
+/* Analysis results section */
+.analysis-results {
+  margin-top: var(--space-4);
+}
+.analysis-results .alex-hero {
+  margin-bottom: var(--space-4);
+}
+
+/* Login hub icon headers */
+.login-tile h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.login-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
 }

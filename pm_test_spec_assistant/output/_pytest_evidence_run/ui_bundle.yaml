@@ -9,7 +9,7 @@ evidence_registry:
   total: 215
   items:
   - &id002
-    id: EVD_ec04251ca8
+    id: EVD_9481e5f398
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -29,7 +29,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id003
-    id: EVD_f47194cb8d
+    id: EVD_340756e0c1
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -49,7 +49,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id004
-    id: EVD_c75a5d7613
+    id: EVD_ab44437b3e
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -69,7 +69,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id005
-    id: EVD_89ea67673e
+    id: EVD_571bbc01d8
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -93,7 +93,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id006
-    id: EVD_1df4d65c3b
+    id: EVD_34941a2702
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -113,7 +113,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id007
-    id: EVD_cb0fff9c21
+    id: EVD_68ea54ce1a
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -133,7 +133,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id008
-    id: EVD_bd6b168cea
+    id: EVD_87558223f3
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -153,7 +153,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id009
-    id: EVD_23c368a050
+    id: EVD_1c702a1af1
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -173,7 +173,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id010
-    id: EVD_704917774d
+    id: EVD_f31da32c03
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -193,7 +193,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id011
-    id: EVD_6013ac9b51
+    id: EVD_62b05b6476
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -213,7 +213,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id012
-    id: EVD_7c67ba4ba1
+    id: EVD_7cd5acbafe
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -233,7 +233,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id013
-    id: EVD_73a756f033
+    id: EVD_c874972eac
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -255,7 +255,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id014
-    id: EVD_b043d4bcae
+    id: EVD_5d35ea6421
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -279,7 +279,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id015
-    id: EVD_722b75cb2c
+    id: EVD_2faf380ead
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -299,7 +299,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id016
-    id: EVD_769fee4327
+    id: EVD_8a79e9b4c3
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -323,7 +323,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id017
-    id: EVD_c1f46f2255
+    id: EVD_ea7b133517
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -343,7 +343,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id018
-    id: EVD_371363da36
+    id: EVD_445a39bd9d
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -363,7 +363,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id019
-    id: EVD_49d5a56918
+    id: EVD_cdbc603dc3
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -383,7 +383,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id020
-    id: EVD_6a48b776ec
+    id: EVD_34471777e8
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -407,7 +407,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id021
-    id: EVD_039d5ca90d
+    id: EVD_25ad4a5ca0
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -431,7 +431,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id022
-    id: EVD_1c3833bf90
+    id: EVD_06c10988c5
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -451,7 +451,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id023
-    id: EVD_a3ae16aa56
+    id: EVD_4f1afd8ba1
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -471,7 +471,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id024
-    id: EVD_98187f2005
+    id: EVD_e8656c5d5a
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -491,7 +491,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id025
-    id: EVD_18bfb9aa70
+    id: EVD_65137ea972
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -511,7 +511,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id026
-    id: EVD_71938e329a
+    id: EVD_85ef4def31
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -533,7 +533,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id027
-    id: EVD_77710d7100
+    id: EVD_1ff8931fe3
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -553,7 +553,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id028
-    id: EVD_684c60adf4
+    id: EVD_137be04986
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -575,7 +575,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id029
-    id: EVD_75cf94cfbe
+    id: EVD_fc51dc9261
     kind: table_merged_region
     source:
       file: GPT_GenLogic.xlsx
@@ -596,7 +596,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id030
-    id: EVD_ac02b58432
+    id: EVD_14e76e5b9d
     kind: table_merged_region
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -616,7 +616,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id031
-    id: EVD_4d89c34641
+    id: EVD_ae24eb0718
     kind: table_merged_region
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -636,7 +636,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id032
-    id: EVD_d707f4732d
+    id: EVD_cf2819ad83
     kind: table_merged_region
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -656,7 +656,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id033
-    id: EVD_4ee0b45385
+    id: EVD_609aa3a148
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -672,7 +672,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id034
-    id: EVD_5e4d61cbbc
+    id: EVD_113ad0ddb5
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -688,7 +688,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id035
-    id: EVD_85a0c9a98e
+    id: EVD_8c8594ab13
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -704,7 +704,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id036
-    id: EVD_a5b271b3c4
+    id: EVD_9b3d78e354
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -720,7 +720,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id037
-    id: EVD_51d5710f38
+    id: EVD_a8d252c025
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -736,7 +736,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id038
-    id: EVD_79c241372e
+    id: EVD_b85a2e1860
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -752,7 +752,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id039
-    id: EVD_57ba1a4a85
+    id: EVD_65c395b044
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -768,7 +768,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id040
-    id: EVD_e5a58e9cfb
+    id: EVD_093c749305
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -784,7 +784,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id041
-    id: EVD_888b585ab7
+    id: EVD_90108e7878
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -800,7 +800,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id042
-    id: EVD_ff92fac7f8
+    id: EVD_3440aa07fb
     kind: footnote
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -816,7 +816,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id043
-    id: EVD_af7b4dedf9
+    id: EVD_51f8c8c9fc
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -832,7 +832,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id044
-    id: EVD_51b29e37ae
+    id: EVD_a3072723a3
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -848,7 +848,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id045
-    id: EVD_1a643ae57b
+    id: EVD_a82e2c92bb
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -864,7 +864,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id046
-    id: EVD_d91a4b757f
+    id: EVD_37e2062fb1
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -880,7 +880,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id047
-    id: EVD_91a8f63eb4
+    id: EVD_169d4320d9
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -896,7 +896,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id048
-    id: EVD_10303341aa
+    id: EVD_f59ff2f290
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -912,7 +912,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id049
-    id: EVD_90d9c1be59
+    id: EVD_578e568cc6
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -928,7 +928,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id050
-    id: EVD_3c27daf319
+    id: EVD_680255f138
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -944,7 +944,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id051
-    id: EVD_0fa0bf99ed
+    id: EVD_11cc2ce210
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -960,7 +960,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id052
-    id: EVD_bb35a3e763
+    id: EVD_21b8b91e42
     kind: footnote
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -976,7 +976,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id053
-    id: EVD_3dd2b8850a
+    id: EVD_90d0e9295b
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -992,7 +992,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id054
-    id: EVD_10f8ba7b36
+    id: EVD_032299b663
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1008,7 +1008,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id055
-    id: EVD_e177874c87
+    id: EVD_5b6be9a05d
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1024,7 +1024,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id056
-    id: EVD_768dbcebbe
+    id: EVD_1dc63a2b0a
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1040,7 +1040,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id057
-    id: EVD_516a3d8b71
+    id: EVD_5bbd310b45
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1056,7 +1056,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id058
-    id: EVD_e4cdba6270
+    id: EVD_2c4dc1b9e8
     kind: alias
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1072,7 +1072,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id059
-    id: EVD_4a9b6ca3ec
+    id: EVD_241281bf55
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1088,7 +1088,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id060
-    id: EVD_58ddfc2c60
+    id: EVD_2b606e1caf
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1104,7 +1104,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id061
-    id: EVD_26a62c1d62
+    id: EVD_280caa92de
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1120,7 +1120,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id062
-    id: EVD_841b89a7fa
+    id: EVD_b94fb9a672
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1136,7 +1136,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id063
-    id: EVD_98cb95ac07
+    id: EVD_daf1f39569
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1152,7 +1152,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id064
-    id: EVD_bd8d7893e9
+    id: EVD_bb1f1f5d42
     kind: alias
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1168,7 +1168,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id065
-    id: EVD_05e2823447
+    id: EVD_cca487dd41
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1189,7 +1189,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_XL_Test_Pow_SEC_03_01
   - &id066
-    id: EVD_bcf85bc9bd
+    id: EVD_4bd8fdf69e
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1210,7 +1210,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_XL_Test_Pow_SEC_03_02
   - &id067
-    id: EVD_70ebcc8b99
+    id: EVD_4d16d109e7
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -1233,7 +1233,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_XL_02_State_01_01
   - &id068
-    id: EVD_d8974dbed9
+    id: EVD_1c40b49bf8
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -1252,7 +1252,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_XL_02_State_01_02
   - &id069
-    id: EVD_1296a46450
+    id: EVD_722d6352bc
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -1271,7 +1271,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_XL_02_State_01_03
   - &id070
-    id: EVD_e209bac376
+    id: EVD_bd864e94cb
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -1297,7 +1297,7 @@ evidence_registry:
     linked_logic_ids:
     - WD2_001
   - &id071
-    id: EVD_cf65a46a08
+    id: EVD_ad2b1a06e9
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -1322,7 +1322,7 @@ evidence_registry:
     linked_logic_ids:
     - WD4_001
   - &id072
-    id: EVD_3322106a09
+    id: EVD_af86435e1b
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -1345,7 +1345,7 @@ evidence_registry:
     linked_logic_ids:
     - WD6_001
   - &id073
-    id: EVD_2ce90ab042
+    id: EVD_91c2a48bc9
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -1361,7 +1361,7 @@ evidence_registry:
     linked_logic_ids:
     - FORMULA_001
   - &id074
-    id: EVD_a24e229655
+    id: EVD_6321c96203
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -1377,7 +1377,7 @@ evidence_registry:
     linked_logic_ids:
     - FORMULA_002
   - &id075
-    id: EVD_792bae69aa
+    id: EVD_766693bd54
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1396,7 +1396,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T1_01
   - &id076
-    id: EVD_5473ed3d48
+    id: EVD_7b6502c48f
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1416,7 +1416,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T2_01
   - &id077
-    id: EVD_0e9bfce4d2
+    id: EVD_3e9380538e
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1435,7 +1435,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T3_01
   - &id078
-    id: EVD_9f407cb95a
+    id: EVD_4918063656
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -1454,7 +1454,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T4_01
   - &id079
-    id: EVD_7117f3d356
+    id: EVD_54ac87e87b
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1473,7 +1473,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T1_01
   - &id080
-    id: EVD_1234824d7d
+    id: EVD_3cb372ec6c
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1493,7 +1493,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T2_01
   - &id081
-    id: EVD_4e9d3f9d51
+    id: EVD_0667fb9ce4
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1512,7 +1512,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T3_01
   - &id082
-    id: EVD_c23f566c24
+    id: EVD_6ea092cbef
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -1531,7 +1531,7 @@ evidence_registry:
     linked_logic_ids:
     - TC2_T4_01
   - &id083
-    id: EVD_381c45f40d
+    id: EVD_98349528d4
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1550,7 +1550,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id084
-    id: EVD_759970a22c
+    id: EVD_c0c959ecd8
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1569,7 +1569,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id085
-    id: EVD_708193145b
+    id: EVD_f9fa3a5d69
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1588,7 +1588,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id086
-    id: EVD_351eff38dc
+    id: EVD_497b2df55f
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1607,7 +1607,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id087
-    id: EVD_302f00797c
+    id: EVD_ea7d2350a4
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1626,7 +1626,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id088
-    id: EVD_6142591e51
+    id: EVD_692261278b
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1645,7 +1645,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id089
-    id: EVD_8a35e9f830
+    id: EVD_1dce4d13d6
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1664,7 +1664,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id090
-    id: EVD_c992e5643e
+    id: EVD_56f721cf19
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1683,7 +1683,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id091
-    id: EVD_0e46e48e8f
+    id: EVD_4c19dc7a86
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1702,7 +1702,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id092
-    id: EVD_8291bf3c3d
+    id: EVD_ea18bbb6e3
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1721,7 +1721,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id093
-    id: EVD_a8f8f53cc9
+    id: EVD_6a5ea2fbc0
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1740,7 +1740,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id094
-    id: EVD_a9ab922c94
+    id: EVD_3261d7640c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1759,7 +1759,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id095
-    id: EVD_3757d92618
+    id: EVD_b39acd65ea
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1778,7 +1778,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id096
-    id: EVD_8fc4a23cdd
+    id: EVD_8a41ddf904
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1797,7 +1797,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id097
-    id: EVD_f635d4ccfc
+    id: EVD_04a0e41ab5
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1816,7 +1816,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id098
-    id: EVD_9e013a8e81
+    id: EVD_681165f9e8
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1835,7 +1835,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id099
-    id: EVD_52f766c0cd
+    id: EVD_79e88bf8c3
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1854,7 +1854,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id100
-    id: EVD_f7cc20692c
+    id: EVD_322388b802
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1873,7 +1873,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id101
-    id: EVD_8707a989b6
+    id: EVD_1ff4407510
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1892,7 +1892,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id102
-    id: EVD_b2419cf2b6
+    id: EVD_fb86130b94
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1911,7 +1911,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id103
-    id: EVD_0142a02a73
+    id: EVD_c57477a641
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1930,7 +1930,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id104
-    id: EVD_34314cb9c2
+    id: EVD_b0ae3ed12c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1949,7 +1949,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id105
-    id: EVD_533659de9f
+    id: EVD_d4bbc0489b
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1968,7 +1968,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id106
-    id: EVD_56b3dbbfb2
+    id: EVD_9156735c84
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -1987,7 +1987,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id107
-    id: EVD_b0cb40e263
+    id: EVD_0a969b16d7
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2006,7 +2006,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id108
-    id: EVD_f09190c359
+    id: EVD_3cc4c1e83d
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2025,7 +2025,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id109
-    id: EVD_880efa7a0e
+    id: EVD_5da243f0db
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2044,7 +2044,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id110
-    id: EVD_769be69e88
+    id: EVD_a91023ff15
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2063,7 +2063,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id111
-    id: EVD_b85bcdaa06
+    id: EVD_57b3a5b749
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2082,7 +2082,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id112
-    id: EVD_d513610af4
+    id: EVD_68a2437c39
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2101,7 +2101,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id113
-    id: EVD_fd62dc4be7
+    id: EVD_5f078a2be7
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2120,7 +2120,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id114
-    id: EVD_d79c63eb6e
+    id: EVD_03762fc701
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2139,7 +2139,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id115
-    id: EVD_6c24870201
+    id: EVD_685dae7866
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2158,7 +2158,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id116
-    id: EVD_83934aca25
+    id: EVD_c0105b8274
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2173,7 +2173,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id117
-    id: EVD_0ff859a6f4
+    id: EVD_6666266512
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2188,7 +2188,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id118
-    id: EVD_1a4f0ed777
+    id: EVD_fe0d54ee60
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2203,7 +2203,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id119
-    id: EVD_20d387dec7
+    id: EVD_08cbbc654a
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2218,7 +2218,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id120
-    id: EVD_4bdaad50d2
+    id: EVD_a8e0b3a94c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2233,7 +2233,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id121
-    id: EVD_c0f4847675
+    id: EVD_81b7e08eec
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2248,7 +2248,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id122
-    id: EVD_b1bb75f5fb
+    id: EVD_517b49254d
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2263,7 +2263,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id123
-    id: EVD_6158700ae6
+    id: EVD_fc0e1a5eb3
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2278,7 +2278,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id124
-    id: EVD_1a37b17c2b
+    id: EVD_0b610cbef3
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2293,7 +2293,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id125
-    id: EVD_6fafb9ac1a
+    id: EVD_4f2251f4c6
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2308,7 +2308,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id126
-    id: EVD_6ba0f449ce
+    id: EVD_ac2ee48848
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2323,7 +2323,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id127
-    id: EVD_1f16f1c1e5
+    id: EVD_82fafdb8c2
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2338,7 +2338,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id128
-    id: EVD_24094dc6fe
+    id: EVD_6e2c52a707
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2353,7 +2353,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id129
-    id: EVD_a80f8c4bde
+    id: EVD_0343bea55c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2368,7 +2368,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id130
-    id: EVD_2c25cfb7f4
+    id: EVD_c7ebf2524f
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2383,7 +2383,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id131
-    id: EVD_4b2f77dcde
+    id: EVD_a65cd80a89
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2398,7 +2398,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id132
-    id: EVD_a6177da98c
+    id: EVD_cc70d8822e
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2413,7 +2413,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id133
-    id: EVD_e0edf2bec1
+    id: EVD_4f1bb350cd
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2428,7 +2428,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id134
-    id: EVD_b794ddd6cd
+    id: EVD_9452c47d04
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2443,7 +2443,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id135
-    id: EVD_3c182c17bc
+    id: EVD_fea209bd6c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2458,7 +2458,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id136
-    id: EVD_48686397e7
+    id: EVD_ec1033bb88
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2473,7 +2473,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id137
-    id: EVD_41a0fe4e7e
+    id: EVD_339d71233b
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2488,7 +2488,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id138
-    id: EVD_6364674f05
+    id: EVD_de12de5294
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2503,7 +2503,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id139
-    id: EVD_f6f94fcf46
+    id: EVD_d4aa9d1062
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2518,7 +2518,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id140
-    id: EVD_3511ed1124
+    id: EVD_50ae1cd809
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2533,7 +2533,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id141
-    id: EVD_508415e452
+    id: EVD_c5e7979add
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2548,7 +2548,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id142
-    id: EVD_4d00a98ae6
+    id: EVD_6c53f8a25b
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2563,7 +2563,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id143
-    id: EVD_3e206e60f8
+    id: EVD_ce89959247
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2578,7 +2578,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id144
-    id: EVD_8bdaa35817
+    id: EVD_93a312d79e
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2593,7 +2593,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id145
-    id: EVD_6e61860997
+    id: EVD_870c28043d
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2608,7 +2608,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id146
-    id: EVD_1929ea224c
+    id: EVD_1bf26f5e69
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2623,7 +2623,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id147
-    id: EVD_cab286e1ef
+    id: EVD_5d9aef3646
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2638,7 +2638,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id148
-    id: EVD_50cbac6e51
+    id: EVD_0016b0a504
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2653,7 +2653,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id149
-    id: EVD_37d71c3a8a
+    id: EVD_71f7f69b6f
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2668,7 +2668,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id150
-    id: EVD_49debee3dc
+    id: EVD_d62166233c
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2683,7 +2683,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id151
-    id: EVD_38ae3aeb0e
+    id: EVD_7ba28a01d0
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2698,7 +2698,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id152
-    id: EVD_10626363cd
+    id: EVD_20fa2a3fa6
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2713,7 +2713,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id153
-    id: EVD_8e01c49ee3
+    id: EVD_66f3a34577
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2728,7 +2728,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id154
-    id: EVD_681960df6d
+    id: EVD_baa94144fd
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2743,7 +2743,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id155
-    id: EVD_1396b5d756
+    id: EVD_51430342f2
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2758,7 +2758,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id156
-    id: EVD_1984e6ba18
+    id: EVD_3ac512b956
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2773,7 +2773,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id157
-    id: EVD_cae12166f1
+    id: EVD_ca10006ea7
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2788,7 +2788,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id158
-    id: EVD_8bc832e629
+    id: EVD_b66ff2b583
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2803,7 +2803,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id159
-    id: EVD_e30b6ff550
+    id: EVD_851da216a7
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2818,7 +2818,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id160
-    id: EVD_dd250fd2a7
+    id: EVD_4f9e9b17f7
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2833,7 +2833,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id161
-    id: EVD_98356ab983
+    id: EVD_5a785d52ed
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2848,7 +2848,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id162
-    id: EVD_51f0898cdb
+    id: EVD_039be9485a
     kind: table_cell
     source:
       file: GPT_GenLogic.xlsx
@@ -2863,7 +2863,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id163
-    id: EVD_3919944fa0
+    id: EVD_269fd1f935
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -2879,7 +2879,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id164
-    id: EVD_e344114896
+    id: EVD_ce1be0937c
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -2895,7 +2895,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id165
-    id: EVD_91d5c2ac29
+    id: EVD_9b5b14fe23
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -2911,7 +2911,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id166
-    id: EVD_45704ce62c
+    id: EVD_408f7bb783
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -2927,7 +2927,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id167
-    id: EVD_8753373231
+    id: EVD_4da9291ebc
     kind: table_cell
     source:
       file: PM_Behavior_Logic_Sample.xlsx
@@ -2943,7 +2943,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id168
-    id: EVD_a9b47b118b
+    id: EVD_1d4af435c7
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -2959,7 +2959,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id169
-    id: EVD_91ab62546c
+    id: EVD_e51a62063e
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -2975,7 +2975,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id170
-    id: EVD_b55d630db5
+    id: EVD_3f6a06c8c8
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -2991,7 +2991,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id171
-    id: EVD_ab2ac87dff
+    id: EVD_8f1f4ccf11
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -3007,7 +3007,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id172
-    id: EVD_d72bbe1376
+    id: EVD_a27139adf4
     kind: table_cell
     source:
       file: Sample_Power_Control_Specification.docx
@@ -3023,7 +3023,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id173
-    id: EVD_211ff42e53
+    id: EVD_45f9894fb8
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3039,7 +3039,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id174
-    id: EVD_b9fb0c1a37
+    id: EVD_98874c7235
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3055,7 +3055,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id175
-    id: EVD_b65721ced0
+    id: EVD_ce93e67f3e
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3071,7 +3071,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id176
-    id: EVD_8940da841b
+    id: EVD_c14e355fcb
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3087,7 +3087,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id177
-    id: EVD_f3983dc9b8
+    id: EVD_cf03152a1b
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3103,7 +3103,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id178
-    id: EVD_9c32e7906e
+    id: EVD_e2de5dc324
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3119,7 +3119,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id179
-    id: EVD_29d6994b74
+    id: EVD_92e77b6eef
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3135,7 +3135,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id180
-    id: EVD_6c73cb6f3d
+    id: EVD_1f3d2bfeff
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3150,7 +3150,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id181
-    id: EVD_58eeb152c8
+    id: EVD_7f59ac9c0f
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3165,7 +3165,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id182
-    id: EVD_280ae8ceb4
+    id: EVD_bfc0454d39
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3180,7 +3180,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id183
-    id: EVD_c491a69414
+    id: EVD_12b1dc9270
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3195,7 +3195,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id184
-    id: EVD_6689fb6039
+    id: EVD_6aef0751a1
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3210,7 +3210,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id185
-    id: EVD_d1dc3925ad
+    id: EVD_975385dc19
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3225,7 +3225,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id186
-    id: EVD_d52f6b1ca9
+    id: EVD_c0ccc3c376
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3240,7 +3240,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id187
-    id: EVD_3bcdb97555
+    id: EVD_c12f706e77
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3255,7 +3255,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id188
-    id: EVD_855469a51e
+    id: EVD_cec0149193
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3270,7 +3270,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id189
-    id: EVD_f1d290b1e9
+    id: EVD_022030f155
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3285,7 +3285,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id190
-    id: EVD_7d58bfe7b0
+    id: EVD_6d9243f790
     kind: table_cell
     source:
       file: Shutoff_Condition_Spec_v2.docx
@@ -3300,7 +3300,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id191
-    id: EVD_2eaa2efeb5
+    id: EVD_9ebb9cae57
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3316,7 +3316,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id192
-    id: EVD_8d4dfedc68
+    id: EVD_28b0fe423f
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3332,7 +3332,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id193
-    id: EVD_0e71b6285d
+    id: EVD_fbe9e1a2ff
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3348,7 +3348,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id194
-    id: EVD_610b6cb370
+    id: EVD_eb688a2fd9
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3364,7 +3364,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id195
-    id: EVD_4cc6237134
+    id: EVD_8277133f6a
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3380,7 +3380,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id196
-    id: EVD_ec8e236b99
+    id: EVD_5a451c0b7f
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3396,7 +3396,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id197
-    id: EVD_667349e62f
+    id: EVD_e70cb2dfbd
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3412,7 +3412,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id198
-    id: EVD_6db860a8b1
+    id: EVD_8eeb06fac0
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3427,7 +3427,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id199
-    id: EVD_0ddfa93f17
+    id: EVD_5251db9a48
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3442,7 +3442,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id200
-    id: EVD_66e95992a8
+    id: EVD_d2d1c86f2b
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3457,7 +3457,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id201
-    id: EVD_1c7f668f23
+    id: EVD_28c6e9527a
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3472,7 +3472,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id202
-    id: EVD_cd967c64f9
+    id: EVD_c7b86947f3
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3487,7 +3487,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id203
-    id: EVD_f2ffae50cf
+    id: EVD_5f8d477f91
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3502,7 +3502,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id204
-    id: EVD_4f3197e99d
+    id: EVD_c775898fda
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3517,7 +3517,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id205
-    id: EVD_76bb1f5350
+    id: EVD_c445b84c22
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3532,7 +3532,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id206
-    id: EVD_de9c445e0e
+    id: EVD_a2e9317375
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3547,7 +3547,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id207
-    id: EVD_bffbf04c49
+    id: EVD_bea3eeb68e
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3562,7 +3562,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id208
-    id: EVD_c1418c04f4
+    id: EVD_1df0f1b929
     kind: table_cell
     source:
       file: edited_Shutoff_Condition_Spec.docx
@@ -3577,7 +3577,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id209
-    id: EVD_1ac069f0dc
+    id: EVD_28ae470759
     kind: image_ocr
     source:
       file: GPT_GenLogic.xlsx
@@ -3594,7 +3594,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id210
-    id: EVD_13041ba605
+    id: EVD_e0144a0a2d
     kind: image_ocr
     source:
       file: GPT_GenLogic.xlsx
@@ -3611,7 +3611,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id211
-    id: EVD_806cafd772
+    id: EVD_b45103e2b1
     kind: image_ocr
     source:
       file: GPT_GenLogic.xlsx
@@ -3628,7 +3628,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id212
-    id: EVD_6629e71bf1
+    id: EVD_4de597ebeb
     kind: image_ocr
     source:
       file: GPT_GenLogic.xlsx
@@ -3645,7 +3645,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id213
-    id: EVD_ed044ae25a
+    id: EVD_d2d9a2d290
     kind: image_ocr
     source:
       file: GPT_GenLogic.xlsx
@@ -3662,7 +3662,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id214
-    id: EVD_2674a2a0bb
+    id: EVD_dfa7bc5c12
     kind: image_ocr
     source:
       file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Condition_Tree_Diagram.png
@@ -3689,7 +3689,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id215
-    id: EVD_5921af50fe
+    id: EVD_a81e8fe7a3
     kind: image_ocr
     source:
       file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_State_Machine_Diagram.png
@@ -3723,7 +3723,7 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   - &id216
-    id: EVD_8a57d17f73
+    id: EVD_545886218c
     kind: image_ocr
     source:
       file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Timing_Chart.png
@@ -3761,221 +3761,221 @@ evidence_registry:
     provenance: deterministic
     linked_logic_ids: []
   by_id:
-    EVD_ec04251ca8: *id002
-    EVD_f47194cb8d: *id003
-    EVD_c75a5d7613: *id004
-    EVD_89ea67673e: *id005
-    EVD_1df4d65c3b: *id006
-    EVD_cb0fff9c21: *id007
-    EVD_bd6b168cea: *id008
-    EVD_23c368a050: *id009
-    EVD_704917774d: *id010
-    EVD_6013ac9b51: *id011
-    EVD_7c67ba4ba1: *id012
-    EVD_73a756f033: *id013
-    EVD_b043d4bcae: *id014
-    EVD_722b75cb2c: *id015
-    EVD_769fee4327: *id016
-    EVD_c1f46f2255: *id017
-    EVD_371363da36: *id018
-    EVD_49d5a56918: *id019
-    EVD_6a48b776ec: *id020
-    EVD_039d5ca90d: *id021
-    EVD_1c3833bf90: *id022
-    EVD_a3ae16aa56: *id023
-    EVD_98187f2005: *id024
-    EVD_18bfb9aa70: *id025
-    EVD_71938e329a: *id026
-    EVD_77710d7100: *id027
-    EVD_684c60adf4: *id028
-    EVD_75cf94cfbe: *id029
-    EVD_ac02b58432: *id030
-    EVD_4d89c34641: *id031
-    EVD_d707f4732d: *id032
-    EVD_4ee0b45385: *id033
-    EVD_5e4d61cbbc: *id034
-    EVD_85a0c9a98e: *id035
-    EVD_a5b271b3c4: *id036
-    EVD_51d5710f38: *id037
-    EVD_79c241372e: *id038
-    EVD_57ba1a4a85: *id039
-    EVD_e5a58e9cfb: *id040
-    EVD_888b585ab7: *id041
-    EVD_ff92fac7f8: *id042
-    EVD_af7b4dedf9: *id043
-    EVD_51b29e37ae: *id044
-    EVD_1a643ae57b: *id045
-    EVD_d91a4b757f: *id046
-    EVD_91a8f63eb4: *id047
-    EVD_10303341aa: *id048
-    EVD_90d9c1be59: *id049
-    EVD_3c27daf319: *id050
-    EVD_0fa0bf99ed: *id051
-    EVD_bb35a3e763: *id052
-    EVD_3dd2b8850a: *id053
-    EVD_10f8ba7b36: *id054
-    EVD_e177874c87: *id055
-    EVD_768dbcebbe: *id056
-    EVD_516a3d8b71: *id057
-    EVD_e4cdba6270: *id058
-    EVD_4a9b6ca3ec: *id059
-    EVD_58ddfc2c60: *id060
-    EVD_26a62c1d62: *id061
-    EVD_841b89a7fa: *id062
-    EVD_98cb95ac07: *id063
-    EVD_bd8d7893e9: *id064
-    EVD_05e2823447: *id065
-    EVD_bcf85bc9bd: *id066
-    EVD_70ebcc8b99: *id067
-    EVD_d8974dbed9: *id068
-    EVD_1296a46450: *id069
-    EVD_e209bac376: *id070
-    EVD_cf65a46a08: *id071
-    EVD_3322106a09: *id072
-    EVD_2ce90ab042: *id073
-    EVD_a24e229655: *id074
-    EVD_792bae69aa: *id075
-    EVD_5473ed3d48: *id076
-    EVD_0e9bfce4d2: *id077
-    EVD_9f407cb95a: *id078
-    EVD_7117f3d356: *id079
-    EVD_1234824d7d: *id080
-    EVD_4e9d3f9d51: *id081
-    EVD_c23f566c24: *id082
-    EVD_381c45f40d: *id083
-    EVD_759970a22c: *id084
-    EVD_708193145b: *id085
-    EVD_351eff38dc: *id086
-    EVD_302f00797c: *id087
-    EVD_6142591e51: *id088
-    EVD_8a35e9f830: *id089
-    EVD_c992e5643e: *id090
-    EVD_0e46e48e8f: *id091
-    EVD_8291bf3c3d: *id092
-    EVD_a8f8f53cc9: *id093
-    EVD_a9ab922c94: *id094
-    EVD_3757d92618: *id095
-    EVD_8fc4a23cdd: *id096
-    EVD_f635d4ccfc: *id097
-    EVD_9e013a8e81: *id098
-    EVD_52f766c0cd: *id099
-    EVD_f7cc20692c: *id100
-    EVD_8707a989b6: *id101
-    EVD_b2419cf2b6: *id102
-    EVD_0142a02a73: *id103
-    EVD_34314cb9c2: *id104
-    EVD_533659de9f: *id105
-    EVD_56b3dbbfb2: *id106
-    EVD_b0cb40e263: *id107
-    EVD_f09190c359: *id108
-    EVD_880efa7a0e: *id109
-    EVD_769be69e88: *id110
-    EVD_b85bcdaa06: *id111
-    EVD_d513610af4: *id112
-    EVD_fd62dc4be7: *id113
-    EVD_d79c63eb6e: *id114
-    EVD_6c24870201: *id115
-    EVD_83934aca25: *id116
-    EVD_0ff859a6f4: *id117
-    EVD_1a4f0ed777: *id118
-    EVD_20d387dec7: *id119
-    EVD_4bdaad50d2: *id120
-    EVD_c0f4847675: *id121
-    EVD_b1bb75f5fb: *id122
-    EVD_6158700ae6: *id123
-    EVD_1a37b17c2b: *id124
-    EVD_6fafb9ac1a: *id125
-    EVD_6ba0f449ce: *id126
-    EVD_1f16f1c1e5: *id127
-    EVD_24094dc6fe: *id128
-    EVD_a80f8c4bde: *id129
-    EVD_2c25cfb7f4: *id130
-    EVD_4b2f77dcde: *id131
-    EVD_a6177da98c: *id132
-    EVD_e0edf2bec1: *id133
-    EVD_b794ddd6cd: *id134
-    EVD_3c182c17bc: *id135
-    EVD_48686397e7: *id136
-    EVD_41a0fe4e7e: *id137
-    EVD_6364674f05: *id138
-    EVD_f6f94fcf46: *id139
-    EVD_3511ed1124: *id140
-    EVD_508415e452: *id141
-    EVD_4d00a98ae6: *id142
-    EVD_3e206e60f8: *id143
-    EVD_8bdaa35817: *id144
-    EVD_6e61860997: *id145
-    EVD_1929ea224c: *id146
-    EVD_cab286e1ef: *id147
-    EVD_50cbac6e51: *id148
-    EVD_37d71c3a8a: *id149
-    EVD_49debee3dc: *id150
-    EVD_38ae3aeb0e: *id151
-    EVD_10626363cd: *id152
-    EVD_8e01c49ee3: *id153
-    EVD_681960df6d: *id154
-    EVD_1396b5d756: *id155
-    EVD_1984e6ba18: *id156
-    EVD_cae12166f1: *id157
-    EVD_8bc832e629: *id158
-    EVD_e30b6ff550: *id159
-    EVD_dd250fd2a7: *id160
-    EVD_98356ab983: *id161
-    EVD_51f0898cdb: *id162
-    EVD_3919944fa0: *id163
-    EVD_e344114896: *id164
-    EVD_91d5c2ac29: *id165
-    EVD_45704ce62c: *id166
-    EVD_8753373231: *id167
-    EVD_a9b47b118b: *id168
-    EVD_91ab62546c: *id169
-    EVD_b55d630db5: *id170
-    EVD_ab2ac87dff: *id171
-    EVD_d72bbe1376: *id172
-    EVD_211ff42e53: *id173
-    EVD_b9fb0c1a37: *id174
-    EVD_b65721ced0: *id175
-    EVD_8940da841b: *id176
-    EVD_f3983dc9b8: *id177
-    EVD_9c32e7906e: *id178
-    EVD_29d6994b74: *id179
-    EVD_6c73cb6f3d: *id180
-    EVD_58eeb152c8: *id181
-    EVD_280ae8ceb4: *id182
-    EVD_c491a69414: *id183
-    EVD_6689fb6039: *id184
-    EVD_d1dc3925ad: *id185
-    EVD_d52f6b1ca9: *id186
-    EVD_3bcdb97555: *id187
-    EVD_855469a51e: *id188
-    EVD_f1d290b1e9: *id189
-    EVD_7d58bfe7b0: *id190
-    EVD_2eaa2efeb5: *id191
-    EVD_8d4dfedc68: *id192
-    EVD_0e71b6285d: *id193
-    EVD_610b6cb370: *id194
-    EVD_4cc6237134: *id195
-    EVD_ec8e236b99: *id196
-    EVD_667349e62f: *id197
-    EVD_6db860a8b1: *id198
-    EVD_0ddfa93f17: *id199
-    EVD_66e95992a8: *id200
-    EVD_1c7f668f23: *id201
-    EVD_cd967c64f9: *id202
-    EVD_f2ffae50cf: *id203
-    EVD_4f3197e99d: *id204
-    EVD_76bb1f5350: *id205
-    EVD_de9c445e0e: *id206
-    EVD_bffbf04c49: *id207
-    EVD_c1418c04f4: *id208
-    EVD_1ac069f0dc: *id209
-    EVD_13041ba605: *id210
-    EVD_806cafd772: *id211
-    EVD_6629e71bf1: *id212
-    EVD_ed044ae25a: *id213
-    EVD_2674a2a0bb: *id214
-    EVD_5921af50fe: *id215
-    EVD_8a57d17f73: *id216
+    EVD_9481e5f398: *id002
+    EVD_340756e0c1: *id003
+    EVD_ab44437b3e: *id004
+    EVD_571bbc01d8: *id005
+    EVD_34941a2702: *id006
+    EVD_68ea54ce1a: *id007
+    EVD_87558223f3: *id008
+    EVD_1c702a1af1: *id009
+    EVD_f31da32c03: *id010
+    EVD_62b05b6476: *id011
+    EVD_7cd5acbafe: *id012
+    EVD_c874972eac: *id013
+    EVD_5d35ea6421: *id014
+    EVD_2faf380ead: *id015
+    EVD_8a79e9b4c3: *id016
+    EVD_ea7b133517: *id017
+    EVD_445a39bd9d: *id018
+    EVD_cdbc603dc3: *id019
+    EVD_34471777e8: *id020
+    EVD_25ad4a5ca0: *id021
+    EVD_06c10988c5: *id022
+    EVD_4f1afd8ba1: *id023
+    EVD_e8656c5d5a: *id024
+    EVD_65137ea972: *id025
+    EVD_85ef4def31: *id026
+    EVD_1ff8931fe3: *id027
+    EVD_137be04986: *id028
+    EVD_fc51dc9261: *id029
+    EVD_14e76e5b9d: *id030
+    EVD_ae24eb0718: *id031
+    EVD_cf2819ad83: *id032
+    EVD_609aa3a148: *id033
+    EVD_113ad0ddb5: *id034
+    EVD_8c8594ab13: *id035
+    EVD_9b3d78e354: *id036
+    EVD_a8d252c025: *id037
+    EVD_b85a2e1860: *id038
+    EVD_65c395b044: *id039
+    EVD_093c749305: *id040
+    EVD_90108e7878: *id041
+    EVD_3440aa07fb: *id042
+    EVD_51f8c8c9fc: *id043
+    EVD_a3072723a3: *id044
+    EVD_a82e2c92bb: *id045
+    EVD_37e2062fb1: *id046
+    EVD_169d4320d9: *id047
+    EVD_f59ff2f290: *id048
+    EVD_578e568cc6: *id049
+    EVD_680255f138: *id050
+    EVD_11cc2ce210: *id051
+    EVD_21b8b91e42: *id052
+    EVD_90d0e9295b: *id053
+    EVD_032299b663: *id054
+    EVD_5b6be9a05d: *id055
+    EVD_1dc63a2b0a: *id056
+    EVD_5bbd310b45: *id057
+    EVD_2c4dc1b9e8: *id058
+    EVD_241281bf55: *id059
+    EVD_2b606e1caf: *id060
+    EVD_280caa92de: *id061
+    EVD_b94fb9a672: *id062
+    EVD_daf1f39569: *id063
+    EVD_bb1f1f5d42: *id064
+    EVD_cca487dd41: *id065
+    EVD_4bd8fdf69e: *id066
+    EVD_4d16d109e7: *id067
+    EVD_1c40b49bf8: *id068
+    EVD_722d6352bc: *id069
+    EVD_bd864e94cb: *id070
+    EVD_ad2b1a06e9: *id071
+    EVD_af86435e1b: *id072
+    EVD_91c2a48bc9: *id073
+    EVD_6321c96203: *id074
+    EVD_766693bd54: *id075
+    EVD_7b6502c48f: *id076
+    EVD_3e9380538e: *id077
+    EVD_4918063656: *id078
+    EVD_54ac87e87b: *id079
+    EVD_3cb372ec6c: *id080
+    EVD_0667fb9ce4: *id081
+    EVD_6ea092cbef: *id082
+    EVD_98349528d4: *id083
+    EVD_c0c959ecd8: *id084
+    EVD_f9fa3a5d69: *id085
+    EVD_497b2df55f: *id086
+    EVD_ea7d2350a4: *id087
+    EVD_692261278b: *id088
+    EVD_1dce4d13d6: *id089
+    EVD_56f721cf19: *id090
+    EVD_4c19dc7a86: *id091
+    EVD_ea18bbb6e3: *id092
+    EVD_6a5ea2fbc0: *id093
+    EVD_3261d7640c: *id094
+    EVD_b39acd65ea: *id095
+    EVD_8a41ddf904: *id096
+    EVD_04a0e41ab5: *id097
+    EVD_681165f9e8: *id098
+    EVD_79e88bf8c3: *id099
+    EVD_322388b802: *id100
+    EVD_1ff4407510: *id101
+    EVD_fb86130b94: *id102
+    EVD_c57477a641: *id103
+    EVD_b0ae3ed12c: *id104
+    EVD_d4bbc0489b: *id105
+    EVD_9156735c84: *id106
+    EVD_0a969b16d7: *id107
+    EVD_3cc4c1e83d: *id108
+    EVD_5da243f0db: *id109
+    EVD_a91023ff15: *id110
+    EVD_57b3a5b749: *id111
+    EVD_68a2437c39: *id112
+    EVD_5f078a2be7: *id113
+    EVD_03762fc701: *id114
+    EVD_685dae7866: *id115
+    EVD_c0105b8274: *id116
+    EVD_6666266512: *id117
+    EVD_fe0d54ee60: *id118
+    EVD_08cbbc654a: *id119
+    EVD_a8e0b3a94c: *id120
+    EVD_81b7e08eec: *id121
+    EVD_517b49254d: *id122
+    EVD_fc0e1a5eb3: *id123
+    EVD_0b610cbef3: *id124
+    EVD_4f2251f4c6: *id125
+    EVD_ac2ee48848: *id126
+    EVD_82fafdb8c2: *id127
+    EVD_6e2c52a707: *id128
+    EVD_0343bea55c: *id129
+    EVD_c7ebf2524f: *id130
+    EVD_a65cd80a89: *id131
+    EVD_cc70d8822e: *id132
+    EVD_4f1bb350cd: *id133
+    EVD_9452c47d04: *id134
+    EVD_fea209bd6c: *id135
+    EVD_ec1033bb88: *id136
+    EVD_339d71233b: *id137
+    EVD_de12de5294: *id138
+    EVD_d4aa9d1062: *id139
+    EVD_50ae1cd809: *id140
+    EVD_c5e7979add: *id141
+    EVD_6c53f8a25b: *id142
+    EVD_ce89959247: *id143
+    EVD_93a312d79e: *id144
+    EVD_870c28043d: *id145
+    EVD_1bf26f5e69: *id146
+    EVD_5d9aef3646: *id147
+    EVD_0016b0a504: *id148
+    EVD_71f7f69b6f: *id149
+    EVD_d62166233c: *id150
+    EVD_7ba28a01d0: *id151
+    EVD_20fa2a3fa6: *id152
+    EVD_66f3a34577: *id153
+    EVD_baa94144fd: *id154
+    EVD_51430342f2: *id155
+    EVD_3ac512b956: *id156
+    EVD_ca10006ea7: *id157
+    EVD_b66ff2b583: *id158
+    EVD_851da216a7: *id159
+    EVD_4f9e9b17f7: *id160
+    EVD_5a785d52ed: *id161
+    EVD_039be9485a: *id162
+    EVD_269fd1f935: *id163
+    EVD_ce1be0937c: *id164
+    EVD_9b5b14fe23: *id165
+    EVD_408f7bb783: *id166
+    EVD_4da9291ebc: *id167
+    EVD_1d4af435c7: *id168
+    EVD_e51a62063e: *id169
+    EVD_3f6a06c8c8: *id170
+    EVD_8f1f4ccf11: *id171
+    EVD_a27139adf4: *id172
+    EVD_45f9894fb8: *id173
+    EVD_98874c7235: *id174
+    EVD_ce93e67f3e: *id175
+    EVD_c14e355fcb: *id176
+    EVD_cf03152a1b: *id177
+    EVD_e2de5dc324: *id178
+    EVD_92e77b6eef: *id179
+    EVD_1f3d2bfeff: *id180
+    EVD_7f59ac9c0f: *id181
+    EVD_bfc0454d39: *id182
+    EVD_12b1dc9270: *id183
+    EVD_6aef0751a1: *id184
+    EVD_975385dc19: *id185
+    EVD_c0ccc3c376: *id186
+    EVD_c12f706e77: *id187
+    EVD_cec0149193: *id188
+    EVD_022030f155: *id189
+    EVD_6d9243f790: *id190
+    EVD_9ebb9cae57: *id191
+    EVD_28b0fe423f: *id192
+    EVD_fbe9e1a2ff: *id193
+    EVD_eb688a2fd9: *id194
+    EVD_8277133f6a: *id195
+    EVD_5a451c0b7f: *id196
+    EVD_e70cb2dfbd: *id197
+    EVD_8eeb06fac0: *id198
+    EVD_5251db9a48: *id199
+    EVD_d2d1c86f2b: *id200
+    EVD_28c6e9527a: *id201
+    EVD_c7b86947f3: *id202
+    EVD_5f8d477f91: *id203
+    EVD_c775898fda: *id204
+    EVD_c445b84c22: *id205
+    EVD_a2e9317375: *id206
+    EVD_bea3eeb68e: *id207
+    EVD_1df0f1b929: *id208
+    EVD_28ae470759: *id209
+    EVD_e0144a0a2d: *id210
+    EVD_b45103e2b1: *id211
+    EVD_4de597ebeb: *id212
+    EVD_d2d9a2d290: *id213
+    EVD_dfa7bc5c12: *id214
+    EVD_a81e8fe7a3: *id215
+    EVD_545886218c: *id216
 classified_files:
 - file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/GPT_GenLogic.xlsx
   file_type: system_spec
@@ -6604,13 +6604,13 @@ logic_blocks:
   raw_expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
     150 AND CND_FORCE_ALLOWED = 0))
   tree: &id911
-    id: or_400618e2
+    id: or_a47ae205
     type: OR
     children: &id335
-    - id: and_b197d5ba
+    - id: and_1131cdcb
       type: AND
       children:
-      - id: ref_a1b7077b
+      - id: ref_4ca27b50
         type: condition
         name: OK_SHUTOFF
         raw_text: OK_SHUTOFF = 1
@@ -6635,10 +6635,10 @@ logic_blocks:
           source: *id294
           resolution: resolved
         comparator_value: '1'
-      - id: not_610c2466
+      - id: not_f7a8fe5d
         type: NOT
         children:
-        - id: ref_dc7a8e49
+        - id: ref_e5f1555f
           type: condition
           name: NOK_SHUTOFF
           raw_text: NOT NOK_SHUTOFF = (*1)
@@ -6671,10 +6671,10 @@ logic_blocks:
       issue_status: ok
       parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under
         AND.
-    - id: and_b54630b3
+    - id: and_34d220f6
       type: AND
       children:
-      - id: ref_df1b12bb
+      - id: ref_07baf230
         type: condition
         name: FORCE_SHUTOFF
         raw_text: FORCE_SHUTOFF = 150
@@ -6694,7 +6694,7 @@ logic_blocks:
           source: *id294
           resolution: resolved
         comparator_value: '150'
-      - id: ref_cb14e14e
+      - id: ref_764c75a6
         type: condition
         name: CND_FORCE_ALLOWED
         raw_text: CND_FORCE_ALLOWED = 0
@@ -6760,10 +6760,10 @@ logic_blocks:
     = 1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
   tree: &id926
-    id: and_6a09f9b7
+    id: and_f0e2ef12
     type: AND
     children: &id344
-    - id: ref_df03c9e9
+    - id: ref_aaee1505
       type: condition
       name: CND_REQ_GROUP
       raw_text: CND_REQ_GROUP = 1
@@ -6788,7 +6788,7 @@ logic_blocks:
         source: *id295
         resolution: resolved
       comparator_value: '1'
-    - id: ref_04f179d5
+    - id: ref_7830958b
       type: condition
       name: CND_SAFE_GROUP
       raw_text: CND_SAFE_GROUP = 1
@@ -6808,10 +6808,10 @@ logic_blocks:
         source: *id295
         resolution: resolved
       comparator_value: '1'
-    - id: or_9984d74e
+    - id: or_e283e148
       type: OR
       children:
-      - id: ref_f0ed68a6
+      - id: ref_6f400942
         type: condition
         name: CND_NORMAL_ROUTE
         raw_text: CND_NORMAL_ROUTE = 1
@@ -6831,10 +6831,10 @@ logic_blocks:
           source: *id295
           resolution: resolved
         comparator_value: '1'
-      - id: op_a035ec5b
+      - id: op_2b44d71e
         type: AND
         children:
-        - id: ref_13cd77ad
+        - id: ref_30093750
           type: condition
           name: CND_BACKUP_ROUTE
           raw_text: CND_BACKUP_ROUTE = 1
@@ -6860,7 +6860,7 @@ logic_blocks:
         review_status: parsed
         issue_status: ok
         parser_reason: Detected `AND` gate at column depth 1 (nesting level 1).
-      - id: ref_18cfa807
+      - id: ref_573ccf9a
         type: condition
         name: CND_BACKUP_TIMER_OK
         raw_text: CND_BACKUP_TIMER_OK = 2
@@ -6880,10 +6880,10 @@ logic_blocks:
           source: *id295
           resolution: resolved
         comparator_value: '2'
-      - id: op_c17e6b36
+      - id: op_0fc3cd0d
         type: AND
         children:
-        - id: ref_196fa6c1
+        - id: ref_6e3412c2
           type: condition
           name: POWER
           raw_text: POWER = OFF
@@ -6909,7 +6909,7 @@ logic_blocks:
         review_status: parsed
         issue_status: ok
         parser_reason: Detected `AND` gate at column depth 2 (nesting level 2).
-      - id: ref_d66c2571
+      - id: ref_c25165c7
         type: condition
         name: CND_OUTPUT_READY
         raw_text: CND_OUTPUT_READY = 2
@@ -7006,10 +7006,10 @@ logic_blocks:
   raw_expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2)
     OR REQ_SRC_B_VALID (*3)))
   tree: &id948
-    id: and_18d91826
+    id: and_38a55ddf
     type: AND
     children: &id350
-    - id: ref_4b104c6d
+    - id: ref_2c5a456e
       type: condition
       name: REQ_MAIN_OK
       raw_text: REQ_MAIN_OK (*1)
@@ -7035,7 +7035,7 @@ logic_blocks:
         raw_text: REQ_MAIN_OK (*1)
         source: *id296
         resolution: resolved
-    - id: ref_6590b775
+    - id: ref_a102dd47
       type: condition
       name: REQ_STABLE
       raw_text: REQ_STABLE (*4)
@@ -7056,10 +7056,10 @@ logic_blocks:
         raw_text: REQ_STABLE (*4)
         source: *id296
         resolution: needs_llm
-    - id: or_cc358963
+    - id: or_d8552ee3
       type: OR
       children:
-      - id: ref_aa4b028a
+      - id: ref_a51b5ca8
         type: condition
         name: REQ_SRC_A_VALID
         raw_text: REQ_SRC_A_VALID (*2)
@@ -7080,7 +7080,7 @@ logic_blocks:
           raw_text: REQ_SRC_A_VALID (*2)
           source: *id296
           resolution: needs_llm
-      - id: ref_2679e743
+      - id: ref_df50a6f9
         type: condition
         name: REQ_SRC_B_VALID
         raw_text: REQ_SRC_B_VALID (*3)
@@ -7157,10 +7157,10 @@ logic_blocks:
   raw_expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree: &id955
-    id: and_c8b630cb
+    id: and_ed25f8fb
     type: AND
     children: &id357
-    - id: ref_63aefe8b
+    - id: ref_00bd5ccd
       type: condition
       name: VEHICLE_STOPPED
       raw_text: VEHICLE_STOPPED = 2(*1)
@@ -7187,7 +7187,7 @@ logic_blocks:
         source: *id297
         resolution: resolved
       comparator_value: '2'
-    - id: ref_525b38ed
+    - id: ref_53906bbf
       type: condition
       name: DRIVER_SAFE
       raw_text: DRIVER_SAFE (*2)
@@ -7208,10 +7208,10 @@ logic_blocks:
         raw_text: DRIVER_SAFE (*2)
         source: *id297
         resolution: needs_llm
-    - id: not_5aa1fc2d
+    - id: not_81e31aee
       type: NOT
       children:
-      - id: ref_82cedba0
+      - id: ref_36faad91
         type: condition
         name: SAFETY_LOCKED
         raw_text: NOT SAFETY_LOCKED (*5)
@@ -7238,10 +7238,10 @@ logic_blocks:
       review_status: pending
       issue_status: ok
       parser_reason: Detected as NOT gate because row text starts with NOT.
-    - id: or_b7c8a1bc
+    - id: or_3df34742
       type: OR
       children:
-      - id: ref_6e6fbf82
+      - id: ref_592fed35
         type: condition
         name: PROCESS_IDLE
         raw_text: PROCESS_IDLE (*3)
@@ -7262,7 +7262,7 @@ logic_blocks:
           raw_text: PROCESS_IDLE (*3)
           source: *id297
           resolution: needs_llm
-      - id: ref_de313db7
+      - id: ref_db9bb636
         type: condition
         name: PROCESS_PREPARED
         raw_text: PROCESS_PREPARED (*4)
@@ -7346,13 +7346,13 @@ logic_blocks:
   raw_expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
     150 AND CND_FORCE_ALLOWED = 0))
   tree: &id964
-    id: or_9795a242
+    id: or_63031b5b
     type: OR
     children: &id363
-    - id: and_8fe5ddc3
+    - id: and_3faf1d5c
       type: AND
       children:
-      - id: ref_c3589585
+      - id: ref_1b69b228
         type: condition
         name: OK_SHUTOFF
         raw_text: OK_SHUTOFF = 1
@@ -7377,10 +7377,10 @@ logic_blocks:
           source: *id298
           resolution: resolved
         comparator_value: '1'
-      - id: not_e2453789
+      - id: not_44d128be
         type: NOT
         children:
-        - id: ref_be1d17be
+        - id: ref_17c770c8
           type: condition
           name: NOK_SHUTOFF
           raw_text: NOT NOK_SHUTOFF = (*1)
@@ -7413,10 +7413,10 @@ logic_blocks:
       issue_status: ok
       parser_reason: Two consecutive rows share OR/AND prefix; combined leaves under
         AND.
-    - id: and_05e146bc
+    - id: and_b5cb4b3b
       type: AND
       children:
-      - id: ref_cc235960
+      - id: ref_16fa05a5
         type: condition
         name: FORCE_SHUTOFF
         raw_text: FORCE_SHUTOFF = 150
@@ -7436,7 +7436,7 @@ logic_blocks:
           source: *id298
           resolution: resolved
         comparator_value: '150'
-      - id: ref_a5101e50
+      - id: ref_836e8070
         type: condition
         name: CND_FORCE_ALLOWED
         raw_text: CND_FORCE_ALLOWED = 0
@@ -7502,10 +7502,10 @@ logic_blocks:
     = 1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
   tree: &id965
-    id: and_76f35c60
+    id: and_47ec2d1c
     type: AND
     children: &id372
-    - id: ref_0b1431ef
+    - id: ref_b692b4f5
       type: condition
       name: CND_REQ_GROUP
       raw_text: CND_REQ_GROUP = 1
@@ -7530,7 +7530,7 @@ logic_blocks:
         source: *id299
         resolution: resolved
       comparator_value: '1'
-    - id: ref_e98a3c61
+    - id: ref_00e4f522
       type: condition
       name: CND_SAFE_GROUP
       raw_text: CND_SAFE_GROUP = 1
@@ -7550,10 +7550,10 @@ logic_blocks:
         source: *id299
         resolution: resolved
       comparator_value: '1'
-    - id: or_d8cb5140
+    - id: or_85a49f29
       type: OR
       children:
-      - id: ref_d94b2e4d
+      - id: ref_e354e98c
         type: condition
         name: CND_NORMAL_ROUTE
         raw_text: CND_NORMAL_ROUTE = 1
@@ -7573,10 +7573,10 @@ logic_blocks:
           source: *id299
           resolution: resolved
         comparator_value: '1'
-      - id: op_52965c5b
+      - id: op_1608a685
         type: AND
         children:
-        - id: ref_137b1e40
+        - id: ref_f81a17fb
           type: condition
           name: CND_BACKUP_ROUTE
           raw_text: CND_BACKUP_ROUTE = 1
@@ -7602,7 +7602,7 @@ logic_blocks:
         review_status: parsed
         issue_status: ok
         parser_reason: Detected `AND` gate at column depth 1 (nesting level 1).
-      - id: ref_cea2b651
+      - id: ref_52964cf3
         type: condition
         name: CND_BACKUP_TIMER_OK
         raw_text: CND_BACKUP_TIMER_OK = 2
@@ -7622,10 +7622,10 @@ logic_blocks:
           source: *id299
           resolution: resolved
         comparator_value: '2'
-      - id: op_624864bc
+      - id: op_21351268
         type: AND
         children:
-        - id: ref_102d2ec8
+        - id: ref_984a1cf2
           type: condition
           name: POWER
           raw_text: POWER = OFF
@@ -7651,7 +7651,7 @@ logic_blocks:
         review_status: parsed
         issue_status: ok
         parser_reason: Detected `AND` gate at column depth 2 (nesting level 2).
-      - id: ref_8245a972
+      - id: ref_e4e7c6d8
         type: condition
         name: CND_OUTPUT_READY
         raw_text: CND_OUTPUT_READY = 2
@@ -7748,10 +7748,10 @@ logic_blocks:
   raw_expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2)
     OR REQ_SRC_B_VALID (*3)))
   tree: &id967
-    id: and_dcf7928a
+    id: and_829a8b7e
     type: AND
     children: &id378
-    - id: ref_5bea73c2
+    - id: ref_cd1ab74f
       type: condition
       name: REQ_MAIN_OK
       raw_text: REQ_MAIN_OK (*1)
@@ -7777,7 +7777,7 @@ logic_blocks:
         raw_text: REQ_MAIN_OK (*1)
         source: *id300
         resolution: resolved
-    - id: ref_595c6851
+    - id: ref_3e5d7f07
       type: condition
       name: REQ_STABLE
       raw_text: REQ_STABLE (*4)
@@ -7798,10 +7798,10 @@ logic_blocks:
         raw_text: REQ_STABLE (*4)
         source: *id300
         resolution: needs_llm
-    - id: or_04c046ad
+    - id: or_9ce52774
       type: OR
       children:
-      - id: ref_cdd7c824
+      - id: ref_630cb450
         type: condition
         name: REQ_SRC_A_VALID
         raw_text: REQ_SRC_A_VALID (*2)
@@ -7822,7 +7822,7 @@ logic_blocks:
           raw_text: REQ_SRC_A_VALID (*2)
           source: *id300
           resolution: needs_llm
-      - id: ref_8e69051c
+      - id: ref_75b453d3
         type: condition
         name: REQ_SRC_B_VALID
         raw_text: REQ_SRC_B_VALID (*3)
@@ -7899,10 +7899,10 @@ logic_blocks:
   raw_expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree: &id968
-    id: and_16ad5ec4
+    id: and_b798001a
     type: AND
     children: &id385
-    - id: ref_0d727e04
+    - id: ref_ab3941bc
       type: condition
       name: VEHICLE_STOPPED
       raw_text: VEHICLE_STOPPED = 2(*1)
@@ -7929,7 +7929,7 @@ logic_blocks:
         source: *id301
         resolution: resolved
       comparator_value: '2'
-    - id: ref_0f2ff2f7
+    - id: ref_a276f7a1
       type: condition
       name: DRIVER_SAFE
       raw_text: DRIVER_SAFE (*2)
@@ -7950,10 +7950,10 @@ logic_blocks:
         raw_text: DRIVER_SAFE (*2)
         source: *id301
         resolution: needs_llm
-    - id: not_9368d3c9
+    - id: not_fc92940b
       type: NOT
       children:
-      - id: ref_0c249b98
+      - id: ref_d3508609
         type: condition
         name: SAFETY_LOCKED
         raw_text: NOT SAFETY_LOCKED (*5)
@@ -7980,10 +7980,10 @@ logic_blocks:
       review_status: pending
       issue_status: ok
       parser_reason: Detected as NOT gate because row text starts with NOT.
-    - id: or_ddc6193f
+    - id: or_5f98ea25
       type: OR
       children:
-      - id: ref_826cef47
+      - id: ref_9e7730f9
         type: condition
         name: PROCESS_IDLE
         raw_text: PROCESS_IDLE (*3)
@@ -8004,7 +8004,7 @@ logic_blocks:
           raw_text: PROCESS_IDLE (*3)
           source: *id301
           resolution: needs_llm
-      - id: ref_7ebaa6f9
+      - id: ref_dc91f90a
         type: condition
         name: PROCESS_PREPARED
         raw_text: PROCESS_PREPARED (*4)
@@ -8300,7 +8300,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: or_400618e2
+    id: or_a47ae205
     type: OR
     children: *id335
     source: *id294
@@ -8329,7 +8329,7 @@ resolved_logic_blocks:
   - *id343
   footnote_variants: []
   tree:
-    id: and_6a09f9b7
+    id: and_f0e2ef12
     type: AND
     children: *id344
     source: *id295
@@ -8384,7 +8384,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: and_18d91826
+    id: and_38a55ddf
     type: AND
     children: *id350
     source: *id296
@@ -8440,7 +8440,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: and_c8b630cb
+    id: and_ed25f8fb
     type: AND
     children: *id357
     source: *id297
@@ -8495,7 +8495,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: or_9795a242
+    id: or_63031b5b
     type: OR
     children: *id363
     source: *id298
@@ -8524,7 +8524,7 @@ resolved_logic_blocks:
   - *id371
   footnote_variants: []
   tree:
-    id: and_76f35c60
+    id: and_47ec2d1c
     type: AND
     children: *id372
     source: *id299
@@ -8579,7 +8579,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: and_dcf7928a
+    id: and_829a8b7e
     type: AND
     children: *id378
     source: *id300
@@ -8635,7 +8635,7 @@ resolved_logic_blocks:
       footnote_refs: []
       resolution: resolved
   tree:
-    id: and_16ad5ec4
+    id: and_b798001a
     type: AND
     children: *id385
     source: *id301
@@ -9791,7 +9791,7 @@ condition_trees:
   raw_condition: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
     150 AND CND_FORCE_ALLOWED = 0))
   tree:
-    id: or_400618e2
+    id: or_a47ae205
     type: OR
     children: *id335
     source: *id294
@@ -9810,7 +9810,7 @@ condition_trees:
     1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
   tree:
-    id: and_6a09f9b7
+    id: and_f0e2ef12
     type: AND
     children: *id344
     source: *id295
@@ -9829,7 +9829,7 @@ condition_trees:
   raw_condition: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR
     REQ_SRC_B_VALID (*3)))
   tree:
-    id: and_18d91826
+    id: and_38a55ddf
     type: AND
     children: *id350
     source: *id296
@@ -9848,7 +9848,7 @@ condition_trees:
   raw_condition: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree:
-    id: and_c8b630cb
+    id: and_ed25f8fb
     type: AND
     children: *id357
     source: *id297
@@ -9867,7 +9867,7 @@ condition_trees:
   raw_condition: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
     150 AND CND_FORCE_ALLOWED = 0))
   tree:
-    id: or_9795a242
+    id: or_63031b5b
     type: OR
     children: *id363
     source: *id298
@@ -9886,7 +9886,7 @@ condition_trees:
     1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
   tree:
-    id: and_76f35c60
+    id: and_47ec2d1c
     type: AND
     children: *id372
     source: *id299
@@ -9905,7 +9905,7 @@ condition_trees:
   raw_condition: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR
     REQ_SRC_B_VALID (*3)))
   tree:
-    id: and_dcf7928a
+    id: and_829a8b7e
     type: AND
     children: *id378
     source: *id300
@@ -9924,7 +9924,7 @@ condition_trees:
   raw_condition: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree:
-    id: and_16ad5ec4
+    id: and_b798001a
     type: AND
     children: *id385
     source: *id301
@@ -19689,22 +19689,22 @@ term_roles:
     role: output_assertion
     control_name: NOK_SHUTOFF
     logic_id: TC2_XL_Test_Pow_SEC_03_02
-  SHUTDOWN REQUEST DETECTED:
-    term: Shutdown request detected
-    role: output_assertion
-    control_name: Shutdown request detected
-    logic_id: TC2_XL_02_State_01_01
   Shutdown request detected:
     term: Shutdown request detected
     role: output_assertion
     control_name: Shutdown request detected
     logic_id: TC2_XL_02_State_01_01
-  ACC REQUEST DETECTED:
+  SHUTDOWN REQUEST DETECTED:
+    term: Shutdown request detected
+    role: output_assertion
+    control_name: Shutdown request detected
+    logic_id: TC2_XL_02_State_01_01
+  ACC request detected:
     term: ACC request detected
     role: output_assertion
     control_name: ACC request detected
     logic_id: TC2_XL_02_State_01_02
-  ACC request detected:
+  ACC REQUEST DETECTED:
     term: ACC request detected
     role: output_assertion
     control_name: ACC request detected
@@ -19780,11 +19780,11 @@ term_roles:
     term: BACKUP_ROUTE
     role: guard_input
     source: condition_definition
-  T_SHUT_CONFIRM ELAPSED:
+  T_SHUT_CONFIRM elapsed:
     term: T_SHUT_CONFIRM elapsed
     role: guard_input
     source: condition_definition
-  T_SHUT_CONFIRM elapsed:
+  T_SHUT_CONFIRM ELAPSED:
     term: T_SHUT_CONFIRM elapsed
     role: guard_input
     source: condition_definition
@@ -19840,11 +19840,11 @@ term_roles:
     term: BATT_OK = 1
     role: guard_input
     source: condition_definition
-  RELAY_MAIN feedback = OFF:
+  RELAY_MAIN FEEDBACK = OFF:
     term: RELAY_MAIN feedback = OFF
     role: guard_input
     source: condition_definition
-  RELAY_MAIN FEEDBACK = OFF:
+  RELAY_MAIN feedback = OFF:
     term: RELAY_MAIN feedback = OFF
     role: guard_input
     source: condition_definition
@@ -19920,19 +19920,19 @@ term_roles:
     term: Condition Group
     role: guard_input
     source: condition_definition
-  8. State Transition Interpretation and Expected Output:
-    term: 8. State Transition Interpretation and Expected Output
-    role: composite_guard
-    source: condition_definition
   8. STATE TRANSITION INTERPRETATION AND EXPECTED OUTPUT:
     term: 8. State Transition Interpretation and Expected Output
     role: composite_guard
     source: condition_definition
-  TRANSITION ID:
+  8. State Transition Interpretation and Expected Output:
+    term: 8. State Transition Interpretation and Expected Output
+    role: composite_guard
+    source: condition_definition
+  Transition ID:
     term: Transition ID
     role: guard_input
     source: condition_definition
-  Transition ID:
+  TRANSITION ID:
     term: Transition ID
     role: guard_input
     source: condition_definition
@@ -19972,11 +19972,11 @@ term_roles:
     term: Alias Name
     role: guard_input
     source: condition_definition
-  request_valid_condition:
+  REQUEST_VALID_CONDITION:
     term: request_valid_condition
     role: guard_input
     source: condition_definition
-  REQUEST_VALID_CONDITION:
+  request_valid_condition:
     term: request_valid_condition
     role: guard_input
     source: condition_definition
@@ -20004,11 +20004,11 @@ term_roles:
     term: backup_route_ok
     role: guard_input
     source: condition_definition
-  NG_SHUTOFF_CONDITION:
+  ng_shutoff_condition:
     term: ng_shutoff_condition
     role: guard_input
     source: condition_definition
-  ng_shutoff_condition:
+  NG_SHUTOFF_CONDITION:
     term: ng_shutoff_condition
     role: guard_input
     source: condition_definition
@@ -20028,11 +20028,11 @@ term_roles:
     term: Item
     role: guard_input
     source: condition_definition
-  Two-column logic:
+  TWO-COLUMN LOGIC:
     term: Two-column logic
     role: guard_input
     source: condition_definition
-  TWO-COLUMN LOGIC:
+  Two-column logic:
     term: Two-column logic
     role: guard_input
     source: condition_definition
@@ -20060,27 +20060,27 @@ term_roles:
     term: Alias mapping
     role: guard_input
     source: condition_definition
-  Negative logic:
-    term: Negative logic
-    role: composite_guard
-    source: condition_definition
   NEGATIVE LOGIC:
     term: Negative logic
     role: composite_guard
     source: condition_definition
-  Condition_E:
-    term: Condition_E
-    role: guard_input
+  Negative logic:
+    term: Negative logic
+    role: composite_guard
     source: condition_definition
   CONDITION_E:
     term: Condition_E
     role: guard_input
     source: condition_definition
-  Condition_A:
-    term: Condition_A
+  Condition_E:
+    term: Condition_E
     role: guard_input
     source: condition_definition
   CONDITION_A:
+    term: Condition_A
+    role: guard_input
+    source: condition_definition
+  Condition_A:
     term: Condition_A
     role: guard_input
     source: condition_definition
@@ -20092,22 +20092,22 @@ term_roles:
     term: Condition_B
     role: guard_input
     source: condition_definition
+  Condition_C:
+    term: Condition_C
+    role: guard_input
+    source: condition_definition
   CONDITION_C:
     term: Condition_C
     role: guard_input
     source: condition_definition
-  Condition_C:
-    term: Condition_C
+  Condition_D:
+    term: Condition_D
     role: guard_input
     source: condition_definition
   CONDITION_D:
     term: CONDITION_D
     role: system_state
     source: state_machine
-  Condition_D:
-    term: Condition_D
-    role: guard_input
-    source: condition_definition
   T_BACKUP_TIMER:
     term: T_BACKUP_TIMER
     role: guard_input
@@ -20252,23 +20252,23 @@ term_roles:
     term: T_TRANS_EXCEEDED
     role: system_state
     source: state_machine
-  Lost:
-    term: Lost
-    role: system_state
-    source: footnote_body
   LOST:
     term: lost
+    role: system_state
+    source: footnote_body
+  Lost:
+    term: Lost
     role: system_state
     source: footnote_body
   lost:
     term: lost
     role: system_state
     source: footnote_body
-  SOURCE:
+  source:
     term: source
     role: composite_guard
     source: footnote_body
-  source:
+  SOURCE:
     term: source
     role: composite_guard
     source: footnote_body
@@ -25514,7 +25514,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: or_400618e2
+  node_id: or_a47ae205
   parent_node_id: null
   depth: 0
   node_type: OR
@@ -25529,8 +25529,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T1_01
-  node_id: and_b197d5ba
-  parent_node_id: or_400618e2
+  node_id: and_1131cdcb
+  parent_node_id: or_a47ae205
   depth: 1
   node_type: AND
   operator: AND
@@ -25544,8 +25544,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T1_01
-  node_id: ref_a1b7077b
-  parent_node_id: and_b197d5ba
+  node_id: ref_4ca27b50
+  parent_node_id: and_1131cdcb
   depth: 2
   node_type: condition
   operator: ''
@@ -25559,8 +25559,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: not_610c2466
-  parent_node_id: and_b197d5ba
+  node_id: not_f7a8fe5d
+  parent_node_id: and_1131cdcb
   depth: 2
   node_type: NOT
   operator: NOT
@@ -25574,8 +25574,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-not
 - tree_id: TC2_T1_01
-  node_id: ref_dc7a8e49
-  parent_node_id: not_610c2466
+  node_id: ref_e5f1555f
+  parent_node_id: not_f7a8fe5d
   depth: 3
   node_type: condition
   operator: ''
@@ -25589,8 +25589,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: and_b54630b3
-  parent_node_id: or_400618e2
+  node_id: and_34d220f6
+  parent_node_id: or_a47ae205
   depth: 1
   node_type: AND
   operator: AND
@@ -25604,8 +25604,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T1_01
-  node_id: ref_df1b12bb
-  parent_node_id: and_b54630b3
+  node_id: ref_07baf230
+  parent_node_id: and_34d220f6
   depth: 2
   node_type: condition
   operator: ''
@@ -25619,8 +25619,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: ref_cb14e14e
-  parent_node_id: and_b54630b3
+  node_id: ref_764c75a6
+  parent_node_id: and_34d220f6
   depth: 2
   node_type: condition
   operator: ''
@@ -25634,7 +25634,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: and_6a09f9b7
+  node_id: and_f0e2ef12
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -25650,8 +25650,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_df03c9e9
-  parent_node_id: and_6a09f9b7
+  node_id: ref_aaee1505
+  parent_node_id: and_f0e2ef12
   depth: 1
   node_type: condition
   operator: ''
@@ -25665,8 +25665,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_04f179d5
-  parent_node_id: and_6a09f9b7
+  node_id: ref_7830958b
+  parent_node_id: and_f0e2ef12
   depth: 1
   node_type: condition
   operator: ''
@@ -25680,8 +25680,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: or_9984d74e
-  parent_node_id: and_6a09f9b7
+  node_id: or_e283e148
+  parent_node_id: and_f0e2ef12
   depth: 1
   node_type: OR
   operator: OR
@@ -25696,8 +25696,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T2_01
-  node_id: ref_f0ed68a6
-  parent_node_id: or_9984d74e
+  node_id: ref_6f400942
+  parent_node_id: or_e283e148
   depth: 2
   node_type: condition
   operator: ''
@@ -25711,8 +25711,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: op_a035ec5b
-  parent_node_id: or_9984d74e
+  node_id: op_2b44d71e
+  parent_node_id: or_e283e148
   depth: 2
   node_type: AND
   operator: AND
@@ -25726,8 +25726,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_13cd77ad
-  parent_node_id: op_a035ec5b
+  node_id: ref_30093750
+  parent_node_id: op_2b44d71e
   depth: 3
   node_type: condition
   operator: ''
@@ -25741,8 +25741,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_18cfa807
-  parent_node_id: or_9984d74e
+  node_id: ref_573ccf9a
+  parent_node_id: or_e283e148
   depth: 2
   node_type: condition
   operator: ''
@@ -25756,8 +25756,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: op_c17e6b36
-  parent_node_id: or_9984d74e
+  node_id: op_0fc3cd0d
+  parent_node_id: or_e283e148
   depth: 2
   node_type: AND
   operator: AND
@@ -25771,8 +25771,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_196fa6c1
-  parent_node_id: op_c17e6b36
+  node_id: ref_6e3412c2
+  parent_node_id: op_0fc3cd0d
   depth: 3
   node_type: condition
   operator: ''
@@ -25786,8 +25786,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_d66c2571
-  parent_node_id: or_9984d74e
+  node_id: ref_c25165c7
+  parent_node_id: or_e283e148
   depth: 2
   node_type: condition
   operator: ''
@@ -25801,7 +25801,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: and_18d91826
+  node_id: and_38a55ddf
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -25817,8 +25817,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T3_01
-  node_id: ref_4b104c6d
-  parent_node_id: and_18d91826
+  node_id: ref_2c5a456e
+  parent_node_id: and_38a55ddf
   depth: 1
   node_type: condition
   operator: ''
@@ -25832,8 +25832,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: ref_6590b775
-  parent_node_id: and_18d91826
+  node_id: ref_a102dd47
+  parent_node_id: and_38a55ddf
   depth: 1
   node_type: condition
   operator: ''
@@ -25847,8 +25847,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: or_cc358963
-  parent_node_id: and_18d91826
+  node_id: or_d8552ee3
+  parent_node_id: and_38a55ddf
   depth: 1
   node_type: OR
   operator: OR
@@ -25863,8 +25863,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T3_01
-  node_id: ref_aa4b028a
-  parent_node_id: or_cc358963
+  node_id: ref_a51b5ca8
+  parent_node_id: or_d8552ee3
   depth: 2
   node_type: condition
   operator: ''
@@ -25878,8 +25878,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: ref_2679e743
-  parent_node_id: or_cc358963
+  node_id: ref_df50a6f9
+  parent_node_id: or_d8552ee3
   depth: 2
   node_type: condition
   operator: ''
@@ -25893,7 +25893,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: and_c8b630cb
+  node_id: and_ed25f8fb
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -25909,8 +25909,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T4_01
-  node_id: ref_63aefe8b
-  parent_node_id: and_c8b630cb
+  node_id: ref_00bd5ccd
+  parent_node_id: and_ed25f8fb
   depth: 1
   node_type: condition
   operator: ''
@@ -25924,8 +25924,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: ref_525b38ed
-  parent_node_id: and_c8b630cb
+  node_id: ref_53906bbf
+  parent_node_id: and_ed25f8fb
   depth: 1
   node_type: condition
   operator: ''
@@ -25939,8 +25939,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: not_5aa1fc2d
-  parent_node_id: and_c8b630cb
+  node_id: not_81e31aee
+  parent_node_id: and_ed25f8fb
   depth: 1
   node_type: NOT
   operator: NOT
@@ -25954,8 +25954,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-not
 - tree_id: TC2_T4_01
-  node_id: ref_82cedba0
-  parent_node_id: not_5aa1fc2d
+  node_id: ref_36faad91
+  parent_node_id: not_81e31aee
   depth: 2
   node_type: condition
   operator: ''
@@ -25969,8 +25969,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: or_b7c8a1bc
-  parent_node_id: and_c8b630cb
+  node_id: or_3df34742
+  parent_node_id: and_ed25f8fb
   depth: 1
   node_type: OR
   operator: OR
@@ -25985,8 +25985,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T4_01
-  node_id: ref_6e6fbf82
-  parent_node_id: or_b7c8a1bc
+  node_id: ref_592fed35
+  parent_node_id: or_3df34742
   depth: 2
   node_type: condition
   operator: ''
@@ -26000,8 +26000,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: ref_de313db7
-  parent_node_id: or_b7c8a1bc
+  node_id: ref_db9bb636
+  parent_node_id: or_3df34742
   depth: 2
   node_type: condition
   operator: ''
@@ -26015,7 +26015,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: or_9795a242
+  node_id: or_63031b5b
   parent_node_id: null
   depth: 0
   node_type: OR
@@ -26030,8 +26030,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T1_01
-  node_id: and_8fe5ddc3
-  parent_node_id: or_9795a242
+  node_id: and_3faf1d5c
+  parent_node_id: or_63031b5b
   depth: 1
   node_type: AND
   operator: AND
@@ -26045,8 +26045,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T1_01
-  node_id: ref_c3589585
-  parent_node_id: and_8fe5ddc3
+  node_id: ref_1b69b228
+  parent_node_id: and_3faf1d5c
   depth: 2
   node_type: condition
   operator: ''
@@ -26060,8 +26060,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: not_e2453789
-  parent_node_id: and_8fe5ddc3
+  node_id: not_44d128be
+  parent_node_id: and_3faf1d5c
   depth: 2
   node_type: NOT
   operator: NOT
@@ -26075,8 +26075,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-not
 - tree_id: TC2_T1_01
-  node_id: ref_be1d17be
-  parent_node_id: not_e2453789
+  node_id: ref_17c770c8
+  parent_node_id: not_44d128be
   depth: 3
   node_type: condition
   operator: ''
@@ -26090,8 +26090,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: and_05e146bc
-  parent_node_id: or_9795a242
+  node_id: and_b5cb4b3b
+  parent_node_id: or_63031b5b
   depth: 1
   node_type: AND
   operator: AND
@@ -26105,8 +26105,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T1_01
-  node_id: ref_cc235960
-  parent_node_id: and_05e146bc
+  node_id: ref_16fa05a5
+  parent_node_id: and_b5cb4b3b
   depth: 2
   node_type: condition
   operator: ''
@@ -26120,8 +26120,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T1_01
-  node_id: ref_a5101e50
-  parent_node_id: and_05e146bc
+  node_id: ref_836e8070
+  parent_node_id: and_b5cb4b3b
   depth: 2
   node_type: condition
   operator: ''
@@ -26135,7 +26135,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: and_76f35c60
+  node_id: and_47ec2d1c
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -26151,8 +26151,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_0b1431ef
-  parent_node_id: and_76f35c60
+  node_id: ref_b692b4f5
+  parent_node_id: and_47ec2d1c
   depth: 1
   node_type: condition
   operator: ''
@@ -26166,8 +26166,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_e98a3c61
-  parent_node_id: and_76f35c60
+  node_id: ref_00e4f522
+  parent_node_id: and_47ec2d1c
   depth: 1
   node_type: condition
   operator: ''
@@ -26181,8 +26181,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: or_d8cb5140
-  parent_node_id: and_76f35c60
+  node_id: or_85a49f29
+  parent_node_id: and_47ec2d1c
   depth: 1
   node_type: OR
   operator: OR
@@ -26197,8 +26197,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T2_01
-  node_id: ref_d94b2e4d
-  parent_node_id: or_d8cb5140
+  node_id: ref_e354e98c
+  parent_node_id: or_85a49f29
   depth: 2
   node_type: condition
   operator: ''
@@ -26212,8 +26212,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: op_52965c5b
-  parent_node_id: or_d8cb5140
+  node_id: op_1608a685
+  parent_node_id: or_85a49f29
   depth: 2
   node_type: AND
   operator: AND
@@ -26227,8 +26227,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_137b1e40
-  parent_node_id: op_52965c5b
+  node_id: ref_f81a17fb
+  parent_node_id: op_1608a685
   depth: 3
   node_type: condition
   operator: ''
@@ -26242,8 +26242,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_cea2b651
-  parent_node_id: or_d8cb5140
+  node_id: ref_52964cf3
+  parent_node_id: or_85a49f29
   depth: 2
   node_type: condition
   operator: ''
@@ -26257,8 +26257,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: op_624864bc
-  parent_node_id: or_d8cb5140
+  node_id: op_21351268
+  parent_node_id: or_85a49f29
   depth: 2
   node_type: AND
   operator: AND
@@ -26272,8 +26272,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T2_01
-  node_id: ref_102d2ec8
-  parent_node_id: op_624864bc
+  node_id: ref_984a1cf2
+  parent_node_id: op_21351268
   depth: 3
   node_type: condition
   operator: ''
@@ -26287,8 +26287,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T2_01
-  node_id: ref_8245a972
-  parent_node_id: or_d8cb5140
+  node_id: ref_e4e7c6d8
+  parent_node_id: or_85a49f29
   depth: 2
   node_type: condition
   operator: ''
@@ -26302,7 +26302,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: and_dcf7928a
+  node_id: and_829a8b7e
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -26318,8 +26318,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T3_01
-  node_id: ref_5bea73c2
-  parent_node_id: and_dcf7928a
+  node_id: ref_cd1ab74f
+  parent_node_id: and_829a8b7e
   depth: 1
   node_type: condition
   operator: ''
@@ -26333,8 +26333,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: ref_595c6851
-  parent_node_id: and_dcf7928a
+  node_id: ref_3e5d7f07
+  parent_node_id: and_829a8b7e
   depth: 1
   node_type: condition
   operator: ''
@@ -26348,8 +26348,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: or_04c046ad
-  parent_node_id: and_dcf7928a
+  node_id: or_9ce52774
+  parent_node_id: and_829a8b7e
   depth: 1
   node_type: OR
   operator: OR
@@ -26364,8 +26364,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T3_01
-  node_id: ref_cdd7c824
-  parent_node_id: or_04c046ad
+  node_id: ref_630cb450
+  parent_node_id: or_9ce52774
   depth: 2
   node_type: condition
   operator: ''
@@ -26379,8 +26379,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T3_01
-  node_id: ref_8e69051c
-  parent_node_id: or_04c046ad
+  node_id: ref_75b453d3
+  parent_node_id: or_9ce52774
   depth: 2
   node_type: condition
   operator: ''
@@ -26394,7 +26394,7 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: and_16ad5ec4
+  node_id: and_b798001a
   parent_node_id: null
   depth: 0
   node_type: AND
@@ -26410,8 +26410,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-and
 - tree_id: TC2_T4_01
-  node_id: ref_0d727e04
-  parent_node_id: and_16ad5ec4
+  node_id: ref_ab3941bc
+  parent_node_id: and_b798001a
   depth: 1
   node_type: condition
   operator: ''
@@ -26425,8 +26425,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: ref_0f2ff2f7
-  parent_node_id: and_16ad5ec4
+  node_id: ref_a276f7a1
+  parent_node_id: and_b798001a
   depth: 1
   node_type: condition
   operator: ''
@@ -26440,8 +26440,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: not_9368d3c9
-  parent_node_id: and_16ad5ec4
+  node_id: not_fc92940b
+  parent_node_id: and_b798001a
   depth: 1
   node_type: NOT
   operator: NOT
@@ -26455,8 +26455,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-not
 - tree_id: TC2_T4_01
-  node_id: ref_0c249b98
-  parent_node_id: not_9368d3c9
+  node_id: ref_d3508609
+  parent_node_id: not_fc92940b
   depth: 2
   node_type: condition
   operator: ''
@@ -26470,8 +26470,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: or_ddc6193f
-  parent_node_id: and_16ad5ec4
+  node_id: or_5f98ea25
+  parent_node_id: and_b798001a
   depth: 1
   node_type: OR
   operator: OR
@@ -26486,8 +26486,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-or
 - tree_id: TC2_T4_01
-  node_id: ref_826cef47
-  parent_node_id: or_ddc6193f
+  node_id: ref_9e7730f9
+  parent_node_id: or_5f98ea25
   depth: 2
   node_type: condition
   operator: ''
@@ -26501,8 +26501,8 @@ logic_ast_rows:
   issue_status: ok
   css_class: logic-ref
 - tree_id: TC2_T4_01
-  node_id: ref_7ebaa6f9
-  parent_node_id: or_ddc6193f
+  node_id: ref_dc91f90a
+  parent_node_id: or_5f98ea25
   depth: 2
   node_type: condition
   operator: ''
@@ -29126,6 +29126,8 @@ logic_review_items:
   can_generate_candidates: true
   expression: (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE AND
     T_SHUT_CONFIRM elapsed)) AND NOT NOK_SHUTOFF)
+  raw_expression: (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE
+    AND T_SHUT_CONFIRM elapsed)) AND NOT NOK_SHUTOFF)
   tree_model: *id873
   tree_lines:
   - └── AND
@@ -29396,6 +29398,8 @@ logic_review_items:
   can_generate_candidates: true
   expression: (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0)
     OR DIAG_BLOCKED)
+  raw_expression: (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD >
+    0) OR DIAG_BLOCKED)
   tree_model: *id875
   tree_lines:
   - └── OR
@@ -29625,6 +29629,8 @@ logic_review_items:
   parse_status: ok
   can_generate_candidates: true
   expression: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  raw_expression: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR
+    Condition_D)
   tree_model: *id885
   tree_lines:
   - └── AND
@@ -29730,6 +29736,7 @@ logic_review_items:
   parse_status: ok
   can_generate_candidates: true
   expression: Mode_cmd = 2 AND Battery_OK = 1
+  raw_expression: Mode_cmd = 2 AND Battery_OK = 1
   tree_model: *id887
   tree_lines:
   - └── AND
@@ -29803,6 +29810,7 @@ logic_review_items:
   parse_status: ok
   can_generate_candidates: true
   expression: Battery_OK = 0 OR T_trans exceeded
+  raw_expression: Battery_OK = 0 OR T_trans exceeded
   tree_model: *id889
   tree_lines:
   - └── OR
@@ -29881,6 +29889,10 @@ logic_review_items:
     / Vehicle condition is safe for shutoff AND Condition_A / Processing state is
     ready AND (Condition_C / Communication status is valid OR Condition_D / External
     fallback request is detected)
+  raw_expression: Condition_E / System request is active for confirmation time AND
+    Condition_A / Vehicle condition is safe for shutoff AND Condition_A / Processing
+    state is ready AND (Condition_C / Communication status is valid OR Condition_D
+    / External fallback request is detected)
   tree_model: *id893
   tree_lines:
   - └── AND
@@ -30001,6 +30013,10 @@ logic_review_items:
   expression: Condition_E / Request input active for T_CONFIRM AND Condition_A / Vehicle
     condition = stationary AND Condition_B / Processing state = IDLE AND (Condition_C
     / Communication status = NORMAL OR Condition_D / Backup request status = ACTIVE)
+  raw_expression: Condition_E / Request input active for T_CONFIRM AND Condition_A
+    / Vehicle condition = stationary AND Condition_B / Processing state = IDLE AND
+    (Condition_C / Communication status = NORMAL OR Condition_D / Backup request status
+    = ACTIVE)
   tree_model: *id896
   tree_lines:
   - └── AND
@@ -30141,6 +30157,9 @@ logic_review_items:
   can_generate_candidates: false
   expression: (Condition_R1 / System request becomes inactive OR Condition_R1 / Vehicle
     condition becomes unsafe OR Condition_R3 / Communication invalid timeout is detected)
+  raw_expression: (Condition_R1 / System request becomes inactive OR Condition_R1
+    / Vehicle condition becomes unsafe OR Condition_R3 / Communication invalid timeout
+    is detected)
   tree_model: *id897
   tree_lines:
   - └── OR
@@ -30241,6 +30260,8 @@ logic_review_items:
   parse_status: partial
   can_generate_candidates: false
   expression: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR Condition_D)
+  raw_expression: Condition_E AND Condition_A AND Condition_B AND (Condition_C OR
+    Condition_D)
   tree_model: *id909
   tree_lines:
   - └── AND
@@ -30357,6 +30378,7 @@ logic_review_items:
   parse_status: partial
   can_generate_candidates: false
   expression: Condition_R1 OR Condition_R2 OR Condition_R3
+  raw_expression: Condition_R1 OR Condition_R2 OR Condition_R3
   tree_model: *id910
   tree_lines:
   - └── OR
@@ -30451,6 +30473,8 @@ logic_review_items:
   can_generate_candidates: true
   expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF = 150
     AND CND_FORCE_ALLOWED = 0))
+  raw_expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
+    150 AND CND_FORCE_ALLOWED = 0))
   tree_model: *id911
   tree_lines:
   - └── OR
@@ -30463,7 +30487,7 @@ logic_review_items:
   - '        └── CND_FORCE_ALLOWED'
   tree_nodes:
   - tree_id: TC2_T1_01
-    node_id: or_400618e2
+    node_id: or_a47ae205
     parent_node_id: null
     depth: 0
     node_type: OR
@@ -30478,8 +30502,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T1_01
-    node_id: and_b197d5ba
-    parent_node_id: or_400618e2
+    node_id: and_1131cdcb
+    parent_node_id: or_a47ae205
     depth: 1
     node_type: AND
     operator: AND
@@ -30494,8 +30518,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T1_01
-    node_id: ref_a1b7077b
-    parent_node_id: and_b197d5ba
+    node_id: ref_4ca27b50
+    parent_node_id: and_1131cdcb
     depth: 2
     node_type: condition
     operator: ''
@@ -30509,8 +30533,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: not_610c2466
-    parent_node_id: and_b197d5ba
+    node_id: not_f7a8fe5d
+    parent_node_id: and_1131cdcb
     depth: 2
     node_type: NOT
     operator: NOT
@@ -30524,8 +30548,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-not
   - tree_id: TC2_T1_01
-    node_id: ref_dc7a8e49
-    parent_node_id: not_610c2466
+    node_id: ref_e5f1555f
+    parent_node_id: not_f7a8fe5d
     depth: 3
     node_type: condition
     operator: ''
@@ -30539,8 +30563,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: and_b54630b3
-    parent_node_id: or_400618e2
+    node_id: and_34d220f6
+    parent_node_id: or_a47ae205
     depth: 1
     node_type: AND
     operator: AND
@@ -30555,8 +30579,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T1_01
-    node_id: ref_df1b12bb
-    parent_node_id: and_b54630b3
+    node_id: ref_07baf230
+    parent_node_id: and_34d220f6
     depth: 2
     node_type: condition
     operator: ''
@@ -30570,8 +30594,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: ref_cb14e14e
-    parent_node_id: and_b54630b3
+    node_id: ref_764c75a6
+    parent_node_id: and_34d220f6
     depth: 2
     node_type: condition
     operator: ''
@@ -30735,6 +30759,9 @@ logic_review_items:
   expression: (CND_REQ_GROUP = 1 AND CND_SAFE_GROUP = 1 AND (CND_NORMAL_ROUTE = 1
     OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
+  raw_expression: (CND_REQ_GROUP = 1 AND CND_SAFE_GROUP = 1 AND (CND_NORMAL_ROUTE
+    = 1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
+    = 2))
   tree_model: *id926
   tree_lines:
   - └── AND
@@ -30750,7 +30777,7 @@ logic_review_items:
   - '        └── CND_OUTPUT_READY'
   tree_nodes:
   - tree_id: TC2_T2_01
-    node_id: and_6a09f9b7
+    node_id: and_f0e2ef12
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -30766,8 +30793,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_df03c9e9
-    parent_node_id: and_6a09f9b7
+    node_id: ref_aaee1505
+    parent_node_id: and_f0e2ef12
     depth: 1
     node_type: condition
     operator: ''
@@ -30781,8 +30808,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_04f179d5
-    parent_node_id: and_6a09f9b7
+    node_id: ref_7830958b
+    parent_node_id: and_f0e2ef12
     depth: 1
     node_type: condition
     operator: ''
@@ -30796,8 +30823,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: or_9984d74e
-    parent_node_id: and_6a09f9b7
+    node_id: or_e283e148
+    parent_node_id: and_f0e2ef12
     depth: 1
     node_type: OR
     operator: OR
@@ -30812,8 +30839,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T2_01
-    node_id: ref_f0ed68a6
-    parent_node_id: or_9984d74e
+    node_id: ref_6f400942
+    parent_node_id: or_e283e148
     depth: 2
     node_type: condition
     operator: ''
@@ -30827,8 +30854,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: op_a035ec5b
-    parent_node_id: or_9984d74e
+    node_id: op_2b44d71e
+    parent_node_id: or_e283e148
     depth: 2
     node_type: AND
     operator: AND
@@ -30842,8 +30869,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_13cd77ad
-    parent_node_id: op_a035ec5b
+    node_id: ref_30093750
+    parent_node_id: op_2b44d71e
     depth: 3
     node_type: condition
     operator: ''
@@ -30857,8 +30884,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_18cfa807
-    parent_node_id: or_9984d74e
+    node_id: ref_573ccf9a
+    parent_node_id: or_e283e148
     depth: 2
     node_type: condition
     operator: ''
@@ -30872,8 +30899,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: op_c17e6b36
-    parent_node_id: or_9984d74e
+    node_id: op_0fc3cd0d
+    parent_node_id: or_e283e148
     depth: 2
     node_type: AND
     operator: AND
@@ -30887,8 +30914,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_196fa6c1
-    parent_node_id: op_c17e6b36
+    node_id: ref_6e3412c2
+    parent_node_id: op_0fc3cd0d
     depth: 3
     node_type: condition
     operator: ''
@@ -30902,8 +30929,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_d66c2571
-    parent_node_id: or_9984d74e
+    node_id: ref_c25165c7
+    parent_node_id: or_e283e148
     depth: 2
     node_type: condition
     operator: ''
@@ -31230,6 +31257,8 @@ logic_review_items:
   can_generate_candidates: false
   expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
     (*3)))
+  raw_expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2)
+    OR REQ_SRC_B_VALID (*3)))
   tree_model: *id948
   tree_lines:
   - └── AND
@@ -31240,7 +31269,7 @@ logic_review_items:
   - '        └── REQ_SRC_B_VALID'
   tree_nodes:
   - tree_id: TC2_T3_01
-    node_id: and_18d91826
+    node_id: and_38a55ddf
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -31256,8 +31285,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T3_01
-    node_id: ref_4b104c6d
-    parent_node_id: and_18d91826
+    node_id: ref_2c5a456e
+    parent_node_id: and_38a55ddf
     depth: 1
     node_type: condition
     operator: ''
@@ -31271,8 +31300,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: ref_6590b775
-    parent_node_id: and_18d91826
+    node_id: ref_a102dd47
+    parent_node_id: and_38a55ddf
     depth: 1
     node_type: condition
     operator: ''
@@ -31286,8 +31315,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: or_cc358963
-    parent_node_id: and_18d91826
+    node_id: or_d8552ee3
+    parent_node_id: and_38a55ddf
     depth: 1
     node_type: OR
     operator: OR
@@ -31302,8 +31331,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T3_01
-    node_id: ref_aa4b028a
-    parent_node_id: or_cc358963
+    node_id: ref_a51b5ca8
+    parent_node_id: or_d8552ee3
     depth: 2
     node_type: condition
     operator: ''
@@ -31317,8 +31346,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: ref_2679e743
-    parent_node_id: or_cc358963
+    node_id: ref_df50a6f9
+    parent_node_id: or_d8552ee3
     depth: 2
     node_type: condition
     operator: ''
@@ -31506,6 +31535,8 @@ logic_review_items:
   can_generate_candidates: false
   expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+  raw_expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
+    (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree_model: *id955
   tree_lines:
   - └── AND
@@ -31518,7 +31549,7 @@ logic_review_items:
   - '        └── PROCESS_PREPARED'
   tree_nodes:
   - tree_id: TC2_T4_01
-    node_id: and_c8b630cb
+    node_id: and_ed25f8fb
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -31534,8 +31565,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T4_01
-    node_id: ref_63aefe8b
-    parent_node_id: and_c8b630cb
+    node_id: ref_00bd5ccd
+    parent_node_id: and_ed25f8fb
     depth: 1
     node_type: condition
     operator: ''
@@ -31549,8 +31580,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: ref_525b38ed
-    parent_node_id: and_c8b630cb
+    node_id: ref_53906bbf
+    parent_node_id: and_ed25f8fb
     depth: 1
     node_type: condition
     operator: ''
@@ -31564,8 +31595,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: not_5aa1fc2d
-    parent_node_id: and_c8b630cb
+    node_id: not_81e31aee
+    parent_node_id: and_ed25f8fb
     depth: 1
     node_type: NOT
     operator: NOT
@@ -31579,8 +31610,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-not
   - tree_id: TC2_T4_01
-    node_id: ref_82cedba0
-    parent_node_id: not_5aa1fc2d
+    node_id: ref_36faad91
+    parent_node_id: not_81e31aee
     depth: 2
     node_type: condition
     operator: ''
@@ -31594,8 +31625,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: or_b7c8a1bc
-    parent_node_id: and_c8b630cb
+    node_id: or_3df34742
+    parent_node_id: and_ed25f8fb
     depth: 1
     node_type: OR
     operator: OR
@@ -31610,8 +31641,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T4_01
-    node_id: ref_6e6fbf82
-    parent_node_id: or_b7c8a1bc
+    node_id: ref_592fed35
+    parent_node_id: or_3df34742
     depth: 2
     node_type: condition
     operator: ''
@@ -31625,8 +31656,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: ref_de313db7
-    parent_node_id: or_b7c8a1bc
+    node_id: ref_db9bb636
+    parent_node_id: or_3df34742
     depth: 2
     node_type: condition
     operator: ''
@@ -31850,6 +31881,8 @@ logic_review_items:
   can_generate_candidates: true
   expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF = 150
     AND CND_FORCE_ALLOWED = 0))
+  raw_expression: ((OK_SHUTOFF = 1 AND NOT NOK_SHUTOFF = (*1)) OR (FORCE_SHUTOFF =
+    150 AND CND_FORCE_ALLOWED = 0))
   tree_model: *id964
   tree_lines:
   - └── OR
@@ -31862,7 +31895,7 @@ logic_review_items:
   - '        └── CND_FORCE_ALLOWED'
   tree_nodes:
   - tree_id: TC2_T1_01
-    node_id: or_9795a242
+    node_id: or_63031b5b
     parent_node_id: null
     depth: 0
     node_type: OR
@@ -31877,8 +31910,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T1_01
-    node_id: and_8fe5ddc3
-    parent_node_id: or_9795a242
+    node_id: and_3faf1d5c
+    parent_node_id: or_63031b5b
     depth: 1
     node_type: AND
     operator: AND
@@ -31893,8 +31926,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T1_01
-    node_id: ref_c3589585
-    parent_node_id: and_8fe5ddc3
+    node_id: ref_1b69b228
+    parent_node_id: and_3faf1d5c
     depth: 2
     node_type: condition
     operator: ''
@@ -31908,8 +31941,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: not_e2453789
-    parent_node_id: and_8fe5ddc3
+    node_id: not_44d128be
+    parent_node_id: and_3faf1d5c
     depth: 2
     node_type: NOT
     operator: NOT
@@ -31923,8 +31956,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-not
   - tree_id: TC2_T1_01
-    node_id: ref_be1d17be
-    parent_node_id: not_e2453789
+    node_id: ref_17c770c8
+    parent_node_id: not_44d128be
     depth: 3
     node_type: condition
     operator: ''
@@ -31938,8 +31971,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: and_05e146bc
-    parent_node_id: or_9795a242
+    node_id: and_b5cb4b3b
+    parent_node_id: or_63031b5b
     depth: 1
     node_type: AND
     operator: AND
@@ -31954,8 +31987,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T1_01
-    node_id: ref_cc235960
-    parent_node_id: and_05e146bc
+    node_id: ref_16fa05a5
+    parent_node_id: and_b5cb4b3b
     depth: 2
     node_type: condition
     operator: ''
@@ -31969,8 +32002,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T1_01
-    node_id: ref_a5101e50
-    parent_node_id: and_05e146bc
+    node_id: ref_836e8070
+    parent_node_id: and_b5cb4b3b
     depth: 2
     node_type: condition
     operator: ''
@@ -32134,6 +32167,9 @@ logic_review_items:
   expression: (CND_REQ_GROUP = 1 AND CND_SAFE_GROUP = 1 AND (CND_NORMAL_ROUTE = 1
     OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
     = 2))
+  raw_expression: (CND_REQ_GROUP = 1 AND CND_SAFE_GROUP = 1 AND (CND_NORMAL_ROUTE
+    = 1 OR CND_BACKUP_ROUTE = 1 OR CND_BACKUP_TIMER_OK = 2 OR POWER = OFF OR CND_OUTPUT_READY
+    = 2))
   tree_model: *id965
   tree_lines:
   - └── AND
@@ -32149,7 +32185,7 @@ logic_review_items:
   - '        └── CND_OUTPUT_READY'
   tree_nodes:
   - tree_id: TC2_T2_01
-    node_id: and_76f35c60
+    node_id: and_47ec2d1c
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -32165,8 +32201,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_0b1431ef
-    parent_node_id: and_76f35c60
+    node_id: ref_b692b4f5
+    parent_node_id: and_47ec2d1c
     depth: 1
     node_type: condition
     operator: ''
@@ -32180,8 +32216,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_e98a3c61
-    parent_node_id: and_76f35c60
+    node_id: ref_00e4f522
+    parent_node_id: and_47ec2d1c
     depth: 1
     node_type: condition
     operator: ''
@@ -32195,8 +32231,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: or_d8cb5140
-    parent_node_id: and_76f35c60
+    node_id: or_85a49f29
+    parent_node_id: and_47ec2d1c
     depth: 1
     node_type: OR
     operator: OR
@@ -32211,8 +32247,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T2_01
-    node_id: ref_d94b2e4d
-    parent_node_id: or_d8cb5140
+    node_id: ref_e354e98c
+    parent_node_id: or_85a49f29
     depth: 2
     node_type: condition
     operator: ''
@@ -32226,8 +32262,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: op_52965c5b
-    parent_node_id: or_d8cb5140
+    node_id: op_1608a685
+    parent_node_id: or_85a49f29
     depth: 2
     node_type: AND
     operator: AND
@@ -32241,8 +32277,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_137b1e40
-    parent_node_id: op_52965c5b
+    node_id: ref_f81a17fb
+    parent_node_id: op_1608a685
     depth: 3
     node_type: condition
     operator: ''
@@ -32256,8 +32292,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_cea2b651
-    parent_node_id: or_d8cb5140
+    node_id: ref_52964cf3
+    parent_node_id: or_85a49f29
     depth: 2
     node_type: condition
     operator: ''
@@ -32271,8 +32307,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: op_624864bc
-    parent_node_id: or_d8cb5140
+    node_id: op_21351268
+    parent_node_id: or_85a49f29
     depth: 2
     node_type: AND
     operator: AND
@@ -32286,8 +32322,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T2_01
-    node_id: ref_102d2ec8
-    parent_node_id: op_624864bc
+    node_id: ref_984a1cf2
+    parent_node_id: op_21351268
     depth: 3
     node_type: condition
     operator: ''
@@ -32301,8 +32337,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T2_01
-    node_id: ref_8245a972
-    parent_node_id: or_d8cb5140
+    node_id: ref_e4e7c6d8
+    parent_node_id: or_85a49f29
     depth: 2
     node_type: condition
     operator: ''
@@ -32629,6 +32665,8 @@ logic_review_items:
   can_generate_candidates: false
   expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2) OR REQ_SRC_B_VALID
     (*3)))
+  raw_expression: (REQ_MAIN_OK (*1) AND REQ_STABLE (*4) AND (REQ_SRC_A_VALID (*2)
+    OR REQ_SRC_B_VALID (*3)))
   tree_model: *id967
   tree_lines:
   - └── AND
@@ -32639,7 +32677,7 @@ logic_review_items:
   - '        └── REQ_SRC_B_VALID'
   tree_nodes:
   - tree_id: TC2_T3_01
-    node_id: and_dcf7928a
+    node_id: and_829a8b7e
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -32655,8 +32693,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T3_01
-    node_id: ref_5bea73c2
-    parent_node_id: and_dcf7928a
+    node_id: ref_cd1ab74f
+    parent_node_id: and_829a8b7e
     depth: 1
     node_type: condition
     operator: ''
@@ -32670,8 +32708,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: ref_595c6851
-    parent_node_id: and_dcf7928a
+    node_id: ref_3e5d7f07
+    parent_node_id: and_829a8b7e
     depth: 1
     node_type: condition
     operator: ''
@@ -32685,8 +32723,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: or_04c046ad
-    parent_node_id: and_dcf7928a
+    node_id: or_9ce52774
+    parent_node_id: and_829a8b7e
     depth: 1
     node_type: OR
     operator: OR
@@ -32701,8 +32739,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T3_01
-    node_id: ref_cdd7c824
-    parent_node_id: or_04c046ad
+    node_id: ref_630cb450
+    parent_node_id: or_9ce52774
     depth: 2
     node_type: condition
     operator: ''
@@ -32716,8 +32754,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T3_01
-    node_id: ref_8e69051c
-    parent_node_id: or_04c046ad
+    node_id: ref_75b453d3
+    parent_node_id: or_9ce52774
     depth: 2
     node_type: condition
     operator: ''
@@ -32905,6 +32943,8 @@ logic_review_items:
   can_generate_candidates: false
   expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
     (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
+  raw_expression: (VEHICLE_STOPPED = 2(*1) AND DRIVER_SAFE (*2) AND NOT SAFETY_LOCKED
+    (*5) AND (PROCESS_IDLE (*3) OR PROCESS_PREPARED (*4)))
   tree_model: *id968
   tree_lines:
   - └── AND
@@ -32917,7 +32957,7 @@ logic_review_items:
   - '        └── PROCESS_PREPARED'
   tree_nodes:
   - tree_id: TC2_T4_01
-    node_id: and_16ad5ec4
+    node_id: and_b798001a
     parent_node_id: null
     depth: 0
     node_type: AND
@@ -32933,8 +32973,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-and
   - tree_id: TC2_T4_01
-    node_id: ref_0d727e04
-    parent_node_id: and_16ad5ec4
+    node_id: ref_ab3941bc
+    parent_node_id: and_b798001a
     depth: 1
     node_type: condition
     operator: ''
@@ -32948,8 +32988,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: ref_0f2ff2f7
-    parent_node_id: and_16ad5ec4
+    node_id: ref_a276f7a1
+    parent_node_id: and_b798001a
     depth: 1
     node_type: condition
     operator: ''
@@ -32963,8 +33003,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: not_9368d3c9
-    parent_node_id: and_16ad5ec4
+    node_id: not_fc92940b
+    parent_node_id: and_b798001a
     depth: 1
     node_type: NOT
     operator: NOT
@@ -32978,8 +33018,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-not
   - tree_id: TC2_T4_01
-    node_id: ref_0c249b98
-    parent_node_id: not_9368d3c9
+    node_id: ref_d3508609
+    parent_node_id: not_fc92940b
     depth: 2
     node_type: condition
     operator: ''
@@ -32993,8 +33033,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: or_ddc6193f
-    parent_node_id: and_16ad5ec4
+    node_id: or_5f98ea25
+    parent_node_id: and_b798001a
     depth: 1
     node_type: OR
     operator: OR
@@ -33009,8 +33049,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-or
   - tree_id: TC2_T4_01
-    node_id: ref_826cef47
-    parent_node_id: or_ddc6193f
+    node_id: ref_9e7730f9
+    parent_node_id: or_5f98ea25
     depth: 2
     node_type: condition
     operator: ''
@@ -33024,8 +33064,8 @@ logic_review_items:
     issue_status: ok
     css_class: logic-ref
   - tree_id: TC2_T4_01
-    node_id: ref_7ebaa6f9
-    parent_node_id: or_ddc6193f
+    node_id: ref_dc91f90a
+    parent_node_id: or_5f98ea25
     depth: 2
     node_type: condition
     operator: ''

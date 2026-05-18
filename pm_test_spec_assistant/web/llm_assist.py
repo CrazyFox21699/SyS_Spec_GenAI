@@ -228,21 +228,22 @@ def resolve_definition_with_ollama(
             "logic_id": logic_id,
             "source": "ollama_assist",
         }
-    apply_out = apply_engineer_knowledge_with_ollama(
-        bundle, cfg, logic_id=logic_id, engineer_note=question.strip()
+    from web.ai_provider import apply_knowledge
+
+    apply_out = apply_knowledge(
+        bundle, logic_id, question.strip(), cfg, force_ollama=True
     )
-    candidates_updated = int(apply_out.get("candidates_updated") or 0) if apply_out.get("ok") else 0
     return {
         "ok": True,
         "provider": "ollama",
         "entry": entry,
         "applied_definitions": list(eng.keys()),
-        "candidates_updated": candidates_updated,
+        "candidates_updated": int(apply_out.get("candidates_updated") or 0),
         "knowledge_apply": apply_out,
     }
 
 
-def _candidates_for_knowledge_apply(bundle: dict[str, Any], logic_id: str, *, limit: int = 40) -> list[dict[str, Any]]:
+def candidates_for_knowledge_apply(bundle: dict[str, Any], logic_id: str, *, limit: int = 40) -> list[dict[str, Any]]:
     from src.engine.concrete_test_values import materialize_expected_output
 
     rows: list[dict[str, Any]] = []
@@ -314,7 +315,7 @@ def apply_engineer_knowledge_with_ollama(
             logic_expression = str(lb.get("raw_expression") or lb.get("expression") or "")
             break
 
-    candidates = _candidates_for_knowledge_apply(bundle, logic_id)
+    candidates = candidates_for_knowledge_apply(bundle, logic_id)
     if not candidates:
         return {"ok": True, "candidates_updated": 0, "skipped": "no_candidates"}
 

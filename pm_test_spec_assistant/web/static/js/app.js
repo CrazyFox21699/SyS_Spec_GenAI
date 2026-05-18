@@ -2,11 +2,11 @@
  * ALEX — engineering review workflow (trace evidence, approve, export).
  */
 const PAGES = [
-  { id: "review", label: "1. Review" },
-  { id: "logic-review", label: "2. Logic & Definitions" },
-  { id: "diagram-graph", label: "3. Diagram Graph" },
-  { id: "export", label: "4. Final File" },
-  { id: "guide", label: "5. Guide" },
+  { id: "review", step: "1", label: "Review", icon: "review" },
+  { id: "logic-review", step: "2", label: "Logic & Definitions", icon: "logic" },
+  { id: "diagram-graph", step: "3", label: "Diagram Graph", icon: "diagram" },
+  { id: "export", step: "4", label: "Final File", icon: "export" },
+  { id: "guide", step: "5", label: "Guide", icon: "guide" },
 ];
 
 const FILE_TYPE_OPTIONS = [
@@ -34,6 +34,7 @@ let state = {
     edgeKey: null,
     match: null,
   },
+  serviceStatusTimer: null,
   copilot: {
     status: null,
     loginCommandId: null,
@@ -119,6 +120,29 @@ function renderMetaStats(items, { compact = false } = {}) {
         `<div><dt>${esc(label)}</dt><dd>${esc(String(value ?? "—"))}</dd></div>`
     )
     .join("")}</dl>`;
+}
+
+function logicSpecExpression(item) {
+  const fromSpec = String(item?.raw_expression || "").trim();
+  if (fromSpec) return fromSpec;
+  const fromExpr = String(item?.expression || "").trim();
+  if (fromExpr) return fromExpr;
+  return (item?.table_rows || [])
+    .map((r) => String(r.raw_condition || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function renderMetricCards(items) {
+  return `<div class="metric-cards">${items
+    .map(([label, value, tone]) => {
+      const toneClass = tone ? ` metric-card--${tone}` : "";
+      return `<article class="metric-card${toneClass}">
+        <span class="metric-card__label">${esc(label)}</span>
+        <span class="metric-card__value">${esc(String(value ?? "—"))}</span>
+      </article>`;
+    })
+    .join("")}</div>`;
 }
 
 function renderSourceCardFromObject(src) {
@@ -299,6 +323,36 @@ function copilotStatusBadge(st) {
   if (st.trust_state === "login_completed") return `<span class="tag warning">login done</span>`;
   if (st.login_state === "configured") return `<span class="tag warning">configured</span>`;
   return `<span class="tag warning">not connected</span>`;
+}
+
+function githubAuthBadge(st) {
+  if (state.copilot.loginCommand?.status === "running") {
+    return `<span class="auth-badge auth-badge--warn">${icon("warn", "alex-icon--badge")} PENDING</span>`;
+  }
+  if (state.copilot.verifyCommand?.status === "running") {
+    return `<span class="auth-badge auth-badge--warn">${icon("warn", "alex-icon--badge")} CHECKING</span>`;
+  }
+  if (!st?.installed) {
+    return `<span class="auth-badge auth-badge--err">NOT INSTALLED</span>`;
+  }
+  if (st.trust_state === "runtime_verified" || st.trust_state === "auth_verified") {
+    return `<span class="auth-badge auth-badge--ok">${icon("check", "alex-icon--badge")} AUTH OK</span>`;
+  }
+  if (st.trust_state === "login_completed" || st.login_state === "configured") {
+    return `<span class="auth-badge auth-badge--warn">CONFIGURED</span>`;
+  }
+  return `<span class="auth-badge auth-badge--warn">SIGN IN</span>`;
+}
+
+function m365AuthBadge(m) {
+  if (!m) return `<span class="auth-badge auth-badge--warn">LOADING</span>`;
+  if (m.api_ready || m.connected) {
+    return `<span class="auth-badge auth-badge--ok">${icon("check", "alex-icon--badge")} AUTH OK</span>`;
+  }
+  if (m.client_id_configured) {
+    return `<span class="auth-badge auth-badge--warn">SIGN IN</span>`;
+  }
+  return `<span class="auth-badge auth-badge--err">NEEDS CLIENT ID</span>`;
 }
 
 function isCopilotPolicyError(text) {
@@ -646,43 +700,12 @@ function resolutionLabel(value) {
   }[value] || value || "review";
 }
 
-function renderCapabilitySummary(capability) {
-  if (!capability) return "";
-  const logic = capability.logic || {};
-  const definitions = capability.definitions || {};
-  const transitions = capability.transitions || {};
-  const ocr = capability.ocr || {};
-  const workbook = capability.workbook || {};
-  return `<details class="alex-ref-panel">
-    <summary>Parser coverage (optional)</summary>
-    <div class="alex-ref-body">
-      ${renderMetaStats(
-        [
-          ["Logic OK", logic.groups_ok ?? 0],
-          ["Partial", logic.groups_partial ?? 0],
-          ["Failed", logic.groups_failed ?? 0],
-          ["Transitions", transitions.total ?? 0],
-          ["Workbook rows", workbook.rows_total ?? 0],
-          ["Need answer", workbook.rows_need_engineer_answer ?? 0],
-        ],
-        { compact: true }
-      )}
-      <p>OCR: ${ocr.local_ocr_available ? "available" : "off"} · diagram assets ${ocr.diagram_assets ?? 0} · text recovered ${ocr.diagram_assets_with_ocr_text ?? 0}</p>
-      <p>Definitions in spec: ${definitions.spec_definitions ?? 0} · footnotes linked ${definitions.footnotes_linked ?? 0}</p>
-      ${(capability.limits || []).length ? `<ul>${capability.limits.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}
-    </div>
-  </details>`;
+function renderCapabilitySummary(_capability) {
+  return "";
 }
 
 function renderGuideCard() {
-  return `<details class="alex-ref-panel">
-    <summary>Status reference (AI queue, workbook rows, definitions)</summary>
-    <div class="alex-ref-body">
-      <p><b>AI queue</b> — <em>ready for AI</em>: definitions usable; <em>blocked</em>: missing definition; <em>needs answer</em>: engineer confirmation; <em>AI drafted</em>: review workbook row; <em>completed</em>: export-ready.</p>
-      <p><b>Workbook rows</b> — <em>ready</em> / <em>review_required</em> / <em>blocked</em>; “Needs answer = yes” means engineer must confirm.</p>
-      <p><b>Definition inbox</b> — Not found · Name looks similar · From added file · From engineer note.</p>
-    </div>
-  </details>`;
+  return "";
 }
 
 function inboxFocusTerm(inbox) {
@@ -691,35 +714,8 @@ function inboxFocusTerm(inbox) {
   return inbox.terms.find((row) => row.term === current) || inbox.terms[0];
 }
 
-function renderAiQueue(queue) {
-  if (!queue) return "";
-  const summary = queue.summary || {};
-  const groups = queue.logic_groups || [];
-  const top = groups.slice(0, 12);
-  return `<section class="card ai-queue-card">
-    <h3>AI queue</h3>
-    ${renderMetaStats([
-      ["Ready", summary.ready_for_ai ?? 0],
-      ["Blocked", summary.blocked_missing_definition ?? 0],
-      ["Waiting", summary.needs_engineer_answer ?? 0],
-      ["Done", summary.completed ?? 0],
-    ])}
-    <div class="grid-wrap">
-      <table class="data-grid alex-table alex-queue-table">
-        <thead><tr><th>Control</th><th class="col-status">Status</th><th>Note</th></tr></thead>
-        <tbody>${top
-          .map(
-            (row) => `<tr>
-              <td><b>${esc(row.control_name || row.logic_id)}</b></td>
-              <td><span class="tag ${queueStatusClass(row.queue_status)}">${esc(queueStatusLabel(row.queue_status))}</span></td>
-              <td>${esc(queueShortReason(row))}</td>
-            </tr>`
-          )
-          .join("")}</tbody>
-      </table>
-    </div>
-    ${groups.length > top.length ? `<p class="detail">Showing ${top.length} of ${groups.length} logic groups.</p>` : ""}
-  </section>`;
+function renderAiQueue(_queue) {
+  return "";
 }
 
 async function refreshJobSummary() {
@@ -764,7 +760,10 @@ function bindNoJob() {
 
 function initNav() {
   const nav = $("#nav");
-  nav.innerHTML = PAGES.map((p) => `<button data-page="${p.id}">${p.label}</button>`).join("");
+  nav.innerHTML = PAGES.map(
+    (p) =>
+      `<button data-page="${p.id}" title="${esc(p.label)}"><span class="nav-icon">${icon(p.icon, "alex-icon--nav")}</span><span class="nav-step">${esc(p.step)}.</span><span class="nav-label">${esc(p.label)}</span></button>`
+  ).join("");
   nav.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
       showPage(btn.dataset.page);
@@ -839,8 +838,8 @@ function renderSourcesTable() {
         <td class="col-chk"><input type="checkbox" class="row-chk" data-idx="${idx}" ${
           f.selected ? "checked" : ""
         } /></td>
-        <td class="col-name">${esc(f.name)}<div class="detail">Uploaded snapshot: ${esc(f.modified_label || "")}</div></td>
-        <td class="col-type"><select class="type-select" data-idx="${idx}">${typeOpts}</select></td>
+        <td class="col-name"><div class="source-file-cell">${icon("file-doc", "alex-icon--file")}<div class="source-file-cell__body"><div>${esc(f.name)}</div><div class="detail">Uploaded snapshot: ${esc(f.modified_label || "")}</div></div></div></td>
+        <td class="col-type"><div class="type-select-wrap"><select class="type-select" data-idx="${idx}">${typeOpts}</select>${icon("chevron-down", "alex-icon--chevron")}</div></td>
       </tr>`;
     })
     .join("");
@@ -888,10 +887,8 @@ function renderReviewSummaryPanel(dash, preview, containerId) {
   const wb = dash.workbench || {};
   const ev = dash.evidence_summary || {};
   const rows = (preview && preview.rows) || [];
-  const queue = dash.ai_queue || {};
-  const capability = dash.capability_summary || {};
   el.style.display = "block";
-  el.innerHTML = `
+  el.innerHTML = `<section class="analysis-results card">
     <header class="alex-hero">
       <div>
         <h2 class="alex-hero__title">Analysis results</h2>
@@ -901,31 +898,19 @@ function renderReviewSummaryPanel(dash, preview, containerId) {
         <button class="btn" id="btn-logic-review">Logic &amp; definitions</button>
         <button class="btn secondary" id="btn-diagram-graph">State machine</button>
         <button class="btn secondary" id="btn-export">Final file</button>
-        <button class="btn secondary" id="btn-ai-unresolved">Run AI queue</button>
       </div>
     </header>
-    ${renderMetaStats([
-      ["Rows ready", wb.rows_ready ?? 0],
-      ["Blocked", wb.rows_blocked ?? 0],
-      ["Needs review", wb.rows_needing_review ?? 0],
-      ["Missing terms", wb.missing_terms ?? ev.terms_missing_definition ?? 0],
-      ["Logic groups", wb.logic_groups ?? 0],
-      ["AI ready", wb.ai_ready_groups ?? 0],
+    ${renderMetricCards([
+      ["Rows ready", wb.rows_ready ?? 0, "ok"],
+      ["Blocked", wb.rows_blocked ?? 0, "error"],
+      ["Needs review", wb.rows_needing_review ?? 0, "warn"],
+      ["Missing terms", wb.missing_terms ?? ev.terms_missing_definition ?? 0, "warn"],
+      ["Logic groups", wb.logic_groups ?? 0, "info"],
     ])}
-    ${renderAiQueue(queue)}
-    ${renderCapabilitySummary(capability)}
-    <p class="detail">Edit workbook rows per logic group in <b>Logic &amp; definitions</b>, or export from <b>Final File</b>.</p>`;
+  </section>`;
   el.querySelector("#btn-logic-review").onclick = () => showPage("logic-review");
   el.querySelector("#btn-diagram-graph").onclick = () => showPage("diagram-graph");
   el.querySelector("#btn-export").onclick = () => showPage("export");
-  el.querySelector("#btn-ai-unresolved").onclick = async () => {
-    const statusEl = document.querySelector("#review-run-status");
-    if (statusEl) statusEl.textContent = "Copilot is running the AI queue…";
-    await startCopilotAssist({ mode: "queued", language: state.exportLanguage }, async () => {
-      if (statusEl) statusEl.textContent = "Copilot finished the AI queue.";
-      await loadReviewResults();
-    });
-  };
 }
 
 async function loadReviewResults() {
@@ -981,12 +966,14 @@ function updateReviewButton() {
   const btn = $("#btn-review");
   if (btn) {
     btn.disabled = n === 0;
-    btn.textContent = `Review specification (${n} file${n === 1 ? "" : "s"})`;
+    btn.className = "btn btn-with-icon";
+    btn.innerHTML = `${icon("play-circle", "alex-icon--btn")} Review specification (${n} file${n === 1 ? "" : "s"})`;
   }
 }
 
 async function renderReview() {
   try {
+    await loadM365Status();
     const copilot = await loadCopilotStatus().catch(() => null);
     const data = await api("/api/files");
     state.files = data.files || [];
@@ -997,25 +984,16 @@ async function renderReview() {
         <h2>Sources &amp; analyze</h2>
         <p class="lead">Select files, run one analysis pass, then continue to Logic review. Re-upload if you changed a local file.</p>
       </header>
-      <section class="card">
-        <div class="alex-card__header"><h3>Copilot</h3></div>
-        <div id="copilot-review-status">${copilotStatusHtml(copilot)}</div>
-        <div class="review-actions">
-          <button class="btn secondary" id="btn-copilot-login">Login Copilot</button>
-          <button class="btn secondary" id="btn-copilot-check" ${state.copilot.loginCommand?.status === "running" ? "disabled" : ""} title="Reads local Copilot login only — no quota">Check connection</button>
-          <button class="btn secondary" id="btn-copilot-test-prompt" ${state.copilot.loginCommand?.status === "running" ? "disabled" : ""} title="Uses one Copilot request from your account">Test prompt</button>
-        </div>
-        <div data-copilot-login></div>
-      </section>
+      ${renderReviewLoginHub(copilot)}
       <section class="card">
         <div class="toolbar-row">
           <div class="toolbar-row__start">
-            <label class="btn secondary upload-label">Upload<input type="file" id="file-upload" multiple accept=".docx,.xlsx,.xlsm,.pdf,.cpp,.h,.png,.jpg,.md" hidden /></label>
-            <button type="button" class="btn secondary" id="btn-clear-files">Start new review</button>
+            <label class="btn secondary btn-with-icon upload-label">${icon("upload", "alex-icon--btn")} Upload<input type="file" id="file-upload" multiple accept=".docx,.xlsx,.xlsm,.pdf,.cpp,.h,.png,.jpg,.md" hidden /></label>
+            <button type="button" class="btn secondary btn-with-icon" id="btn-clear-files">${icon("refresh", "alex-icon--btn")} Start new review</button>
           </div>
           <div class="toolbar-row__end">
             <span id="src-status" class="detail"></span>
-            <button type="button" class="btn" id="btn-review" ${n ? "" : "disabled"}>Review specification (${n} file${n === 1 ? "" : "s"})</button>
+            <button type="button" class="btn btn-with-icon" id="btn-review" ${n ? "" : "disabled"}>${icon("play-circle", "alex-icon--btn")} Review specification (${n} file${n === 1 ? "" : "s"})</button>
           </div>
         </div>
         <div class="grid-wrap sources-table-wrap">
@@ -1118,6 +1096,7 @@ async function renderReview() {
       await startCopilotLogin(async () => {
         const fresh = await loadCopilotStatus().catch(() => null);
         $("#copilot-review-status").innerHTML = copilotStatusHtml(fresh);
+        refreshGithubAuthBadge(fresh);
         if (testBtn) testBtn.disabled = false;
       });
     };
@@ -1126,6 +1105,7 @@ async function renderReview() {
       await verifyCopilot(async () => {
         const fresh = await loadCopilotStatus().catch(() => null);
         $("#copilot-review-status").innerHTML = copilotStatusHtml(fresh);
+        refreshGithubAuthBadge(fresh);
       }, { deep: false });
     };
 
@@ -1133,9 +1113,12 @@ async function renderReview() {
       await verifyCopilot(async () => {
         const fresh = await loadCopilotStatus().catch(() => null);
         $("#copilot-review-status").innerHTML = copilotStatusHtml(fresh);
+        refreshGithubAuthBadge(fresh);
       }, { deep: true });
     };
 
+    bindReviewLoginHub();
+    refreshCopilotLoginContainers();
     renderSourcesTable();
     updateReviewButton();
     refreshJobSummary();
@@ -1276,10 +1259,10 @@ function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [] } = 
         <div class="definition-head">
           <b>Knowledge workbench</b>
         </div>
-        <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Write rules in natural language (any format). Update knowledge uses Ollama to apply them to each test case's Given values.">${esc(engineerNote)}</textarea>
-        <div class="review-actions">
-          <button class="btn secondary" id="btn-definition-apply">Update knowledge</button>
-          <button class="btn" id="btn-definition-query">${esc(definitionAssistLabel())}</button>
+        <p class="detail">Sign in to M365 or GitHub Copilot on the <b>Review</b> tab. Knowledge is applied when you resolve with AI.</p>
+        <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Engineer rules, boundary values, signal meanings…">${esc(engineerNote)}</textarea>
+        <div class="definition-workbench-actions">
+          <button class="btn" id="btn-definition-query">Resolve with AI</button>
           <label class="btn secondary upload-label">Attach files<input type="file" id="logic-attachment-upload" multiple hidden /></label>
         </div>
         ${attachments.length ? `<div class="definition-attachments detail">${attachments.map((a) => `<div><b>${esc(a.name)}</b>${a.definition_count ? ` · ${esc(String(a.definition_count))} definition(s)` : ""}</div>`).join("")}</div>` : ""}
@@ -1401,28 +1384,369 @@ async function loadAppConfig() {
   }
 }
 
+function formatOllamaTopbarStatus(st) {
+  if (!st) return "Loading…";
+  if (!st.enabled && !st.allow_ollama_fallback) return "Disabled";
+  const ok = st.ollama?.reachable;
+  if (ok) {
+    const model = st.ollama?.resolved_model || st.ollama?.model || "Model";
+    return `Online · ${model}`;
+  }
+  if (st.allow_ollama_fallback) return "Offline";
+  return "Off";
+}
+
+function formatM365TopbarStatus(st) {
+  if (!st) return "Loading…";
+  if (st.api_ready || st.connected) {
+    const who = st.display_name || st.user_principal || "M365";
+    const short = String(who).trim().split(/\s+/)[0] || "User";
+    return `Signed In · ${short}`;
+  }
+  if (st.client_id_configured === false) return "Needs Client ID";
+  if (st.client_id_configured) return "Sign In Required";
+  return "Not Configured";
+}
+
+function applyOllamaTopbarStatus(st) {
+  const el = $("#stat-ollama");
+  if (!el) return;
+  el.textContent = formatOllamaTopbarStatus(st);
+  const ok = !!(st?.ollama?.reachable);
+  const enabled = !!(st?.enabled || st?.allow_ollama_fallback);
+  const parent = el.parentElement;
+  if (parent) {
+    parent.classList.toggle("high", ok);
+    parent.classList.toggle("err", enabled && !ok);
+    parent.classList.toggle("warn", !enabled);
+  }
+}
+
+function applyM365TopbarStatus(st) {
+  const el = $("#stat-m365");
+  if (!el) return;
+  el.textContent = formatM365TopbarStatus(st);
+  const ready = !!(st?.api_ready || st?.connected);
+  const parent = el.parentElement;
+  if (parent) {
+    parent.classList.toggle("high", ready);
+    parent.classList.toggle("err", !ready);
+    parent.classList.toggle("warn", !ready && st?.client_id_configured);
+  }
+}
+
 async function loadOllamaStatus() {
   const el = $("#stat-ollama");
   if (!el) return;
   try {
     const st = await api("/api/llm/status");
     state.ollamaStatus = st;
-    const ok = st.ollama?.reachable;
-    el.textContent = ok ? `up (${st.ollama.model || "model"})` : "offline";
-    el.parentElement?.classList.toggle("err", !ok);
-    el.parentElement?.classList.toggle("high", !!ok);
+    applyOllamaTopbarStatus(st);
   } catch {
-    el.textContent = "unknown";
+    el.textContent = "Unavailable";
+    el.parentElement?.classList.add("err");
   }
+}
+
+function refreshServiceStatusNow() {
+  loadOllamaStatus().catch(() => {});
+  loadM365Status().catch(() => {});
+}
+
+function startServiceStatusPolling() {
+  if (state.serviceStatusTimer) clearInterval(state.serviceStatusTimer);
+  refreshServiceStatusNow();
+  state.serviceStatusTimer = setInterval(() => refreshServiceStatusNow(), 12000);
+}
+
+function stopServiceStatusPolling() {
+  if (state.serviceStatusTimer) {
+    clearInterval(state.serviceStatusTimer);
+    state.serviceStatusTimer = null;
+  }
+}
+
+function m365KnowledgeReady() {
+  return !!(state.m365Status?.api_ready || state.m365Status?.connected);
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function m365ReviewStatusText(st) {
+  if (!st) return "Loading…";
+  if (st.api_ready || st.connected) {
+    const who = st.display_name || st.user_principal || "M365";
+    return `Signed in: ${who}`;
+  }
+  if (st.client_id_configured) return "Client ID saved. Click Sign in.";
+  return "Need Application (client) ID from IT (Azure app registration).";
+}
+
+function setM365AuthMessage(msg) {
+  const review = $("#review-m365-status");
+  if (review) review.textContent = msg;
+  const logic = $("#logic-copilot-status");
+  if (logic) logic.textContent = msg;
+}
+
+function refreshReviewM365Tile() {
+  const el = $("#review-m365-status");
+  if (el) el.textContent = m365ReviewStatusText(state.m365Status);
+  const badge = $("#m365-auth-badge");
+  if (badge) badge.innerHTML = m365AuthBadge(state.m365Status);
+  const signOut = $("#btn-m365-disconnect");
+  const signIn = $("#btn-m365-connect");
+  const ready = m365KnowledgeReady();
+  if (signOut) signOut.hidden = !ready;
+  if (signIn) signIn.disabled = ready || !!state.m365LoginInProgress;
+}
+
+function refreshGithubAuthBadge(copilot) {
+  const badge = $("#github-auth-badge");
+  if (badge) badge.innerHTML = githubAuthBadge(copilot || state.copilot.status);
+}
+
+async function loadM365Status() {
+  try {
+    const st = await api("/api/m365/status");
+    state.m365Status = st;
+    applyM365TopbarStatus(st);
+  } catch {
+    const el = $("#stat-m365");
+    if (el) el.textContent = "Unavailable";
+    el?.parentElement?.classList.add("err");
+  }
+  refreshReviewM365Tile();
+}
+
+function renderReviewLoginHub(copilot) {
+  const m = state.m365Status || {};
+  return `<section class="card login-hub">
+      <h3>AI sign-in</h3>
+      <div class="login-hub-grid">
+        <article class="login-tile">
+          <div class="login-tile-head">
+            ${icon("github", "alex-icon--brand")}
+            <h4>GitHub Copilot CLI</h4>
+            <span id="github-auth-badge">${githubAuthBadge(copilot)}</span>
+          </div>
+          <div id="copilot-review-status">${copilotStatusHtml(copilot)}</div>
+          <div class="review-actions" style="margin-top:0.75rem">
+            <button type="button" class="btn secondary" id="btn-copilot-login">Login</button>
+            <button type="button" class="btn secondary" id="btn-copilot-check" ${state.copilot.loginCommand?.status === "running" ? "disabled" : ""}>Check</button>
+            <button type="button" class="btn secondary" id="btn-copilot-test-prompt" ${state.copilot.loginCommand?.status === "running" ? "disabled" : ""}>Test</button>
+          </div>
+          <div data-copilot-login style="margin-top:0.5rem"></div>
+        </article>
+        <article class="login-tile">
+          <div class="login-tile-head">
+            ${icon("microsoft", "alex-icon--brand")}
+            <h4>Microsoft 365 Copilot</h4>
+            <span id="m365-auth-badge">${m365AuthBadge(m)}</span>
+          </div>
+          <p id="review-m365-status" class="detail">${esc(m365ReviewStatusText(m))}</p>
+          <label class="detail login-compact-label">Application (client) ID
+            <input type="text" id="m365-setup-client-id" class="clarify-box" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
+          </label>
+          <label class="detail login-compact-label">Tenant
+            <input type="text" id="m365-setup-tenant-id" class="clarify-box" placeholder="common" autocomplete="off" value="common" />
+          </label>
+          <div class="review-actions" style="margin-top:0.5rem">
+            <button type="button" class="btn secondary" id="btn-m365-save-setup">Save</button>
+            <button type="button" class="btn secondary" id="btn-m365-connect">Sign in</button>
+            <button type="button" class="btn secondary" id="btn-m365-disconnect" hidden>Sign out</button>
+            <button type="button" class="btn secondary" id="btn-m365-reset-setup">Clear</button>
+          </div>
+          <div id="m365-login-panel" class="m365-login-panel" hidden>
+            <p class="detail">1. Open <a id="m365-login-link" href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer">microsoft.com/devicelogin</a></p>
+            <p class="detail">2. Code: <code id="m365-login-code" class="m365-user-code">—</code>
+              <button type="button" class="btn secondary" id="btn-m365-copy-code">Copy</button></p>
+            <p class="detail" id="m365-login-wait">Waiting for sign-in…</p>
+          </div>
+          <p id="m365-setup-hint" class="detail err" hidden></p>
+        </article>
+      </div>
+    </section>`;
+}
+
+function bindReviewLoginHub() {
+  const m365SaveSetupBtn = $("#btn-m365-save-setup");
+  if (m365SaveSetupBtn) {
+    m365SaveSetupBtn.onclick = async () => {
+      try {
+        await saveM365Setup();
+        setM365AuthMessage("Client ID saved. Click Sign in.");
+        refreshReviewM365Tile();
+      } catch (e) {
+        showM365SetupError(e.message);
+        setM365AuthMessage(e.message);
+      }
+    };
+  }
+  const m365ResetSetupBtn = $("#btn-m365-reset-setup");
+  if (m365ResetSetupBtn) {
+    m365ResetSetupBtn.onclick = async () => {
+      try {
+        await resetM365Setup();
+        setM365AuthMessage("M365 configuration cleared.");
+        refreshReviewM365Tile();
+      } catch (e) {
+        setM365AuthMessage(e.message);
+      }
+    };
+  }
+  const m365CopyCodeBtn = $("#btn-m365-copy-code");
+  if (m365CopyCodeBtn) {
+    m365CopyCodeBtn.onclick = async () => {
+      const code = $("#m365-login-code")?.textContent || "";
+      if (code && code !== "—") {
+        await navigator.clipboard.writeText(code);
+        const wait = $("#m365-login-wait");
+        if (wait) wait.textContent = "Code copied. Paste it at microsoft.com/devicelogin";
+      }
+    };
+  }
+  const m365ConnectBtn = $("#btn-m365-connect");
+  if (m365ConnectBtn) {
+    m365ConnectBtn.onclick = async () => {
+      try {
+        await signInM365();
+        refreshReviewM365Tile();
+      } catch (e) {
+        setM365AuthMessage(e.message);
+      }
+    };
+  }
+  const m365DisconnectBtn = $("#btn-m365-disconnect");
+  if (m365DisconnectBtn) {
+    m365DisconnectBtn.onclick = async () => {
+      try {
+        await disconnectM365();
+        setM365AuthMessage("Signed out of M365.");
+        refreshReviewM365Tile();
+      } catch (e) {
+        setM365AuthMessage(e.message);
+      }
+    };
+  }
+}
+
+function showM365LoginPanel(start) {
+  const panel = $("#m365-login-panel");
+  const link = $("#m365-login-link");
+  const codeEl = $("#m365-login-code");
+  const wait = $("#m365-login-wait");
+  const uri = start.verification_uri || "https://microsoft.com/devicelogin";
+  const code = start.user_code || "";
+  if (panel) panel.hidden = false;
+  if (link) {
+    link.href = uri;
+    link.textContent = uri.replace(/^https:\/\//, "");
+  }
+  if (codeEl) codeEl.textContent = code || "—";
+  if (wait) wait.textContent = "Waiting for you to sign in in the browser…";
+  state.m365LoginInProgress = true;
+  refreshReviewM365Tile();
+}
+
+function hideM365LoginPanel() {
+  const panel = $("#m365-login-panel");
+  if (panel) panel.hidden = true;
+  state.m365LoginInProgress = false;
+  refreshReviewM365Tile();
+}
+
+async function saveM365Setup() {
+  const clientId = $("#m365-setup-client-id")?.value?.trim() || "";
+  const tenantId = $("#m365-setup-tenant-id")?.value?.trim() || "common";
+  if (!clientId) throw new Error("Paste the Application (client) ID from Azure.");
+  await api("/api/m365/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, tenant_id: tenantId }),
+  });
+  const hint = $("#m365-setup-hint");
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = "";
+  }
+  await loadM365Status();
+}
+
+async function resetM365Setup() {
+  await api("/api/m365/setup/reset", { method: "POST" });
+  const inp = $("#m365-setup-client-id");
+  const tid = $("#m365-setup-tenant-id");
+  if (inp) inp.value = "";
+  if (tid) tid.value = "common";
+  await loadM365Status();
+}
+
+function showM365SetupError(message) {
+  const hint = $("#m365-setup-hint");
+  if (hint) {
+    hint.hidden = false;
+    hint.textContent = message;
+  }
+}
+
+async function signInM365() {
+  await loadM365Status();
+  if (state.m365Status?.setup_required) {
+    throw new Error("Save the M365 Client ID on the Review tab before signing in.");
+  }
+  const pollStatus = (msg) => setM365AuthMessage(msg);
+  pollStatus("Starting M365 sign-in…");
+  let start;
+  try {
+    start = await api("/api/m365/login/start", { method: "POST" });
+  } catch (e) {
+    showM365SetupError(e.message || String(e));
+    throw e;
+  }
+  showM365LoginPanel(start);
+  const uri = start.verification_uri || "https://microsoft.com/devicelogin";
+  const code = start.user_code || "";
+  pollStatus(`Open the link below and enter code ${code}`);
+  try {
+    window.open(uri, "_blank", "noopener,noreferrer");
+  } catch (_) {
+    /* popup blocked — user uses the visible link */
+  }
+  const intervalMs = Math.max(3, Number(start.interval || 5)) * 1000;
+  const deadline = Date.now() + Number(start.expires_in || 900) * 1000;
+  while (Date.now() < deadline) {
+    await sleepMs(intervalMs);
+    const poll = await api("/api/m365/login/poll", { method: "POST" });
+    if (poll.ok && poll.status === "completed") {
+      hideM365LoginPanel();
+      await loadM365Status();
+      pollStatus(`Signed in: ${poll.display_name || "M365 user"}.`);
+      refreshReviewM365Tile();
+      return poll;
+    }
+    if (poll.status === "failed") {
+      hideM365LoginPanel();
+      const msg = poll.error || "M365 sign-in failed.";
+      showM365SetupError(msg);
+      throw new Error(msg);
+    }
+    const wait = $("#m365-login-wait");
+    if (wait) wait.textContent = `Waiting… enter code ${code} at microsoft.com/devicelogin`;
+  }
+  hideM365LoginPanel();
+  throw new Error("Sign-in timed out. Click Sign in Microsoft 365 and try again.");
+}
+
+async function disconnectM365() {
+  await api("/api/m365/disconnect", { method: "POST" });
+  await loadM365Status();
 }
 
 function assistEnabled() {
   return featureOn("ollama_assist") || state.appConfig?.llm?.enabled;
-}
-
-function definitionAssistLabel() {
-  if (state.appConfig?.assist?.copilot_enabled) return "Resolve with Copilot";
-  return "Resolve with Ollama";
 }
 
 function featureOn(name) {
@@ -1527,7 +1851,8 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
       <label class="focus-span-2">Operation<textarea id="${scope}-focus-operation" class="focus-text focus-text--wide">${esc(row.operation || "")}</textarea></label>
       <label>Expected input<textarea id="${scope}-focus-expected_input" class="focus-text focus-text--io">${esc(row.expected_input || "")}</textarea></label>
       <label>Expected output<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io">${esc(row.expected_output || "")}</textarea></label>
-    </div>    <div class="focus-meta">
+    </div>
+    <div class="focus-meta">
       <label>Status
         <select id="${scope}-focus-review_status">
           ${["pending", "review_required", "approved", "blocked", "ready"].map((opt) => `<option value="${opt}" ${String(row.review_status) === opt ? "selected" : ""}>${opt}</option>`).join("")}
@@ -1546,7 +1871,7 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
       <button class="btn" id="${scope}-focus-save">Save row</button>
       ${
         assistEnabled()
-          ? `<button type="button" class="btn secondary" id="${scope}-focus-improve-io">Improve I/O (Ollama)</button>`
+          ? `<button type="button" class="btn secondary" id="${scope}-focus-improve-io">Improve I/O (AI)</button>`
           : ""
       }
       ${
@@ -2234,7 +2559,6 @@ async function renderLogicReview() {
   }
   await refreshJobSummary();
   try {
-    const copilot = await loadCopilotStatus().catch(() => null);
     const data = await api(`/api/review/logic-review?job_id=${state.jobId}`);
     state.bundle = {
       ...(state.bundle || {}),
@@ -2251,7 +2575,6 @@ async function renderLogicReview() {
       api(`/api/review/definition-inbox?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`),
       fetchWorkbench(state.exportLanguage),
     ]);
-    const aiLogic = (data.ai_assists?.logic_reviews || {})[item.logic_id];
     const queueByLogic = Object.fromEntries(((data.ai_queue?.logic_groups) || []).map((row) => [row.logic_id, row]));
     const queueItem = queueByLogic[item.logic_id] || {};
     const engineerNote = (data.ai_assists?.engineer_notes || {})[item.logic_id] || "";
@@ -2266,9 +2589,7 @@ async function renderLogicReview() {
         (it) =>
           `<button class="logic-pick ${it.logic_id === item.logic_id ? "active" : ""}" data-lid="${esc(
             it.logic_id
-          )}">${esc(it.control_name)} <span class="tag ${it.parse_status === "ok" ? "high" : "error"}">${esc(
-            it.parse_status
-          )}</span> <span class="tag ${queueStatusClass(queueByLogic[it.logic_id]?.queue_status)}">${esc(
+          )}">${esc(it.control_name)} <span class="tag ${queueStatusClass(queueByLogic[it.logic_id]?.queue_status)}">${esc(
             queueStatusLabel(queueByLogic[it.logic_id]?.queue_status)
           )}</span></button>`
       )
@@ -2316,12 +2637,20 @@ async function renderLogicReview() {
       ${item.unresolved_refs?.length ? `<p class="detail" style="margin-bottom:1rem"><b>Missing definitions:</b> ${esc(item.unresolved_refs.join(", "))}</p>` : ""}
       <section class="alex-primary-panel">
         <h3 class="alex-primary-panel__label">Logic structure</h3>
-        <p class="detail" style="margin-top:0">Deterministic parse — read only</p>
-        <div class="gate-diagram logic-tree-pre">${treeHtml}</div>
-        <code class="expr-block">${esc(item.expression)}</code>
+        <p class="detail" style="margin-top:0">Compare the parsed tree with the logic cut from the specification.</p>
+        <div class="logic-compare-grid">
+          <div>
+            <h4 class="logic-compare__label">Tree logic</h4>
+            <div class="gate-diagram logic-tree-pre">${treeHtml}</div>
+          </div>
+          <div>
+            <h4 class="logic-compare__label">Raw expression (from spec)</h4>
+            <pre class="expr-block expr-block--spec">${esc(logicSpecExpression(item))}</pre>
+          </div>
+        </div>
         ${parserNotes.length ? `<ul class="detail" style="margin-top:0.75rem">${parserNotes.map((n) => `<li>${n}</li>`).join("")}</ul>` : ""}
       </section>
-      <div class="alex-secondary-row">
+      <div class="alex-secondary-row alex-secondary-row--full">
         <section>
           <h4>Evidence &amp; definitions</h4>
           <details class="alex-ref-panel" style="margin-bottom:1rem">
@@ -2340,22 +2669,6 @@ async function renderLogicReview() {
           </div>
           ${(item.issues || []).length ? `<div style="margin-top:1rem"><h4>Linked issues</h4>${renderIssueList(item.issues || [])}</div>` : ""}
         </section>
-        <aside class="alex-side-panel">
-          <h4>Actions</h4>
-          <label class="detail">Draft language
-            <select id="logic-draft-language" style="display:block;margin-top:0.35rem;width:100%">
-              <option value="EN" ${state.exportLanguage === "EN" ? "selected" : ""}>English</option>
-              <option value="JP" ${state.exportLanguage === "JP" ? "selected" : ""}>Japanese</option>
-            </select>
-          </label>
-          <div class="review-actions" style="margin-top:0.75rem">
-            <button type="button" class="btn" id="btn-logic-copilot-draft" ${copilot?.installed ? "" : "disabled"}>AI Enhance</button>
-          </div>
-          <p id="logic-copilot-status" class="detail">${esc(aiLogic?.summary || (copilot?.installed ? "AI can rewrite the final row after definitions look trustworthy." : "Install Copilot CLI first."))}</p>
-          <div data-copilot-assist style="margin-top:0.5rem"></div>
-          <button type="button" class="btn" style="width:100%;margin-top:1rem" disabled title="Coming in Phase 3">Approve logic understanding</button>
-          <p class="detail" style="margin:0.5rem 0 0">Confirm trace and definitions before export.</p>
-        </aside>
       </div>
       <section class="workbook-workspace workbook-workspace--logic" style="margin-top:1rem">
         <h4>Final workbook rows (this logic group)</h4>
@@ -2370,10 +2683,6 @@ async function renderLogicReview() {
         renderLogicReview();
       };
     });
-    $("#logic-draft-language").onchange = (e) => {
-      state.exportLanguage = e.target.value;
-      renderLogicReview();
-    };
     content().querySelectorAll("[data-term-pick]").forEach((btn) => {
       btn.onclick = () => {
         state.inboxFocus[item.logic_id] = btn.dataset.termPick;
@@ -2384,7 +2693,6 @@ async function renderLogicReview() {
       const note = $("#definition-workbench-note")?.value || "";
       const current = inboxFocusTerm(inbox);
       const statusEl = document.querySelector("[data-definition-query-status]");
-      $("#logic-copilot-status").textContent = "Saving knowledge…";
       if (statusEl) statusEl.textContent = statusMessage;
       return api(`/api/review/logic-clarification?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
@@ -2392,46 +2700,23 @@ async function renderLogicReview() {
         body: JSON.stringify({ logic_id: item.logic_id, note, term: current?.term || "" }),
       });
     };
-    const applyBtn = $("#btn-definition-apply");
-    if (applyBtn) {
-      applyBtn.onclick = async () => {
-        try {
-          const res = await applyKnowledge("Updating knowledge…");
-          const n = res.candidates_updated || 0;
-          const prov = res.apply_provider || "";
-          if (res.apply_error) {
-            $("#logic-copilot-status").textContent = `Saved note; Ollama apply failed: ${res.apply_error}`;
-          } else if (prov === "ollama" && n > 0) {
-            $("#logic-copilot-status").textContent = `Ollama applied knowledge to ${n} test case(s).`;
-          } else if (prov === "none") {
-            $("#logic-copilot-status").textContent =
-              "Knowledge saved. Enable Ollama (config) then Update knowledge to apply to test cases.";
-          } else {
-            $("#logic-copilot-status").textContent =
-              n > 0 ? `Knowledge updated — ${n} test case(s) cleaned up.` : "Knowledge updated.";
-          }
-          renderLogicReview();
-        } catch (e) {
-          $("#logic-copilot-status").textContent = e.message;
-        }
-      };
-    }
     $("#logic-attachment-upload").onchange = async () => {
       const inp = $("#logic-attachment-upload");
       if (!inp.files.length) return;
       const fd = new FormData();
       for (const f of inp.files) fd.append("files", f);
-      $("#logic-copilot-status").textContent = "Uploading attachment(s)…";
+      const attachStatus = document.querySelector("[data-definition-query-status]");
+      if (attachStatus) attachStatus.textContent = "Uploading attachment(s)…";
       try {
         const res = await fetch(`/api/review/logic-attachments?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`, {
           method: "POST",
           body: fd,
         });
         if (!res.ok) throw new Error(await res.text());
-        $("#logic-copilot-status").textContent = "Attachment(s) saved.";
+        if (attachStatus) attachStatus.textContent = "Attachment(s) saved.";
         renderLogicReview();
       } catch (e) {
-        $("#logic-copilot-status").textContent = e.message;
+        if (attachStatus) attachStatus.textContent = e.message;
       }
       inp.value = "";
     };
@@ -2446,9 +2731,15 @@ async function renderLogicReview() {
           if (statusEl) statusEl.textContent = "Enter the missing meaning or pasted evidence first.";
           return;
         }
-        if (statusEl) statusEl.textContent = `${definitionAssistLabel()} is running…`;
+        const requireM365 = state.appConfig?.assist?.require_m365_login !== false;
+        if (requireM365 && !m365KnowledgeReady()) {
+          const msg = "Sign in to M365 on the Review tab first.";
+          if (statusEl) statusEl.textContent = msg;
+          return;
+        }
+        if (statusEl) statusEl.textContent = "Resolve with AI is running…";
         try {
-          await applyKnowledge("Saving note before AI assist…");
+          await applyKnowledge("Applying knowledge…");
           const res = await api(`/api/review/definition-query?job_id=${encodeURIComponent(state.jobId)}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2460,7 +2751,7 @@ async function renderLogicReview() {
             }),
           });
           if (res.provider === "ollama" && res.status === "completed") {
-            if (statusEl) statusEl.textContent = res.result?.answer || "Ollama updated this knowledge item.";
+            if (statusEl) statusEl.textContent = res.result?.answer || "AI updated this knowledge item.";
             await renderLogicReview();
             return;
           }
@@ -2468,23 +2759,12 @@ async function renderLogicReview() {
           state.copilot.assistCommand = res;
           refreshAssistContainers();
           await pollCopilotAssist(res.command_id, async () => {
-            if (statusEl) statusEl.textContent = "Copilot updated this knowledge item.";
+            if (statusEl) statusEl.textContent = "AI updated this knowledge item.";
             await renderLogicReview();
           });
         } catch (e) {
           if (statusEl) statusEl.textContent = e.message;
         }
-      };
-    }
-    const draftBtn = $("#btn-logic-copilot-draft");
-    if (draftBtn) {
-      draftBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        $("#logic-copilot-status").textContent = "Copilot is drafting this logic group…";
-        await startCopilotAssist(
-          { mode: "single", logic_id: item.logic_id, engineer_note: note, language: state.exportLanguage },
-          () => renderLogicReview()
-        );
       };
     }
     bindWorkbookFocusEditor(logicRows, state.exportLanguage, "logic", renderLogicReview, "#logic-row-save-status");
@@ -2493,8 +2773,18 @@ async function renderLogicReview() {
   }
 }
 
+function exportFormatCard(title, desc, iconName, url, lang) {
+  return `<article class="export-format-card">
+    <span class="export-format-card__check" aria-hidden="true">${icon("check-circle", "alex-icon--export")}</span>
+    ${icon(iconName, "alex-icon--export")}
+    <h4 class="export-format-card__title">${esc(title)}</h4>
+    <p class="export-format-card__desc">${esc(desc)}</p>
+    <button type="button" class="btn secondary btn-with-icon export-dl" data-url="${esc(url)}">${icon("download", "alex-icon--btn")} Download ${esc(lang)}</button>
+  </article>`;
+}
+
 function downloadLink(label, url) {
-  return `<button type="button" class="btn export-dl" data-url="${esc(url)}">${esc(label)}</button>`;
+  return `<button type="button" class="btn export-dl btn-with-icon" data-url="${esc(url)}">${icon("download", "alex-icon--btn")} ${esc(label)}</button>`;
 }
 
 async function triggerDownload(url) {
@@ -2525,7 +2815,6 @@ async function renderExport() {
   const moduleName = dash.module_name || "Module";
   const overlayCount = dash.copilot_overlay_count || 0;
   const summary = preview.summary || {};
-  const queue = dash.ai_queue || {};
   const q = encodeURIComponent(state.jobId);
   const rows = preview.rows || [];
   content().innerHTML = `<div class="alex-export-page">
@@ -2534,37 +2823,38 @@ async function renderExport() {
         <h2 class="alex-hero__title">Final TestSpec</h2>
         <p class="alex-hero__sub">${esc(moduleName)} · ${rows.length} test case(s) · ${esc(preview.language || state.exportLanguage)}</p>
       </div>
-      <div class="alex-hero__actions review-actions">
-        <label class="detail">Language
-          <select id="export-draft-language">
-            <option value="EN" ${state.exportLanguage === "EN" ? "selected" : ""}>English</option>
-            <option value="JP" ${state.exportLanguage === "JP" ? "selected" : ""}>Japanese</option>
-          </select>
-        </label>
-        <button class="btn secondary" id="btn-draft-all-logic">Run AI queue</button>
+      <div class="alex-hero__actions">
+        <button type="button" class="btn secondary btn-with-icon" id="btn-translate-workbook-jp" ${assistEnabled() ? "" : "disabled"} title="Experimental: translate all rows to Japanese via Ollama (slow)">${icon("translate", "alex-icon--btn")} Translate to Japanese</button>
       </div>
     </header>
-    ${renderMetaStats([
-      ["Rows ready", summary.rows_ready ?? 0],
-      ["Blocked", summary.rows_blocked ?? 0],
-      ["Needs review", summary.rows_needing_review ?? 0],
-      ["Missing terms", summary.missing_terms ?? 0],
-      ["AI overlays", overlayCount],
+    ${renderMetricCards([
+      ["Rows ready", summary.rows_ready ?? 0, "ok"],
+      ["Blocked", summary.rows_blocked ?? 0, "error"],
+      ["Needs review", summary.rows_needing_review ?? 0, "warn"],
+      ["Missing terms", summary.missing_terms ?? 0, "warn"],
+      ["AI overlays", overlayCount, "cyan"],
       ...(preview.validation_summary && featureOn("validator")
         ? [
-            ["I/O avg score", preview.validation_summary.avg_quality_score ?? "—"],
-            ["I/O failed rows", preview.validation_summary.rows_failed ?? 0],
+            ["I/O avg score", preview.validation_summary.avg_quality_score ?? "—", "cyan"],
+            ["I/O failed rows", preview.validation_summary.rows_failed ?? 0, "error"],
           ]
         : []),
     ])}
-    ${renderAiQueue(queue)}
     <div data-copilot-assist></div>
     <section class="workbook-workspace workbook-workspace--export">
       ${renderWorkbookTestcaseBar(rows, "export")}
       ${renderWorkbookFocusEditor(rows, { language: preview.language || state.exportLanguage, scope: "export" })}
       <p id="export-row-save-status" class="detail"></p>
       <div class="workbook-review-panel">
-        <h4 class="workbook-review-panel__title">Review all rows (${rows.length})</h4>
+        <div class="workbook-review-panel__head">
+          <h4 class="workbook-review-panel__title">Review all rows (${rows.length})</h4>
+          <label class="workbook-review-panel__lang detail">View language
+            <select id="export-draft-language">
+              <option value="EN" ${state.exportLanguage === "EN" ? "selected" : ""}>English</option>
+              <option value="JP" ${state.exportLanguage === "JP" ? "selected" : ""}>Japanese</option>
+            </select>
+          </label>
+        </div>
         <p class="detail workbook-review-panel__hint">Click a row to edit in the editor above. Hover cells for full text.</p>
         ${renderWorkbookTable(rows, {
           language: preview.language || state.exportLanguage,
@@ -2574,10 +2864,25 @@ async function renderExport() {
         })}
       </div>
     </section>
-    <div class="export-grid">
-      ${downloadLink(`TestSpec_${moduleName}_EN.xlsx`, `/api/export/customer-testspec-xlsx?job_id=${q}&language=EN`)}
-      ${downloadLink(`TestSpec_${moduleName}_JP.xlsx`, `/api/export/customer-testspec-xlsx?job_id=${q}&language=JP`)}
-    </div>
+    <section class="export-format-section">
+      <h3 class="section-kicker">Export format</h3>
+      <div class="export-format-grid">
+        ${exportFormatCard(
+          "Excel (.xlsx)",
+          "Full structured export with all sheets",
+          "excel",
+          `/api/export/customer-testspec-xlsx?job_id=${q}&language=EN`,
+          "EN"
+        )}
+        ${exportFormatCard(
+          "Excel (.xlsx)",
+          "Full structured export — Japanese workbook",
+          "excel",
+          `/api/export/customer-testspec-xlsx?job_id=${q}&language=JP`,
+          "JP"
+        )}
+      </div>
+    </section>
     <p id="export-status" class="detail"></p>
   </div>`;
   content().querySelectorAll(".export-dl").forEach((btn) => {
@@ -2595,13 +2900,32 @@ async function renderExport() {
     state.exportLanguage = e.target.value;
     renderExport();
   };
-  $("#btn-draft-all-logic").onclick = async () => {
-    $("#export-status").textContent = "Copilot is running the AI queue…";
-    await startCopilotAssist({ mode: "queued", language: state.exportLanguage }, () => {
-      $("#export-status").textContent = "Copilot finished the AI queue.";
-      renderExport();
-    });
-  };
+  const translateBtn = $("#btn-translate-workbook-jp");
+  if (translateBtn) {
+    translateBtn.onclick = async () => {
+      if (!assistEnabled()) {
+        $("#export-status").textContent = "Enable Ollama in config to translate.";
+        return;
+      }
+      translateBtn.disabled = true;
+      $("#export-status").textContent = `Translating ${rows.length} row(s) to Japanese via Ollama…`;
+      try {
+        const res = await api(
+          `/api/review/translate-workbook?job_id=${encodeURIComponent(state.jobId)}&target_language=JP`,
+          { method: "POST" }
+        );
+        const errCount = (res.errors || []).length;
+        $("#export-status").textContent = res.ok
+          ? `Translated ${res.rows_updated ?? 0} of ${res.rows_total ?? rows.length} row(s) to Japanese.${errCount ? ` ${errCount} failed.` : ""}`
+          : res.error || "Translation failed.";
+        state.exportLanguage = "JP";
+        await renderExport();
+      } catch (e) {
+        $("#export-status").textContent = e.message;
+        translateBtn.disabled = false;
+      }
+    };
+  }
   bindWorkbookEditors(rows, state.exportLanguage, "#export-row-save-status");
   bindWorkbookColumnResize("export-workbook");
   bindWorkbookTableRowFocus(rows, "export", "export-workbook", renderExport);
@@ -2618,9 +2942,8 @@ async function renderGuide() {
       <ol class="alex-guide-steps">
         <li><b>Review</b> — select files and run one analysis pass.</li>
         <li><b>Logic &amp; definitions</b> — confirm the logic tree, then resolve missing terms.</li>
-        <li><b>State machine</b> — validate states and transitions against source evidence.</li>
-        <li><b>AI queue</b> — draft rows only when definitions are trustworthy.</li>
-        <li><b>Final file</b> — edit workbook rows and export when ready.</li>
+        <li><b>Diagram graph</b> — validate states and transitions against source evidence.</li>
+        <li><b>Final file</b> — edit workbook rows, switch EN/JP view, and export when ready.</li>
       </ol>
     </section>
     ${renderGuideCard()}`;
@@ -2629,7 +2952,10 @@ async function renderGuide() {
 async function boot() {
   initNav();
   await loadAppConfig();
-  await loadOllamaStatus();
+  startServiceStatusPolling();
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshServiceStatusNow();
+  });
   setJobId(null);
   updateSelectedCount();
   await refreshJobSummary();

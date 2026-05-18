@@ -4,31 +4,40 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ALEX — Spec review</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=32" />
+  <link rel="stylesheet" href="/static/css/style.css?v=40" />
 </head>
 <body>
   <aside id="sidebar" aria-label="Workflow">
     <div class="sidebar-brand">
-      <img src="/static/img/toyota-watermark.png" alt="" class="sidebar-brand__mark" width="32" height="24" />
-      <h1>ALEX</h1>
+      <span class="sidebar-brand__logo" aria-hidden="true">AX</span>
+      <div class="sidebar-brand__text">
+        <h1>ALEX</h1>
+        <p class="sidebar-tagline">Spec review assistant</p>
+      </div>
     </div>
     <nav id="nav" aria-label="Main steps"></nav>
+    <footer class="sidebar-footer">
+      <span class="sidebar-version">ALEX · v2</span>
+    </footer>
   </aside>
   <div id="main">
     <header id="topbar" aria-label="Job summary">
-      <span class="stat">Job: <b id="job-id">—</b></span>
-      <span class="stat">Selected: <b id="stat-selected">0 / 0</b></span>
-      <span class="stat">Rows Ready: <b id="stat-ready">—</b></span>
-      <span class="stat err">Rows Blocked: <b id="stat-blocked">—</b></span>
-      <span class="stat warn">Missing Terms: <b id="stat-missing">—</b></span>
-      <span class="stat">Logic Groups: <b id="stat-logic">—</b></span>
-      <span class="stat" id="ollama-status-wrap" title="Local Ollama for AI assist">Ollama: <b id="stat-ollama">—</b></span>
+      <div class="topbar-stats">
+        <span class="stat">JOB <b id="job-id">—</b></span>
+        <span class="stat">Selected <b id="stat-selected">0 / 0</b></span>
+        <span class="stat stat--ok">Rows Ready <b id="stat-ready">—</b></span>
+        <span class="stat stat--blocked">Rows Blocked <b id="stat-blocked">—</b></span>
+        <span class="stat stat--warn">Missing Terms <b id="stat-missing">—</b></span>
+        <span class="stat stat--info">Logic Groups <b id="stat-logic">—</b></span>
+      </div>
+      <div class="topbar-right">
+        <span class="stat stat--service">M365 Copilot <b id="stat-m365">—</b></span>
+        <span class="stat stat--service">Ollama <b id="stat-ollama">—</b></span>
+      </div>
     </header>
     <main id="content" role="main"></main>
   </div>
-  <script src="/static/js/app.js?v=41"></script>
+  <script src="/static/js/icons.js?v=2"></script>
+  <script src="/static/js/app.js?v=58"></script>
 </body>
 </html>

@@ -4,5 +4,6 @@ __pycache__/
 output/_backups/
 web_data/uploads/*
 web_data/output/*
+web_data/m365/
 !web_data/uploads/.gitkeep
 !web_data/output/.gitkeep

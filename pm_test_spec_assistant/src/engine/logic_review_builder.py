@@ -360,6 +360,7 @@ def build_logic_review_items(
                     "can_generate_candidates", rb.get("can_generate_candidates", False)
                 ),
                 "expression": expression,
+                "raw_expression": str(lb.get("raw_expression") or "").strip(),
                 "tree_model": tree,
                 "tree_lines": render_tree_lines(tree) if tree.get("type") != "empty" else [],
                 "tree_nodes": flatten_ast_to_rows(tid, tree),

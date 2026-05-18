@@ -38,7 +38,10 @@ def app_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "test_generation": {"mode": str(test_gen.get("mode", "legacy"))},
         "export": {"strict": bool(export_cfg.get("strict", False))},
         "assist": {
-            "default_provider": str(assist.get("default_provider", "ollama")),
+            "default_provider": str(assist.get("default_provider", "m365")),
+            "require_m365_login": bool(assist.get("require_m365_login", True)),
+            "allow_ollama_fallback": bool(assist.get("allow_ollama_fallback", False)),
             "copilot_enabled": bool((assist.get("copilot") or {}).get("enabled", False)),
+            "m365_enabled": bool((assist.get("m365") or {}).get("enabled", False)),
         },
     }

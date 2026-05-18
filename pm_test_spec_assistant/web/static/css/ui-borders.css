@@ -9,7 +9,7 @@
 }
 
 #content {
-  border-left: var(--ui-border-width) solid var(--border-subtle);
+  border-left: none;
 }
 
 .card,
@@ -70,7 +70,7 @@
 
 .alex-io-pre {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.8125rem;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -185,11 +185,11 @@ table.data-grid.workbook-grid thead th {
 }
 
 table.data-grid.workbook-grid tbody tr:nth-child(even) td {
-  background: #fafbfc;
+  background: var(--surface-striped);
 }
 
 table.data-grid.workbook-grid tbody tr:hover td {
-  background: #f1f5f9;
+  background: var(--surface-hover);
 }
 
 .copilot-hint {
@@ -203,10 +203,11 @@ table.data-grid.workbook-grid tbody tr:hover td {
   margin-top: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);
-  border: 1px solid #f59e0b;
-  background: #fffbeb;
+  border: 1px solid var(--status-warn);
+  background: var(--status-warn-bg);
   font-size: var(--text-sm);
   line-height: 1.5;
+  color: var(--text-primary);
 }
 
 .copilot-policy-hint p {

@@ -55,16 +55,17 @@ from web.candidate_mutations import (
 from web.jobs import append_log, create_job, get_job, run_job_background, update_job
 from src.engine.condition_resolver import resolve_condition
 from src.engine.source_index import build_source_index
-from web.llm_assist import (
-    apply_engineer_knowledge_with_ollama,
-    assist_io_fill_prompt,
-    copilot_enabled,
+from web import m365_auth
+from web.ai_provider import (
+    apply_knowledge,
     default_provider,
-    llm_enabled_for_assist,
-    ollama_status,
-    resolve_definition_with_ollama,
-    run_assist,
+    export_m365_brief,
+    import_knowledge_patches,
+    improve_io,
+    provider_status,
 )
+from web.llm_assist import copilot_enabled, llm_enabled_for_assist, resolve_definition_with_ollama
+from web.review_translate import translate_workbook_with_ollama
 from web.review_workbench import (
     build_ai_queue,
     build_capability_summary,
@@ -171,6 +172,21 @@ class LogicClarificationRequest(BaseModel):
     logic_id: str
     note: str = ""
     term: str = ""
+    force_ollama: bool = False
+
+
+class ImportKnowledgeRequest(BaseModel):
+    logic_id: str
+    payload: str
+
+
+class M365SetupRequest(BaseModel):
+    client_id: str
+    tenant_id: str = "organizations"
+
+
+class M365ConnectRequest(BaseModel):
+    display_name: str = "M365 manual workflow"
 
 
 class DefinitionQueryRequest(BaseModel):
@@ -394,34 +410,6 @@ def _extract_engineer_definitions(
             add_def(focus, leftover)
 
     return defs
-
-
-def _apply_engineer_knowledge(
-    bundle: dict[str, Any],
-    logic_id: str,
-    note: str,
-    cfg: dict[str, Any],
-) -> dict[str, Any]:
-    from src.engine.engineer_rules import dedupe_logic_block_given
-
-    if llm_enabled_for_assist(cfg):
-        out = apply_engineer_knowledge_with_ollama(
-            bundle, cfg, logic_id=logic_id, engineer_note=note
-        )
-        if out.get("ok"):
-            return {
-                "provider": "ollama",
-                "candidates_updated": out.get("candidates_updated", 0),
-            }
-        return {
-            "provider": "ollama",
-            "candidates_updated": dedupe_logic_block_given(bundle, logic_id),
-            "error": out.get("error"),
-        }
-    return {
-        "provider": "none",
-        "candidates_updated": dedupe_logic_block_given(bundle, logic_id),
-    }
 
 
 def _missing_definition_terms(bundle: dict[str, Any], logic_id: str) -> list[str]:
@@ -923,12 +911,55 @@ def api_review_condition_resolve(
 @app.get("/api/llm/status")
 def api_llm_status() -> dict[str, Any]:
     cfg = _cfg()
+    st = provider_status(cfg)
     return {
-        "default_provider": default_provider(cfg),
+        **st,
         "enabled": llm_enabled_for_assist(cfg),
         "copilot_enabled": copilot_enabled(cfg),
-        "ollama": ollama_status(cfg),
     }
+
+
+@app.get("/api/m365/status")
+def api_m365_status() -> dict[str, Any]:
+    return m365_auth.m365_status(_cfg())
+
+
+@app.post("/api/m365/setup")
+def api_m365_setup(body: M365SetupRequest) -> dict[str, Any]:
+    try:
+        return m365_auth.save_local_registration(
+            _cfg(),
+            client_id=body.client_id.strip(),
+            tenant_id=body.tenant_id.strip() or "common",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/m365/setup/reset")
+def api_m365_setup_reset() -> dict[str, Any]:
+    return m365_auth.clear_local_registration(_cfg())
+
+
+@app.post("/api/m365/login/start")
+def api_m365_login_start() -> dict[str, Any]:
+    try:
+        return m365_auth.start_device_login(_cfg())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/m365/login/poll")
+def api_m365_login_poll() -> dict[str, Any]:
+    try:
+        return m365_auth.poll_device_login(_cfg())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/m365/disconnect")
+def api_m365_disconnect() -> dict[str, Any]:
+    return m365_auth.disconnect()
 
 
 class AssistImproveIoRequest(BaseModel):
@@ -947,8 +978,23 @@ def api_assist_improve_io(body: AssistImproveIoRequest, job_id: str) -> dict[str
         expected_output=body.expected_output,
         issues=body.issues,
     )
-    result = run_assist(cfg, prompt)
+    result = improve_io(
+        cfg,
+        candidate_id=body.candidate_id,
+        expected_input=body.expected_input,
+        expected_output=body.expected_output,
+        issues=body.issues,
+    )
     return {"job_id": job_id, "candidate_id": body.candidate_id, **result}
+
+
+@app.post("/api/review/translate-workbook")
+def api_translate_workbook(job_id: str, target_language: str = "JP") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    result = translate_workbook_with_ollama(bundle, _cfg(), target_language=target_language)
+    if result.get("ok"):
+        _save_bundle_to_job(job_id, bundle)
+    return {"job_id": job_id, **result}
 
 
 @app.post("/api/review/workbench-row")
@@ -1102,7 +1148,7 @@ def api_review_definition_query(body: DefinitionQueryRequest, job_id: str) -> di
             body.note, body.logic_id, body.term, missing_terms=missing
         ).items():
             engineer_defs[name] = meta
-        _apply_engineer_knowledge(bundle, body.logic_id, body.note, _cfg())
+        apply_knowledge(bundle, body.logic_id, body.note, _cfg(), force_ollama=False)
         _save_bundle_to_job(job_id, bundle)
         notes = dict(ai.get("engineer_notes") or {})
     cfg = _cfg()
@@ -1170,7 +1216,9 @@ def api_logic_clarification(body: LogicClarificationRequest, job_id: str) -> dic
     )
     for name, meta in extracted.items():
         engineer_defs[name] = meta
-    applied = _apply_engineer_knowledge(bundle, body.logic_id, body.note, _cfg())
+    applied = apply_knowledge(
+        bundle, body.logic_id, body.note, _cfg(), force_ollama=body.force_ollama
+    )
     _save_bundle_to_job(job_id, bundle)
     return {
         "ok": True,
@@ -1181,7 +1229,35 @@ def api_logic_clarification(body: LogicClarificationRequest, job_id: str) -> dic
         "candidates_updated": applied.get("candidates_updated", 0),
         "apply_provider": applied.get("provider"),
         "apply_error": applied.get("error"),
+        "apply_hint": applied.get("hint"),
+        "failures_remaining": applied.get("failures_remaining", 0),
+        "retries_used": applied.get("retries_used", 0),
     }
+
+
+@app.get("/api/review/m365-brief")
+def api_review_m365_brief(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    ai = bundle.get("ai_assists") or {}
+    note = str((ai.get("engineer_notes") or {}).get(logic_id) or "")
+    out = export_m365_brief(bundle, logic_id, note)
+    out_dir = OUTPUT / job_id / "m365_brief" / logic_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = out_dir / "brief.md"
+    brief_path.write_text(out["brief"], encoding="utf-8")
+    return {"job_id": job_id, "brief_path": str(brief_path), **out}
+
+
+@app.post("/api/review/import-knowledge-patches")
+def api_import_knowledge_patches(body: ImportKnowledgeRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    cfg = _cfg()
+    try:
+        result = import_knowledge_patches(bundle, body.logic_id, body.payload, cfg)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _save_bundle_to_job(job_id, bundle)
+    return {"job_id": job_id, "logic_id": body.logic_id, **result}
 
 
 @app.post("/api/review/logic-attachments")

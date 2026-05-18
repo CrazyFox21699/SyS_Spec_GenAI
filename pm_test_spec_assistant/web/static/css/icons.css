@@ -1,0 +1,198 @@
+/* ALEX icon sizing — font inherits Times New Roman from tokens */
+.alex-icon {
+  display: inline-block;
+  width: 1.125rem;
+  height: 1.125rem;
+  vertical-align: -0.2em;
+  flex-shrink: 0;
+}
+.alex-icon--nav {
+  width: 1.25rem;
+  height: 1.25rem;
+  vertical-align: middle;
+}
+.alex-icon--brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  vertical-align: middle;
+  padding: 0.35rem;
+  box-sizing: border-box;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+.alex-icon--brand svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.alex-icon--btn {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: -0.15em;
+  margin-right: 0.35rem;
+}
+.alex-icon--file {
+  width: 1.35rem;
+  height: 1.35rem;
+  color: var(--accent);
+}
+.alex-icon--export {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+.alex-icon--badge {
+  width: 0.875rem;
+  height: 0.875rem;
+  vertical-align: -0.1em;
+  margin-right: 0.25rem;
+}
+
+#sidebar nav button .nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  color: inherit;
+}
+#sidebar nav button.active .nav-icon {
+  color: var(--accent-hover);
+}
+
+.btn-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.btn-with-icon .alex-icon--btn {
+  margin-right: 0;
+}
+
+.login-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.login-tile-head h4 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.auth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.auth-badge--ok {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+  border: 1px solid rgba(63, 185, 80, 0.35);
+}
+.auth-badge--warn {
+  color: var(--status-warn);
+  background: var(--status-warn-bg);
+  border: 1px solid rgba(210, 153, 34, 0.35);
+}
+.auth-badge--err {
+  color: var(--status-error);
+  background: var(--status-error-bg);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+}
+
+.source-file-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.source-file-cell__body {
+  min-width: 0;
+}
+
+.export-format-section {
+  margin: var(--space-5) 0;
+}
+.section-kicker {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.export-format-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+.export-format-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  min-height: 10rem;
+}
+.export-format-card__check {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  color: var(--status-ok);
+}
+.export-format-card__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.export-format-card__desc {
+  margin: 0;
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.export-format-card .btn {
+  width: 100%;
+  margin-top: auto;
+  justify-content: center;
+}
+
+.sources-table-wrap .col-type select {
+  appearance: none;
+  background-image: none;
+  padding-right: 2rem;
+}
+.type-select-wrap {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  max-width: 12rem;
+}
+.type-select-wrap .alex-icon--chevron {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-muted);
+}
