@@ -1,8 +1,0 @@
-timing_constraints:
-- raw_text: exceeded
-  source: deterministic
-  confidence: medium
-  review_required: true
-  interpreted_as: exceeded
-  reason:
-  - Pattern matched; manual interpretation needed.

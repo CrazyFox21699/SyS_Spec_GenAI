@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.DS_Store
+output/*
+!output/.gitkeep
 output/_backups/
 web_data/uploads/*
 web_data/output/*
