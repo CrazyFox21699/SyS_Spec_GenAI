@@ -1,4 +1,4 @@
-"""Create, clone, and soft-delete engineer test candidates (additive MVP)."""
+"""Create, clone, and soft-delete test candidates."""
 
 from __future__ import annotations
 
@@ -134,10 +134,16 @@ def soft_delete_candidate(bundle: dict[str, Any], candidate_id: str) -> dict[str
     for cand in bundle.get("test_candidates") or []:
         if cand.get("id") != candidate_id:
             continue
-        source = str(cand.get("source") or "")
-        if source not in ("engineer_manual", "engineer_clone"):
-            raise ValueError("Only engineer-added test cases can be removed")
         cand["status"] = "removed"
         cand["review_status"] = "blocked"
+        cand["review_required"] = True
+        cand["removed_by"] = "engineer_review"
+        ai = bundle.setdefault("ai_assists", {})
+        overlays = ai.setdefault("candidate_overlays", {})
+        overlay = dict(overlays.get(candidate_id) or {})
+        overlay["removed"] = True
+        overlay["review_required"] = True
+        overlay["provider"] = overlay.get("provider") or "engineer_review"
+        overlays[candidate_id] = overlay
         return cand
     raise KeyError(f"Candidate not found: {candidate_id}")

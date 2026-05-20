@@ -1,6 +1,6 @@
 # Design Plan: PM Test Spec Assistant + Copilot in the Loop
 
-**Status:** Design-first (v0.3 target)  
+**Status:** Design-first (v0.3 target) — superseded in part by `ALEX_M365_REASONING_UPGRADE_PLAN.md` for M365 API integration and complex-spec reasoning.  
 **Audience:** Automotive system / test engineers  
 **Principle:** Deterministic tool owns structure and evidence; Copilot owns interpretation and gaps.
 

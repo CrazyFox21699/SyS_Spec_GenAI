@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ALEX Reasoning Hypothesis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["logic_id", "review_required", "claims", "open_questions", "testcase_patch_plan"],
+  "properties": {
+    "logic_id": { "type": "string", "minLength": 1 },
+    "provider": { "type": "string" },
+    "review_required": { "type": "boolean" },
+    "summary": { "type": "string" },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "citations"],
+        "properties": {
+          "claim": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string" },
+          "citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/citation" }
+          }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "reason"],
+        "properties": {
+          "question": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string" },
+          "citations": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/citation" }
+          }
+        }
+      }
+    },
+    "testcase_patch_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "citations"],
+        "properties": {
+          "action": { "enum": ["update_existing", "add_new", "retire", "needs_review"] },
+          "candidate_id": { "type": "string" },
+          "reason": { "type": "string" },
+          "given": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "signal": { "type": "string" },
+                "value": { "type": ["string", "number", "boolean"] }
+              }
+            }
+          },
+          "citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/citation" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        { "required": ["file", "row"] },
+        { "required": ["file", "paragraph"] },
+        { "required": ["diagram_asset"] },
+        { "required": ["candidate_id"] }
+      ],
+      "properties": {
+        "file": { "type": "string" },
+        "sheet": { "type": "string" },
+        "row": { "type": ["integer", "string"] },
+        "paragraph": { "type": ["integer", "string"] },
+        "diagram_asset": { "type": "string" },
+        "candidate_id": { "type": "string" }
+      }
+    }
+  }
+}

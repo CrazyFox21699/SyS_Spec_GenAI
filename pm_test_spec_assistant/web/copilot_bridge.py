@@ -1064,3 +1064,61 @@ def start_logic_assist_command(
 
     threading.Thread(target=worker, daemon=True).start()
     return get_command(cmd.command_id) or cmd
+
+
+def apply_knowledge_via_copilot(
+    bundle: dict[str, Any],
+    *,
+    logic_id: str,
+    engineer_note: str,
+    failure_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Apply knowledge patches via GitHub Copilot CLI (same JSON procedure as M365)."""
+    import json
+
+    from web.m365_brief import build_copilot_brief
+    from web.m365_copilot import parse_knowledge_response, strict_knowledge_procedure_prompt
+
+    auth_ok, auth_reason = _auth_probe_ok()
+    if not auth_ok:
+        return {"ok": False, "error": auth_reason or "Sign in to GitHub Copilot CLI on the Review tab."}
+    if not shutil.which(_COPILOT_PATH):
+        return {"ok": False, "error": "copilot CLI not found. Install with `npm install -g @github/copilot`."}
+
+    brief = build_copilot_brief(bundle, logic_id, engineer_note)
+    prompt = strict_knowledge_procedure_prompt(brief)
+    if failure_context:
+        prompt += "\n\nFix these logic_compliance failures:\n"
+        prompt += json.dumps(failure_context[:30], ensure_ascii=False)[:6000]
+
+    ctx_root = Path(__file__).resolve().parent.parent / "web_data" / "copilot_knowledge"
+    ctx_dir = ctx_root / logic_id
+    ctx_dir.mkdir(parents=True, exist_ok=True)
+    (ctx_dir / "brief.md").write_text(brief, encoding="utf-8")
+    (ctx_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+
+    try:
+        raw = _run_copilot_prompt(ctx_dir=ctx_dir, prompt_text=prompt, command_id=None)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    patches, definition_updates = parse_knowledge_response(raw)
+    if definition_updates:
+        eng = bundle.setdefault("ai_assists", {}).setdefault("engineer_definitions", {})
+        for row in definition_updates:
+            nm = str(row.get("name") or "").strip()
+            df = str(row.get("definition") or "").strip()
+            if nm and df:
+                eng[nm] = {
+                    "name": nm,
+                    "definition": df,
+                    "logic_id": logic_id,
+                    "source": "copilot_cli",
+                }
+    return {
+        "ok": True,
+        "patches": patches,
+        "definition_updates": definition_updates,
+        "context_dir": str(ctx_dir),
+        "reply_preview": raw[:500],
+    }

@@ -698,6 +698,9 @@ def run_analyze(
         ingest_skipped=ingest_skipped,
     )
     ui_bundle["spec_understanding"] = spec_understanding
+    if feature_enabled(cfg, "document_map", default=True):
+        from src.engine.document_graph_builder import build_document_graph
+        ui_bundle["document_graph"] = build_document_graph(ui_bundle)
     ui_bundle["summary"] = {
         "files_selected": len(classified_rows),
         "signals": len(signals),
@@ -714,6 +717,11 @@ def run_analyze(
         "understanding_percent": spec_understanding["overall"]["understanding_percent"],
         "understanding_status": spec_understanding["overall"]["status"],
         "evidence_refs_total": evidence_registry.get("total", 0),
+        "document_graph_nodes": (ui_bundle.get("document_graph") or {}).get("summary", {}).get("node_count", 0),
+        "document_graph_edges": (
+            (ui_bundle.get("document_graph") or {}).get("summary", {}).get("edge_count", 0)
+            + (ui_bundle.get("document_graph") or {}).get("summary", {}).get("user_edge_count", 0)
+        ),
     }
     dump_yaml(output_dir / "ui_bundle.yaml", ui_bundle)
     try:

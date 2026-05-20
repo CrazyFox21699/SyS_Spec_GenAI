@@ -33,6 +33,7 @@ class ParsedTwoColumnTable:
     rows: list[TwoColumnRow] = field(default_factory=list)
     table_kind: str = "logic"  # logic | alias | constant | definition
     source: dict[str, Any] = field(default_factory=dict)
+    visual_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _dedupe_row_cells(cells: list[str]) -> list[str]:
@@ -199,15 +200,20 @@ def _parse_nested_logic_tables(
 ) -> list[ParsedTwoColumnTable]:
     """Multi-column Condition columns represent nesting depth (common in Word merges)."""
     by_control: dict[str, list[list[str]]] = {}
+    visual_by_control: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
 
-    for cells in body:
+    for ri, cells in enumerate(body, start=2):
         cells = _dedupe_row_cells(cells)
         while len(cells) <= max([ctrl_idx] + cond_indices):
             cells.append("")
         ctrl = cells[ctrl_idx] if ctrl_idx < len(cells) else ""
         if not ctrl:
             continue
+        visual_cells = [c for c in cells if c]
+        if ctrl not in visual_by_control:
+            visual_by_control[ctrl] = []
+        visual_by_control[ctrl].append({"row_no": ri, "cells": visual_cells})
         path: list[str] = []
         if len(cond_indices) == 1 and cond_indices[0] < len(cells):
             raw = cells[cond_indices[0]]
@@ -262,6 +268,7 @@ def _parse_nested_logic_tables(
                 rows=rows,
                 table_kind="logic",
                 source=source,
+                visual_rows=visual_by_control.get(ctrl, []),
             )
         )
     return tables
@@ -276,6 +283,7 @@ def tables_to_dicts(tables: list[ParsedTwoColumnTable]) -> list[dict[str, Any]]:
                 "control_name": t.control_name,
                 "table_kind": t.table_kind,
                 "source": t.source,
+                "visual_rows": t.visual_rows,
                 "rows": [
                     {
                         "row_no": r.row_no,

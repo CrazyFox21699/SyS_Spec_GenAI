@@ -9,6 +9,7 @@ from src.engine.logic_review_builder import build_logic_review_items
 from src.engine.evidence_registry import build_evidence_registry
 from src.engine.spec_understanding_report import build_spec_understanding_report
 from src.engine.use_case_text import sanitize_candidates_use_cases
+from src.engine.document_graph_builder import build_document_graph
 
 
 def _engineer_definitions(bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -111,11 +112,26 @@ def ensure_evidence_registry(bundle: dict[str, Any]) -> dict[str, Any]:
     return bundle
 
 
+def ensure_document_graph(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the document graph (preserving user-defined edges)."""
+    graph = build_document_graph(bundle)
+    bundle = dict(bundle)
+    bundle["document_graph"] = graph
+    summary = dict(bundle.get("summary") or {})
+    summary["document_graph_nodes"] = graph["summary"].get("node_count", 0)
+    summary["document_graph_edges"] = (
+        graph["summary"].get("edge_count", 0) + graph["summary"].get("user_edge_count", 0)
+    )
+    bundle["summary"] = summary
+    return bundle
+
+
 def ensure_enriched_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     bundle = ensure_logic_review_items(bundle)
     bundle = sanitize_candidates_use_cases(bundle)
     bundle = ensure_spec_understanding(bundle)
     bundle = ensure_evidence_registry(bundle)
+    bundle = ensure_document_graph(bundle)
     return bundle
 
 

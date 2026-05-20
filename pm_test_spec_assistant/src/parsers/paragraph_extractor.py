@@ -9,6 +9,44 @@ from src.engine.footnote_conditional import extract_footnote_lines_from_paragrap
 
 FOOTNOTE_MARK_RE = re.compile(r"\(\*(\d+)\)")
 FOOTNOTE_LINE_RE = re.compile(r"^\(\*(\d+)\)\s+(.+)$", re.I)
+_CROSS_REF_FILENAME_RE = re.compile(r"([A-Za-z0-9_\-]+\.(?:docx|xlsx|xlsm|xls|pdf|csv|md|txt))", re.I)
+_CROSS_REF_SHEET_RE = re.compile(
+    r"(?:see|refer(?:\s+to)?|in|on)\s+sheet\s+[\"']?([A-Za-z][A-Za-z0-9_\-]{2,})[\"']?",
+    re.I,
+)
+_CROSS_REF_REFER_RE = re.compile(
+    r"refer(?:\s+to)?\s+(?:logic|lower|upper|condition)?\s*([A-Za-z][A-Za-z0-9_\- ]{2,})",
+    re.I,
+)
+
+
+def _extract_cross_refs(text: str) -> list[dict[str, Any]]:
+    """Detect file/sheet/refer-to stubs in a paragraph or footnote body."""
+    if not text:
+        return []
+    refs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(kind: str, value: str) -> None:
+        value = value.strip().strip(".,;:")
+        if not value or len(value) < 3:
+            return
+        key = (kind, value.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append({"type": kind, "text": value, "resolved_file": None, "resolved_node": None})
+
+    for match in _CROSS_REF_FILENAME_RE.finditer(text):
+        _add("file", match.group(1))
+    for match in _CROSS_REF_SHEET_RE.finditer(text):
+        _add("sheet", match.group(1))
+    for match in _CROSS_REF_REFER_RE.finditer(text):
+        candidate = match.group(1).strip()
+        # Avoid duplicating filenames already captured above.
+        if not any(candidate.lower() in r["text"].lower() for r in refs):
+            _add("condition_group", candidate)
+    return refs
 CODE_DEF_LINE_RE = re.compile(
     r"^([A-Z][A-Z0-9_]+)\s*:\s*(.+)$",
 )
@@ -61,6 +99,7 @@ def extract_from_paragraphs(paragraphs: list[str], source_file: str) -> dict[str
                     "parsed_conditional": parsed_cond,
                     "source": {**src, "kind": "footnote_paragraph"},
                     "review_required": parsed_cond is None,
+                    "cross_refs": _extract_cross_refs(body),
                 }
             )
             continue
@@ -195,11 +234,17 @@ def link_footnotes(
                 if name in def_by_name:
                     definition = def_by_name[name]
                     break
+        body_for_refs = definition or ref.get("raw_text") or ""
+        existing_refs = ref.get("cross_refs") or []
+        merged_cross_refs = list(existing_refs)
+        if not merged_cross_refs:
+            merged_cross_refs = _extract_cross_refs(body_for_refs)
         out.append(
             {
                 **ref,
                 "definition": definition,
                 "review_required": definition is None,
+                "cross_refs": merged_cross_refs,
             }
         )
     return out

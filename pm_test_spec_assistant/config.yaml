@@ -14,6 +14,8 @@ features:
   ollama_assist: true
   atom_model: true
   understanding_gate: true
+  document_map: true
+  library_map: true
 test_generation:
   mode: legacy
   coverage: mcdc
@@ -29,8 +31,8 @@ export:
   strict: false
 assist:
   default_provider: m365
-  require_m365_login: true
-  allow_ollama_fallback: false
+  require_m365_login: false
+  allow_ollama_fallback: true
   validation_retries: 1
   knowledge_batch_size: 15
   orchestrator: deterministic
@@ -45,7 +47,7 @@ assist:
     tenant_id: common
     timezone: Asia/Tokyo
   copilot:
-    enabled: false
+    enabled: true
     require_preview: true
 classification:
   state_name_patterns:

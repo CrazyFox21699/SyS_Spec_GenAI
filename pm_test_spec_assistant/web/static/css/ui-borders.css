@@ -110,7 +110,7 @@
 }
 
 .workbook-grid [data-col="review_status"] {
-  min-width: 6.75rem;
+  min-width: 8.75rem;
 }
 
 .workbook-grid [data-col="engineer_confirmation_required"] {

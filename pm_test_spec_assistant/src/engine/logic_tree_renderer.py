@@ -9,9 +9,18 @@ def render_tree_lines(node: dict[str, Any], prefix: str = "", is_last: bool = Tr
     """ASCII tree lines for UI."""
     connector = "└── " if is_last else "├── "
     t = node.get("type", "?")
-    label = node.get("name") or t
+    label = node.get("name") or node.get("raw_text") or t
     if t == "condition":
         label = node.get("name", "")
+    elif t in ("signal_condition", "boolean_predicate"):
+        sig = str(node.get("signal") or "").strip()
+        op = str(node.get("operator") or "").strip()
+        val = str(node.get("value") or "").strip()
+        label = sig if t == "boolean_predicate" else " ".join(p for p in (sig, op, val) if p)
+    elif t == "timing_condition":
+        label = node.get("raw_text") or label
+    elif t == "opaque":
+        label = node.get("raw_text") or label
     lines = [f"{prefix}{connector}{label}"]
     children = node.get("children") or []
     ext = "    " if is_last else "│   "
@@ -34,6 +43,8 @@ def _node_css_class(node: dict[str, Any]) -> str:
         return "logic-unresolved"
     if node.get("source_type") == "llm_generated":
         return "logic-llm"
+    if t == "boolean_predicate":
+        return "logic-ref"
     return "logic-ref"
 
 
@@ -54,9 +65,9 @@ def tree_view_data(
             "depth": depth,
             "node_type": node.get("type"),
             "operator": node.get("type") if node.get("type") in ("AND", "OR", "NOT") else "",
-            "condition_name": node.get("name") if node.get("type") == "condition" else "",
+            "condition_name": node.get("name") if node.get("type") == "condition" else node.get("signal", ""),
             "raw_text": node.get("raw_text", ""),
-            "normalized_text": node.get("name") or node.get("raw_text", ""),
+            "normalized_text": node.get("name") or node.get("signal") or node.get("raw_text", ""),
             "source": node.get("source"),
             "parser_reason": node.get("parser_reason", ""),
             "confidence": node.get("confidence", "medium"),

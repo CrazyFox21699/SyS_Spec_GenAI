@@ -121,15 +121,18 @@ brew install tesseract
 python run_web.py
 ```
 
-Open **http://127.0.0.1:8765** (hard-refresh if the UI looks stale after updates).
+Open **http://127.0.0.1:8765** (hard-refresh if the UI looks stale after updates). The app shows a short Toyota welcome splash once on initial page load, using the flat borderless logo at `web/static/img/toyota-logo-flat.png`, then fades into the normal workflow.
 
 ### Web tabs (current)
 
 | Tab | Purpose |
 |-----|---------|
-| **1. Review** | Upload / classify files, login Copilot, run one analysis pass, inspect final workbook summary, AI queue, and capability summary |
-| **2. Logic & Definitions** | Per logic group: dependency trace, definition inbox, engineer clarification, attachments, and final workbook rows |
-| **3. Final File** | Review/edit the final `System Test Spec` shape and export EN or JP workbook |
+| **1. Review** | Upload / classify files, sign in to M365 and/or GitHub Copilot CLI, then run one analysis pass |
+| **2. Logic & Definitions** | Per logic group: compare Tree vs Raw expression, inspect collapsed source evidence, resolve definitions, select AI provider, and review affected workbook rows. Large jobs use compact dropdown selectors for logic groups, definition terms, and test cases instead of hundreds of chips |
+| **3. Diagram Graph** | Validate detected states/transitions and source evidence when the spec includes state-machine or diagram content |
+| **4. Library** | Polarion-style trace canvas. Pick a local folder as the library root, then build a focus + spokes diagram: drop a file from Finder/Explorer onto a slot (auto-copied into the library folder) **or** click an empty slot to browse the folder and pick. Each row carries a free-form relationship label (e.g. `Satisfies`, `Validated By`, `Implemented By`); `+` adds another slot to a row, `+ Add relationship` adds a new row |
+| **5. Final File** | Review/edit the final `System Test Spec` shape and export EN or JP workbook |
+| **6. Guide** | In-app operator manual: workflow, AI provider usage, Resolve with AI, status meanings, and troubleshooting |
 
 ### Quick start (web)
 
@@ -137,9 +140,12 @@ Open **http://127.0.0.1:8765** (hard-refresh if the UI looks stale after updates
 2. Click **Load sample package** (copies `pm_sample_inputs` into `web_data/uploads/`) or **Upload** your files.
 3. Check the spec file(s) and set **Type** if the automatic label is wrong.
 4. Click **Review specification**.
-5. When progress completes, inspect **Final TestSpec draft**, **AI queue**, and **What the tool currently understands**.
-6. Fix missing terms in **Logic & Definitions**.
-7. Review/edit the workbook in **Final File**, then export.
+5. When progress completes, open **Logic & Definitions**.
+6. Fix missing terms in **Logic & Definitions**. Use **AI provider** = `Auto`, `M365`, `GitHub Copilot CLI`, or `Ollama`, then click **Resolve with AI**.
+7. If needed, open collapsed **source table / detected context** beside the Logic Tree to verify the original table or nearby state-machine context.
+8. Open **Library** (Tab 4) and paste an absolute path to your local spec folder. Drag a file from Finder/Explorer onto the focus card to set the centre item, then drop more files onto each spoke slot. Click the relationship label to rename it (free-form: `Satisfies`, `Validated By`, etc.); use the `+` at the end of a row to add another slot, or **+ Add relationship** to start a new row. Slots accept OS drops (file is copied into the library folder) or clicks (browse the local folder and pick) — no other info is stored.
+9. Review/edit the workbook in **Final File**. Generated, cloned, and manual test cases can be soft-deleted from the focused test case editor before export.
+10. Use **Guide** when you need the in-app workflow, provider notes, or troubleshooting.
 
 ### Top bar
 
@@ -153,13 +159,22 @@ Open **http://127.0.0.1:8765** (hard-refresh if the UI looks stale after updates
 |----------|----------|
 | `web_data/uploads/` | Uploaded / sample-copied files |
 | `web_data/output/analysis_YYYYMMDD_HHMMSS_<id>/` | One folder per review run |
+| `web_data/output/<job_id>/reasoning/<logic_id>/session.json` | Per-logic reasoning session: prompt/evidence hashes, turns, open questions, hypotheses |
+| `web_data/m365/session.json` | Local M365 OAuth session (gitignored); access tokens refresh automatically until Microsoft requires sign-in again |
 | Browser `localStorage` | Last `job_id` (reloads summary from disk on startup) |
 
-### Copilot + OCR guardrails
+### AI providers + OCR guardrails
 
 - The deterministic parser still owns AND/OR/NOT structure.
-- Copilot rewrites only the final workbook rows and asks follow-up questions when evidence is not enough.
-- Device login and runtime check are shown separately in the UI.
+- **Resolve with AI** uses the selected provider:
+  - `Auto`: try M365, then GitHub Copilot CLI, then Ollama when enabled/reachable.
+  - `M365`: Microsoft Graph Copilot chat; requires Azure app login and Copilot license.
+  - `GitHub Copilot CLI`: local CLI fallback; `AUTH OK` means the machine has an existing Copilot CLI login.
+  - `Ollama`: offline/experimental fallback, not the primary complex-logic path.
+- AI patches are validated before they become trusted workbook rows. Evidence gaps should become review-required/open questions, not silent export-ready changes.
+- Reasoning sessions are stored per logic group so future Copilot/M365 turns can be audited by prompt hash and evidence hash. AI hypotheses now pass through a cited-claim guardrail (`schemas/reasoning_hypothesis.schema.json`): executable claims and testcase patch plans need citations, otherwise they are kept review-required/open-question instead of silently trusted.
+- Testcase reconciliation is tracked for every knowledge apply. Provider patches are classified as `update_existing`, `add_new`, `retire`, or `needs_review`, with citation status and a summary saved under `ai_assists.knowledge_apply[logic_id].reconciliation`.
+- M365 device-code login is persistent on this machine. Sign in again only after Sign out/Clear, deleted `web_data/m365`, token expiry, or revoked consent.
 - Local OCR reads visible text from image attachments, embedded Word media, and embedded PDF page images.
 - OCR text is still review-required; shape/layout semantics are not treated as fully trusted logic.
 
@@ -211,6 +226,14 @@ Specialized path for **Word two-column control tables** (Logic | Condition):
 | `src/engine/two_column_logic_parser.py` | Footnotes, aliases, `parse_table_to_logic_block` |
 
 Per control output includes: `parse_status` (`ok` \| `partial` \| `failed`), expression string, AST, `parser_reason`, source references.
+
+Gate-spine / boolean flag notes:
+
+- Raw expression can be readable even when some tree leaves need review.
+- Signal-only predicates such as `PWR_REQ_VALID`, `VEHICLE_SAFE`, or `NORMAL_ROUTE` are treated as boolean predicates (`== 1`) when safe.
+- Remaining `opaque` leaves should show raw text and keep review status honest.
+- Logic Review keeps source evidence collapsed by default; open **Show source table / detected context** only when you need to compare against the original table or state-machine evidence.
+- For Word/Excel control tables, ALEX carries a visual source snapshot (table-like preview from original cells) beside the Logic Tree instead of showing long repeated row locators by default.
 
 Excel transition detection remains **heuristic** (state-like tokens in rows).
 
@@ -385,4 +408,9 @@ This tree is **self-contained**. It does not modify `power-spec-kit/`, `power-mo
 
 ## Further reading
 
-- `docs/DESIGN_PLAN_COPILOT_LOOP.md` — intended engineer + IDE assistant workflow (partially reflected in UI copy and gap prompts).
+| Document | Purpose |
+|----------|---------|
+| `docs/ALEX_M365_REASONING_UPGRADE_PLAN.md` | **Primary roadmap** — M365 co-reasoning for complex customer logic, auth tiers, phased delivery |
+| `docs/DESIGN_PLAN_COPILOT_LOOP.md` | Original Copilot-in-loop UX (clipboard / IDE era) |
+| `docs/COPILOT_PROMPTS.md` | Standard prompt templates per issue type |
+| `docs/TEST_SPEC_IO_FORMAT.md` | Expected input/output column format |

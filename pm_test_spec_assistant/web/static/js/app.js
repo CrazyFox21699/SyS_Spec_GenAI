@@ -5,8 +5,9 @@ const PAGES = [
   { id: "review", step: "1", label: "Review", icon: "review" },
   { id: "logic-review", step: "2", label: "Logic & Definitions", icon: "logic" },
   { id: "diagram-graph", step: "3", label: "Diagram Graph", icon: "diagram" },
-  { id: "export", step: "4", label: "Final File", icon: "export" },
-  { id: "guide", step: "5", label: "Guide", icon: "guide" },
+  { id: "library", step: "4", label: "Library", icon: "library" },
+  { id: "export", step: "5", label: "Final File", icon: "export" },
+  { id: "guide", step: "6", label: "Guide", icon: "guide" },
 ];
 
 const FILE_TYPE_OPTIONS = [
@@ -33,6 +34,24 @@ let state = {
     state: null,
     edgeKey: null,
     match: null,
+  },
+  library: {
+    root: "",
+    rootExists: false,
+    rootInputDraft: "",
+    rootError: null,
+    focusId: "",
+    items: [],
+    links: [],
+    pickerOpenItemId: null,   // when set: file picker modal targets this item
+    pickerCwd: "",
+    pickerListing: null,
+    pickerLoading: false,
+    pickerError: null,
+    addRowMode: false,        // toggles inline "+ Add relationship" form
+    addRowDraft: "",
+    busy: false,
+    error: null,
   },
   serviceStatusTimer: null,
   copilot: {
@@ -112,6 +131,21 @@ function formatSourceReadable(src) {
   }
 }
 
+function compactSourceLabel(src) {
+  if (!src) return "";
+  if (typeof src === "string") return src.length > 42 ? `${src.slice(0, 39)}…` : src;
+  if (typeof src !== "object") return String(src);
+  const file = src.file ? basename(src.file) : "";
+  const where = [];
+  if (src.sheet) where.push(src.sheet);
+  if (src.section) where.push(src.section);
+  if (src.row != null) where.push(`r${src.row}`);
+  if (src.paragraph != null) where.push(`¶${src.paragraph}`);
+  if (src.page != null) where.push(`p${src.page}`);
+  if (file && where.length) return `${file} › ${where.join(" · ")}`;
+  return file || where.join(" · ") || formatSourceReadable(src);
+}
+
 function renderMetaStats(items, { compact = false } = {}) {
   const cls = compact ? "alex-meta-stats is-compact" : "alex-meta-stats";
   return `<dl class="${cls}">${items
@@ -172,6 +206,38 @@ function renderSourceCards(sources) {
   return `<div class="alex-evidence-stack">${sources
     .map((s) => renderSourceCardFromObject(s))
     .join("")}</div>`;
+}
+
+function renderVisualSourcePreview(visualSource, tableRows = []) {
+  const rows = (visualSource?.rows || []).filter((row) => (row.cells || []).some((cell) => String(cell || "").trim()));
+  if (!rows.length && !tableRows.length) {
+    return `<p class="detail">No source table snapshot available yet.</p>`;
+  }
+  const source = visualSource?.source || {};
+  const title = visualSource?.title || source.control || "Source table";
+  const loc = compactSourceLabel(source) || formatSourceReadable(source);
+  const bodyRows = rows.length
+    ? rows
+    : tableRows.map((row) => ({ row_no: row[0], cells: [row[1]] }));
+  return `<div class="alex-source-preview">
+    <div class="alex-source-preview__head">
+      <b>${esc(title)}</b>
+      ${loc ? `<span class="detail">${esc(loc)}</span>` : ""}
+    </div>
+    <div class="grid-wrap">
+      <table class="data-grid alex-table alex-source-preview__table">
+        <tbody>${bodyRows
+          .map((row) => {
+            const cells = row.cells || [];
+            return `<tr>
+              <th class="col-no">${esc(row.row_no ?? "")}</th>
+              ${cells.map((cell) => `<td>${esc(cell)}</td>`).join("")}
+            </tr>`;
+          })
+          .join("")}</tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 
@@ -704,8 +770,121 @@ function renderCapabilitySummary(_capability) {
   return "";
 }
 
+function guideSection(title, body, id = "") {
+  const attr = id ? ` id="${esc(id)}"` : "";
+  return `<section class="card alex-guide-section"${attr}>
+    <h3>${esc(title)}</h3>
+    ${body}
+  </section>`;
+}
+
+function renderGuideWorkflow() {
+  return guideSection(
+    "Start here (5 minutes)",
+    `<ol class="alex-guide-steps">
+      <li><b>Review</b> — upload or load samples, select files, sign in to AI providers, then run <b>Review specification</b>.</li>
+      <li><b>Logic &amp; Definitions</b> — read Raw vs Tree, resolve missing definitions, then apply knowledge with AI.</li>
+      <li><b>Diagram Graph</b> — check states/transitions only when your spec has state-machine evidence.</li>
+      <li><b>Final File</b> — review/edit workbook rows, switch EN/JP view, and export.</li>
+    </ol>`
+  );
+}
+
+function renderGuideReviewTab() {
+  return guideSection(
+    "Tab 1 — Review",
+    `<p class="detail">Use this tab to prepare input and authentication. Re-run analysis after changing source files.</p>
+    <ol class="alex-guide-steps">
+      <li>Upload files or use <b>Load sample package</b>.</li>
+      <li>Tick only the files for the current job and fix the file type if auto-detection is wrong.</li>
+      <li>Sign in: M365 uses Client ID + Tenant + device code; GitHub Copilot CLI uses its own login.</li>
+      <li>Click <b>Review specification</b>. When the job finishes, continue to Logic &amp; Definitions.</li>
+    </ol>
+    <p class="detail"><b>M365 tip:</b> click Sign in once, open <code>login.microsoft.com/device</code>, type the code on this Mac, and wait for ALEX to complete polling.</p>`,
+    "guide-review"
+  );
+}
+
+function renderGuideLogicTab() {
+  return guideSection(
+    "Tab 2 — Logic & Definitions",
+    `<p class="detail">One logic group is one control. Fix the logic group first, then review the affected test cases.</p>
+    <div class="grid-wrap"><table class="data-grid alex-table">
+      <thead><tr><th>Panel</th><th>How to use it</th></tr></thead>
+      <tbody>
+        <tr><td><b>Logic structure</b></td><td>Raw expression is what ALEX recovered from the spec. Tree logic is the parsed AST. If Tree is partial, use Raw + source evidence to guide AI.</td></tr>
+        <tr><td><b>Source table / state context</b></td><td>Collapsed by default. Open it only when you need to verify the original logic table or related state-machine transition.</td></tr>
+        <tr><td><b>Dependency trace</b></td><td>Shows terms and whether ALEX found a trusted definition.</td></tr>
+        <tr><td><b>Knowledge workbench</b></td><td>Choose provider: Auto, M365, GitHub Copilot CLI, or Ollama. Write engineer knowledge, then click Resolve with AI.</td></tr>
+        <tr><td><b>Workbook rows</b></td><td>Review the final Given/Then text for this logic group and edit when needed.</td></tr>
+      </tbody>
+    </table></div>`,
+    "guide-logic"
+  );
+}
+
+function renderGuideProviders() {
+  return guideSection(
+    "AI providers",
+    `<div class="grid-wrap"><table class="data-grid alex-table">
+      <thead><tr><th>Provider</th><th>Use when</th><th>Prepare</th></tr></thead>
+      <tbody>
+        <tr><td><b>Auto</b></td><td>Default path for Resolve with AI. Tries M365, then GitHub Copilot CLI, then Ollama when enabled.</td><td>Sign in to at least one provider on Review.</td></tr>
+        <tr><td><b>M365 Copilot</b></td><td>Enterprise Graph Copilot reasoning.</td><td>Azure app, tenant, M365 login, Copilot license.</td></tr>
+        <tr><td><b>GitHub Copilot CLI</b></td><td>Pilot or fallback when M365 chat is unavailable.</td><td>GitHub Copilot CLI AUTH OK on Review.</td></tr>
+        <tr><td><b>Ollama</b></td><td>Offline experiments or fallback only.</td><td>Local model reachable and enabled.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="detail"><b>AUTH OK</b> means the provider is logged in on this machine. Use Test for a live runtime check.</p>`,
+    "guide-providers"
+  );
+}
+
+function renderGuideReference() {
+  return `<details class="alex-ref-panel">
+    <summary>Reference: statuses, metrics, and known limitations</summary>
+    <div class="alex-ref-body">
+      <h4>Top bar</h4>
+      <ul>
+        <li><b>Rows Ready / Rows Blocked</b> — final workbook health.</li>
+        <li><b>Missing Terms</b> — definition gaps found in current job.</li>
+        <li><b>Logic Groups</b> — number of controls/logic blocks in review.</li>
+      </ul>
+      <h4>Logic labels</h4>
+      <ul>
+        <li><b>parse ok</b> — deterministic parser produced a usable tree.</li>
+        <li><b>partial</b> — ALEX recovered evidence, but some parts still need review.</li>
+        <li><b>opaque</b> — ALEX could not classify the leaf; boolean flags are being upgraded to avoid this when possible.</li>
+        <li><b>gate ready / needs_llm / blocked</b> — whether generated rows can be trusted without more knowledge.</li>
+      </ul>
+      <h4>Troubleshooting</h4>
+      <ul>
+        <li>M365 code expired: start one login flow, open a fresh device-code tab, and type the current code.</li>
+        <li>Raw looks simple but Tree looks weak: use the collapsed source table and Resolve with AI; parser upgrades continue to reduce this.</li>
+        <li>Resolve fails: try provider GitHub Copilot CLI and read the provider error below the button.</li>
+      </ul>
+    </div>
+  </details>`;
+}
+
 function renderGuideCard() {
-  return "";
+  return `<div class="alex-guide-sections">
+    ${renderGuideWorkflow()}
+    ${renderGuideReviewTab()}
+    ${renderGuideLogicTab()}
+    ${guideSection(
+      "Tab 3 — Diagram Graph",
+      `<p class="detail">Use this only when the spec contains state-machine or diagram evidence. Select a state, select a transition, then inspect conditions and source evidence. Purely visual arrows are still review-required.</p>`,
+      "guide-diagram"
+    )}
+    ${guideSection(
+      "Tab 4 — Final File",
+      `<p class="detail">This is the final workbook surface. Review expected input/output, edit rows directly, switch EN/JP view if needed, then export when blocked rows are resolved or intentionally accepted.</p>`,
+      "guide-export"
+    )}
+    ${renderGuideProviders()}
+    ${renderGuideReference()}
+  </div>`;
 }
 
 function inboxFocusTerm(inbox) {
@@ -780,6 +959,7 @@ function showPage(id) {
     review: renderReview,
     "logic-review": renderLogicReview,
     "diagram-graph": renderDiagramGraph,
+    library: renderLibrary,
     export: renderExport,
     guide: renderGuide,
   };
@@ -983,6 +1163,7 @@ async function renderReview() {
     content().innerHTML = `<header class="page-header">
         <h2>Sources &amp; analyze</h2>
         <p class="lead">Select files, run one analysis pass, then continue to Logic review. Re-upload if you changed a local file.</p>
+        <button type="button" class="btn secondary btn-with-icon" id="btn-review-guide">${icon("guide", "alex-icon--btn")} Open Guide</button>
       </header>
       ${renderReviewLoginHub(copilot)}
       <section class="card">
@@ -1035,6 +1216,7 @@ async function renderReview() {
       }
       inp.value = "";
     };
+    $("#btn-review-guide").onclick = () => showPage("guide");
 
     $("#btn-clear-files").onclick = async () => {
       $("#src-status").textContent = "Clearing uploaded files…";
@@ -1213,7 +1395,7 @@ function renderIssueList(issues) {
     .join("")}</div>`;
 }
 
-function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [] } = {}) {
+function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [], assistStatus = null } = {}) {
   if (!inbox?.terms?.length) return "<p class='detail'>No definition work items for this logic group.</p>";
   const current = inboxFocusTerm(inbox);
   state.inboxFocus[inbox.logic_id] = current?.term || "";
@@ -1223,22 +1405,37 @@ function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [] } = 
       ? "warning"
       : "error";
   const defs = (current?.definitions || [])
-    .map((d) => `<li><b>${esc(d.kind)}</b>${d.match_mode && d.match_mode !== "exact" ? ` · ${esc(d.match_mode)} match` : ""} · ${esc(formatSourceReadable(d.source) || "unknown source")}<br>${esc(d.definition || "")}</li>`)
+    .map((d) => {
+      const fullSource = formatSourceReadable(d.source) || "unknown source";
+      const compactSource = compactSourceLabel(d.source) || fullSource;
+      return `<li><b>${esc(d.kind)}</b>${d.match_mode && d.match_mode !== "exact" ? ` · ${esc(d.match_mode)} match` : ""} · <span title="${attrTitle(fullSource)}">${esc(compactSource)}</span><br>${esc(d.definition || "")}</li>`;
+    })
     .join("");
   const queryHistory = (inbox.query_history || []).slice().reverse();
+  const statusCounts = inbox.terms.reduce(
+    (acc, term) => {
+      const key = term.resolution === "definition_found"
+        ? "resolved"
+        : term.resolution === "added_context_found"
+          ? "added"
+          : "missing";
+      acc[key] += 1;
+      return acc;
+    },
+    { resolved: 0, added: 0, missing: 0 }
+  );
   return `<div class="definition-workbench">
     <div class="definition-term-list">
-      ${inbox.terms.map((term) => {
-        const statusClass = term.resolution === "definition_found"
-          ? "high"
-          : term.resolution === "added_context_found"
-            ? "warning"
-            : "error";
-        return `<button class="term-chip ${term.term === current?.term ? "active" : ""}" data-term-pick="${esc(term.term)}">
-          <span class="term-chip-name">${esc(term.term)}</span>
-          <span class="tag ${statusClass}">${esc(resolutionLabel(term.resolution))}</span>
-        </button>`;
-      }).join("")}
+      <label class="detail definition-term-picker">Definition term (${inbox.terms.length})
+        <select id="definition-term-select" class="clarify-box definition-term-select">
+          ${inbox.terms.map((term) => `<option value="${esc(term.term)}" ${term.term === current?.term ? "selected" : ""}>${esc(`${term.term} · ${resolutionLabel(term.resolution)}`)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="definition-term-summary">
+        <span class="tag high">resolved ${statusCounts.resolved}</span>
+        <span class="tag warning">added context ${statusCounts.added}</span>
+        <span class="tag error">missing ${statusCounts.missing}</span>
+      </div>
       ${inbox.unused_added_definitions?.length ? `<div class="definition-card mini">
         <div class="definition-head"><b>Unused added definitions</b></div>
         <ul class="detail">${inbox.unused_added_definitions
@@ -1259,7 +1456,10 @@ function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [] } = 
         <div class="definition-head">
           <b>Knowledge workbench</b>
         </div>
-        <p class="detail">Sign in to M365 or GitHub Copilot on the <b>Review</b> tab. Knowledge is applied when you resolve with AI.</p>
+        <p class="detail">Choose provider below. Sign in on the <b>Review</b> tab first (M365 and/or GitHub Copilot).</p>
+        <label class="detail login-compact-label">AI provider
+          <select id="knowledge-provider" class="clarify-box">${renderKnowledgeProviderOptions(assistStatus)}</select>
+        </label>
         <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Engineer rules, boundary values, signal meanings…">${esc(engineerNote)}</textarea>
         <div class="definition-workbench-actions">
           <button class="btn" id="btn-definition-query">Resolve with AI</button>
@@ -1470,6 +1670,48 @@ function m365KnowledgeReady() {
   return !!(state.m365Status?.api_ready || state.m365Status?.connected);
 }
 
+const KNOWLEDGE_PROVIDER_KEY = "alex_knowledge_provider";
+
+function getKnowledgeProvider() {
+  return localStorage.getItem(KNOWLEDGE_PROVIDER_KEY) || "auto";
+}
+
+function setKnowledgeProvider(value) {
+  if (value) localStorage.setItem(KNOWLEDGE_PROVIDER_KEY, value);
+  state.knowledgeProvider = value;
+}
+
+function renderKnowledgeProviderOptions(assistStatus) {
+  const selected = getKnowledgeProvider();
+  const avail = assistStatus?.providers_available || {};
+  const options = [
+    { id: "auto", label: "Auto (M365 → Copilot → Ollama)" },
+    { id: "m365", label: `M365 Copilot${avail.m365 ? "" : " — sign in on Review"}` },
+    { id: "copilot", label: `GitHub Copilot CLI${avail.copilot ? "" : " — login on Review"}` },
+    { id: "ollama", label: `Ollama${avail.ollama ? "" : " — not reachable"}` },
+  ];
+  return options
+    .map(
+      (o) =>
+        `<option value="${esc(o.id)}" ${selected === o.id ? "selected" : ""}>${esc(o.label)}</option>`
+    )
+    .join("");
+}
+
+function formatKnowledgeApplyStatus(res, provider) {
+  if (res.apply_error && !res.apply_ok) {
+    const tried = (res.providers_tried || []).length
+      ? ` Tried: ${res.providers_tried.join(", ")}.`
+      : "";
+    return `${res.apply_error}${tried}`;
+  }
+  const who = res.apply_provider || provider || "AI";
+  let msg = `${who}: updated ${res.candidates_updated || 0} test case(s).`;
+  if (res.failures_remaining) msg += ` ${res.failures_remaining} validation issue(s) remain.`;
+  if ((res.providers_tried || []).length) msg += ` (after trying ${res.providers_tried.join(", ")})`;
+  return msg;
+}
+
 function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1519,6 +1761,21 @@ async function loadM365Status() {
     el?.parentElement?.classList.add("err");
   }
   refreshReviewM365Tile();
+  populateM365SetupForm();
+}
+
+function populateM365SetupForm() {
+  const st = state.m365Status || {};
+  const cid = $("#m365-setup-client-id");
+  const tid = $("#m365-setup-tenant-id");
+  if (cid && st.local_client_id && !cid.value) cid.value = st.local_client_id;
+  if (tid && st.local_tenant_id) {
+    if (tid.value === "common" && st.local_tenant_id !== "common") {
+      tid.value = st.local_tenant_id;
+    } else if (!tid.value) {
+      tid.value = st.local_tenant_id;
+    }
+  }
 }
 
 function renderReviewLoginHub(copilot) {
@@ -1560,9 +1817,13 @@ function renderReviewLoginHub(copilot) {
             <button type="button" class="btn secondary" id="btn-m365-reset-setup">Clear</button>
           </div>
           <div id="m365-login-panel" class="m365-login-panel" hidden>
-            <p class="detail">1. Open <a id="m365-login-link" href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer">microsoft.com/devicelogin</a></p>
-            <p class="detail">2. Code: <code id="m365-login-code" class="m365-user-code">—</code>
+            <p class="detail">1. Open the sign-in page (use this Mac — do not scan QR on phone):
+              <a id="m365-login-link" href="https://login.microsoft.com/device" target="_blank" rel="noopener noreferrer">login.microsoft.com/device</a>
+              <button type="button" class="btn secondary" id="btn-m365-open-login">Open sign-in page</button>
+            </p>
+            <p class="detail">2. Enter this code: <code id="m365-login-code" class="m365-user-code">—</code>
               <button type="button" class="btn secondary" id="btn-m365-copy-code">Copy</button></p>
+            <p class="detail" id="m365-login-expires">Code expires in —</p>
             <p class="detail" id="m365-login-wait">Waiting for sign-in…</p>
           </div>
           <p id="m365-setup-hint" class="detail err" hidden></p>
@@ -1572,6 +1833,7 @@ function renderReviewLoginHub(copilot) {
 }
 
 function bindReviewLoginHub() {
+  populateM365SetupForm();
   const m365SaveSetupBtn = $("#btn-m365-save-setup");
   if (m365SaveSetupBtn) {
     m365SaveSetupBtn.onclick = async () => {
@@ -1604,13 +1866,21 @@ function bindReviewLoginHub() {
       if (code && code !== "—") {
         await navigator.clipboard.writeText(code);
         const wait = $("#m365-login-wait");
-        if (wait) wait.textContent = "Code copied. Paste it at microsoft.com/devicelogin";
+        if (wait) wait.textContent = "Code copied. Paste it at login.microsoft.com/device";
       }
+    };
+  }
+  const m365OpenLoginBtn = $("#btn-m365-open-login");
+  if (m365OpenLoginBtn) {
+    m365OpenLoginBtn.onclick = () => {
+      const uri = state.m365LoginOpenUri || "https://login.microsoft.com/device";
+      window.open(uri, "_blank", "noopener,noreferrer");
     };
   }
   const m365ConnectBtn = $("#btn-m365-connect");
   if (m365ConnectBtn) {
     m365ConnectBtn.onclick = async () => {
+      if (state.m365LoginInProgress) return;
       try {
         await signInM365();
         refreshReviewM365Tile();
@@ -1633,20 +1903,51 @@ function bindReviewLoginHub() {
   }
 }
 
+function stopM365LoginTimer() {
+  if (state.m365LoginTimer) {
+    clearInterval(state.m365LoginTimer);
+    state.m365LoginTimer = null;
+  }
+}
+
+function startM365LoginCountdown(deadlineMs) {
+  stopM365LoginTimer();
+  const expiresEl = $("#m365-login-expires");
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+    if (expiresEl) {
+      const mins = Math.floor(left / 60);
+      const secs = left % 60;
+      expiresEl.textContent = left > 0 ? `Code expires in ${mins}:${String(secs).padStart(2, "0")}` : "Code expired — click Sign in again";
+    }
+    if (left <= 0) stopM365LoginTimer();
+  };
+  tick();
+  state.m365LoginTimer = setInterval(tick, 1000);
+}
+
 function showM365LoginPanel(start) {
   const panel = $("#m365-login-panel");
   const link = $("#m365-login-link");
   const codeEl = $("#m365-login-code");
   const wait = $("#m365-login-wait");
-  const uri = start.verification_uri || "https://microsoft.com/devicelogin";
+  const uri =
+    start.verification_uri_complete ||
+    start.verification_uri ||
+    "https://login.microsoft.com/device";
+  state.m365LoginOpenUri = uri;
   const code = start.user_code || "";
   if (panel) panel.hidden = false;
   if (link) {
     link.href = uri;
-    link.textContent = uri.replace(/^https:\/\//, "");
+    link.textContent = uri.replace(/^https:\/\//, "").split("?")[0];
   }
   if (codeEl) codeEl.textContent = code || "—";
-  if (wait) wait.textContent = "Waiting for you to sign in in the browser…";
+  if (wait) {
+    wait.textContent = "Enter the code on this Mac, then approve sign-in. Do not click Sign in again.";
+  }
+  const deadline = Date.now() + Number(start.expires_in || 900) * 1000;
+  startM365LoginCountdown(deadline);
   state.m365LoginInProgress = true;
   refreshReviewM365Tile();
 }
@@ -1654,8 +1955,18 @@ function showM365LoginPanel(start) {
 function hideM365LoginPanel() {
   const panel = $("#m365-login-panel");
   if (panel) panel.hidden = true;
+  stopM365LoginTimer();
   state.m365LoginInProgress = false;
+  state.m365LoginOpenUri = null;
   refreshReviewM365Tile();
+}
+
+async function cancelM365Login() {
+  try {
+    await api("/api/m365/login/cancel", { method: "POST" });
+  } catch (_) {
+    /* ignore */
+  }
 }
 
 async function saveM365Setup() {
@@ -1697,8 +2008,13 @@ async function signInM365() {
   if (state.m365Status?.setup_required) {
     throw new Error("Save the M365 Client ID on the Review tab before signing in.");
   }
+  if (state.m365LoginInProgress) {
+    throw new Error("Sign-in already in progress. Enter the code shown below.");
+  }
+  const generation = (state.m365SignInGeneration = (state.m365SignInGeneration || 0) + 1);
   const pollStatus = (msg) => setM365AuthMessage(msg);
   pollStatus("Starting M365 sign-in…");
+  await cancelM365Login();
   let start;
   try {
     start = await api("/api/m365/login/start", { method: "POST" });
@@ -1706,19 +2022,18 @@ async function signInM365() {
     showM365SetupError(e.message || String(e));
     throw e;
   }
+  if (generation !== state.m365SignInGeneration) return null;
   showM365LoginPanel(start);
-  const uri = start.verification_uri || "https://microsoft.com/devicelogin";
   const code = start.user_code || "";
-  pollStatus(`Open the link below and enter code ${code}`);
-  try {
-    window.open(uri, "_blank", "noopener,noreferrer");
-  } catch (_) {
-    /* popup blocked — user uses the visible link */
-  }
+  pollStatus(`Open sign-in page and enter code ${code} (one attempt only)`);
   const intervalMs = Math.max(3, Number(start.interval || 5)) * 1000;
   const deadline = Date.now() + Number(start.expires_in || 900) * 1000;
+  await sleepMs(intervalMs);
   while (Date.now() < deadline) {
-    await sleepMs(intervalMs);
+    if (generation !== state.m365SignInGeneration) {
+      hideM365LoginPanel();
+      return null;
+    }
     const poll = await api("/api/m365/login/poll", { method: "POST" });
     if (poll.ok && poll.status === "completed") {
       hideM365LoginPanel();
@@ -1734,13 +2049,20 @@ async function signInM365() {
       throw new Error(msg);
     }
     const wait = $("#m365-login-wait");
-    if (wait) wait.textContent = `Waiting… enter code ${code} at microsoft.com/devicelogin`;
+    if (wait) {
+      wait.textContent = `Waiting… enter code ${code} at login.microsoft.com/device`;
+    }
+    const nextInterval = poll.interval ? poll.interval * 1000 : intervalMs;
+    await sleepMs(nextInterval);
   }
   hideM365LoginPanel();
-  throw new Error("Sign-in timed out. Click Sign in Microsoft 365 and try again.");
+  throw new Error("Sign-in timed out. Click Sign in once and enter the new code immediately.");
 }
 
 async function disconnectM365() {
+  state.m365SignInGeneration = (state.m365SignInGeneration || 0) + 1;
+  await cancelM365Login();
+  hideM365LoginPanel();
   await api("/api/m365/disconnect", { method: "POST" });
   await loadM365Status();
 }
@@ -1810,20 +2132,17 @@ async function deleteTestCandidate(candidate_id) {
 function renderWorkbookTestcaseBar(rows, scope) {
   if (!rows?.length) return "";
   const activeId = currentFocusRow(rows, scope)?.candidate_id;
-  return `<div class="tcase-bar" data-tcase-scope="${esc(scope)}" role="tablist" aria-label="Test cases">
-    ${rows
-      .map((row) => {
-        const active = row.candidate_id === activeId;
-        const label = row.candidate_id || `Row ${row.no}`;
-        const meta = row.event || row.test_function || "";
-        return `<button type="button" class="tcase-pick ${active ? "active" : ""}" data-tcase-id="${esc(
-          row.candidate_id || ""
-        )}" role="tab" aria-selected="${active}">
-          <span class="tcase-pick__id">${esc(label)}</span>
-          ${meta ? `<span class="tcase-pick__meta">${esc(meta)}</span>` : ""}
-        </button>`;
-      })
-      .join("")}
+  return `<div class="tcase-bar tcase-bar--compact" data-tcase-scope="${esc(scope)}" aria-label="Test cases">
+    <label class="detail tcase-select-label">Test case (${rows.length})
+      <select class="clarify-box tcase-select" data-tcase-select="${esc(scope)}">
+        ${rows
+          .map((row) => {
+            const label = `${row.candidate_id || `Row ${row.no}`} · ${row.event || row.test_function || ""}`.trim();
+            return `<option value="${esc(row.candidate_id || "")}" ${row.candidate_id === activeId ? "selected" : ""}>${esc(label)}</option>`;
+          })
+          .join("")}
+      </select>
+    </label>
   </div>`;
 }
 
@@ -1878,11 +2197,7 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
         featureOn("add_clone_tc")
           ? `<button type="button" class="btn secondary" id="${scope}-focus-add">+ Add test case</button>
       <button type="button" class="btn secondary" id="${scope}-focus-clone">Clone</button>
-      ${
-        ["engineer_manual", "engineer_clone"].includes(String(row.source || ""))
-          ? `<button type="button" class="btn secondary" id="${scope}-focus-delete">Delete</button>`
-          : ""
-      }`
+      <button type="button" class="btn secondary" id="${scope}-focus-delete">Delete</button>`
           : ""
       }
     </div>
@@ -2069,14 +2384,14 @@ function bindWorkbookEditors(rows, language, statusElSelector) {
 }
 
 function bindWorkbookTestcaseBar(rows, scope, onReload) {
-  document.querySelectorAll(`[data-tcase-scope="${scope}"] .tcase-pick`).forEach((btn) => {
-    btn.onclick = () => {
-      const id = btn.dataset.tcaseId;
-      if (!id || state.workbookFocus[scope] === id) return;
-      state.workbookFocus[scope] = id;
-      onReload();
-    };
-  });
+  const select = document.querySelector(`[data-tcase-select="${scope}"]`);
+  if (!select) return;
+  select.onchange = () => {
+    const id = select.value;
+    if (!id || state.workbookFocus[scope] === id) return;
+    state.workbookFocus[scope] = id;
+    onReload();
+  };
 }
 
 function bindWorkbookTableRowFocus(rows, scope, tableId, onReload) {
@@ -2474,6 +2789,593 @@ function renderDiagramStateList(states, activeState) {
     .join("")}</div>`;
 }
 
+
+/* ──────────────────────────────────────────────────────────────
+ * Tab 4 — Library (Polarion-style trace canvas)
+ *
+ * Layout: one focus card on the left + relationship rows on the right.
+ * Each row has a free-form label, N empty/filled slots, and a "+" button
+ * to add another empty slot. A separate "+ Add relationship" button appends
+ * a new row. Slots accept OS drag-drop or click-to-pick from the library
+ * root folder.
+ * ────────────────────────────────────────────────────────────── */
+
+const LIBRARY_FILE_ICON = {
+  docx: "file-doc",
+  pdf: "file-doc",
+  md: "file-doc",
+  txt: "file-doc",
+  csv: "csv",
+  xlsx: "excel",
+  xlsm: "excel",
+  xls: "excel",
+  png: "diagram",
+  jpg: "diagram",
+  jpeg: "diagram",
+  gif: "diagram",
+  webp: "diagram",
+  bmp: "diagram",
+  svg: "diagram",
+};
+
+function libraryFileIcon(name) {
+  const ext = String(name || "").toLowerCase().split(".").pop();
+  return LIBRARY_FILE_ICON[ext] || "file-doc";
+}
+
+function libraryFileName(absPath) {
+  if (!absPath) return "";
+  return String(absPath).split(/[\\/]/).pop();
+}
+
+function libraryItemById(id) {
+  return (state.library.items || []).find((it) => it.id === id) || null;
+}
+
+function libraryFocusItem() {
+  const id = state.library.focusId;
+  if (!id) return null;
+  return libraryItemById(id);
+}
+
+function libraryGroupedSpokes() {
+  // Returns [{ label, links: [{link, target}] }] grouped per label, preserving
+  // first-seen order. Only outgoing links from the focus item are shown.
+  const focus = libraryFocusItem();
+  if (!focus) return [];
+  const groups = new Map();
+  for (const link of state.library.links) {
+    if (link.source !== focus.id) continue;
+    if (!groups.has(link.label)) groups.set(link.label, []);
+    const target = libraryItemById(link.target);
+    groups.get(link.label).push({ link, target });
+  }
+  return Array.from(groups.entries()).map(([label, entries]) => ({ label, entries }));
+}
+
+async function fetchLibrary() {
+  const data = await api("/api/library");
+  applyLibraryState(data);
+  if (!state.library.rootInputDraft) {
+    state.library.rootInputDraft = state.library.root;
+  }
+}
+
+function applyLibraryState(data) {
+  state.library.root = data.root || "";
+  state.library.rootExists = !!data.root_exists;
+  state.library.focusId = data.focus_id || "";
+  state.library.items = data.items || [];
+  state.library.links = data.links || [];
+}
+
+async function setLibraryRoot(path) {
+  state.library.rootError = null;
+  try {
+    const data = await api("/api/library/root", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    applyLibraryState(data);
+    state.library.rootInputDraft = state.library.root;
+  } catch (err) {
+    state.library.rootError = err.message || String(err);
+  }
+  await renderLibrary();
+}
+
+async function libraryAddItem({ file } = {}) {
+  const data = await api("/api/library/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file: file || null }),
+  });
+  applyLibraryState(data.state);
+  return data.item;
+}
+
+async function libraryUpdateItemFile(itemId, file) {
+  const data = await api(`/api/library/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file: file || null }),
+  });
+  applyLibraryState(data.state);
+}
+
+async function libraryDeleteItem(itemId) {
+  const data = await api(`/api/library/items/${itemId}`, { method: "DELETE" });
+  applyLibraryState(data.state);
+}
+
+async function librarySetFocus(itemId) {
+  const data = await api("/api/library/focus", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: itemId }),
+  });
+  applyLibraryState(data);
+}
+
+async function libraryAddRow(label) {
+  // Creates a new empty target item + a link from focus → that item with the
+  // provided label.
+  const data = await api("/api/library/links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, source_id: state.library.focusId || null, target_id: null }),
+  });
+  applyLibraryState(data.state);
+}
+
+async function libraryUpdateLinkLabel(linkId, label) {
+  const data = await api(`/api/library/links/${linkId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  applyLibraryState(data.state);
+}
+
+async function libraryDeleteLink(linkId) {
+  const data = await api(`/api/library/links/${linkId}`, { method: "DELETE" });
+  applyLibraryState(data.state);
+}
+
+async function libraryUploadFile(file, { itemId } = {}) {
+  const form = new FormData();
+  form.append("file", file);
+  const url = itemId
+    ? `/api/library/upload?item_id=${encodeURIComponent(itemId)}`
+    : "/api/library/upload";
+  const res = await fetch(url, { method: "POST", body: form });
+  if (!res.ok) {
+    let msg = `Upload failed: ${res.status}`;
+    try { const j = await res.json(); msg = j.detail || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  applyLibraryState(data.state);
+  return data.item_id;
+}
+
+function renderLibrarySlot({ item, link, modifier = "" }) {
+  const filled = !!(item && item.file);
+  const name = filled ? libraryFileName(item.file) : "";
+  const previewUrl = filled
+    ? `/api/files/preview?path=${encodeURIComponent(item.file)}`
+    : "";
+  const inner = filled
+    ? `<span class="library-slot__icon">${icon(libraryFileIcon(name))}</span>
+       <span class="library-slot__name" title="${esc(item.file)}">${esc(name)}</span>`
+    : `<span class="library-slot__plus">＋</span><span class="library-slot__hint">Drop or pick</span>`;
+  return `<div class="library-slot ${modifier} ${filled ? "is-filled" : "is-empty"}"
+              data-library-slot
+              data-library-item-id="${esc(item ? item.id : "")}"
+              data-library-link-id="${esc(link ? link.id : "")}"
+              data-library-preview-url="${esc(previewUrl)}"
+              title="${esc(filled ? item.file + " — click to open" : "Drop a file or click to pick from the library folder")}">
+    ${inner}
+    <div class="library-slot__actions">
+      ${filled ? `<button class="library-slot__action" data-library-clear="${esc(item.id)}" title="Clear file">×</button>` : ""}
+      ${link ? `<button class="library-slot__action" data-library-remove-link="${esc(link.id)}" title="Remove slot">🗑</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderLibraryFocusCard() {
+  const focus = libraryFocusItem();
+  if (!focus) {
+    return `<div class="library-slot library-slot--focus is-empty" data-library-create-focus>
+      <span class="library-slot__plus">＋</span>
+      <span class="library-slot__hint">Drop or pick focus file</span>
+    </div>`;
+  }
+  return renderLibrarySlot({ item: focus, link: null, modifier: "library-slot--focus" });
+}
+
+function renderLibraryRow(group) {
+  const slots = group.entries
+    .map((entry) =>
+      `<div class="library-row__slot-wrap">${renderLibrarySlot({ item: entry.target, link: entry.link })}</div>`
+    )
+    .join("");
+  return `<div class="library-row" data-library-row-label="${esc(group.label)}">
+    <div class="library-row__label">
+      <input class="library-row__label-input" value="${esc(group.label)}" data-library-row-rename="${esc(group.label)}" />
+      <span class="library-row__arrow">→</span>
+    </div>
+    <div class="library-row__slots">
+      ${slots}
+      <button class="library-row__add" data-library-row-add="${esc(group.label)}" title="Add slot">＋</button>
+    </div>
+  </div>`;
+}
+
+function renderLibraryAddRow() {
+  if (!state.library.addRowMode) {
+    return `<button class="library-add-row" data-library-add-row>＋ Add relationship</button>`;
+  }
+  const draft = state.library.addRowDraft || "";
+  return `<div class="library-add-row library-add-row--editing">
+    <input class="library-add-row__input" id="library-new-row" placeholder="e.g. Satisfies, Validated By, Implements" value="${esc(draft)}" />
+    <button class="btn" id="library-new-row-save">Add row</button>
+    <button class="btn ghost" id="library-new-row-cancel">Cancel</button>
+  </div>`;
+}
+
+function renderLibraryPicker() {
+  if (!state.library.pickerOpenItemId) return "";
+  const listing = state.library.pickerListing;
+  const error = state.library.pickerError;
+  const loading = state.library.pickerLoading;
+  let body = "";
+  if (loading) {
+    body = `<p class="detail">Loading…</p>`;
+  } else if (error) {
+    body = `<p class="detail" style="color:var(--red)">${esc(error)}</p>`;
+  } else if (!listing) {
+    body = `<p class="detail">Pick a file or open a sub-folder.</p>`;
+  } else {
+    const parent = listing.parent
+      ? `<button class="library-picker__entry library-picker__entry--up" data-library-picker-dir="${esc(listing.parent)}">⬆ ..</button>`
+      : "";
+    const dirs = (listing.dirs || [])
+      .map(
+        (d) =>
+          `<button class="library-picker__entry library-picker__entry--dir" data-library-picker-dir="${esc(d.path)}">📁 ${esc(d.name)}</button>`
+      )
+      .join("");
+    const files = (listing.files || [])
+      .map(
+        (f) =>
+          `<button class="library-picker__entry library-picker__entry--file" data-library-picker-file="${esc(f.path)}"><span class="library-picker__icon">${icon(libraryFileIcon(f.name), "alex-icon--xs")}</span> ${esc(f.name)}</button>`
+      )
+      .join("");
+    body = `<div class="library-picker__cwd" title="${esc(listing.cwd)}">${esc(listing.cwd)}</div>
+            <div class="library-picker__list">${parent}${dirs}${files || (parent || dirs ? "" : `<p class="detail">Folder is empty.</p>`)}</div>`;
+  }
+  return `<div class="library-picker-backdrop" data-library-picker-close>
+    <div class="library-picker">
+      <header class="library-picker__head">
+        <strong>Pick a file from the library folder</strong>
+        <button class="btn ghost btn-xs" data-library-picker-close>Close</button>
+      </header>
+      <div class="library-picker__body">${body}</div>
+    </div>
+  </div>`;
+}
+
+function renderLibraryTopbar() {
+  const draft = state.library.rootInputDraft ?? state.library.root ?? "";
+  return `<div class="library-topbar">
+    <div class="library-topbar__root">
+      <span class="detail">Library folder</span>
+      <input class="library-topbar__path" id="library-root-input" placeholder="/abs/path/to/specs" value="${esc(draft)}" />
+      <button class="btn" id="btn-library-set-root">${state.library.root ? "Update" : "Set folder"}</button>
+      <button class="btn secondary" id="btn-library-refresh" ${state.library.root ? "" : "disabled"}>Refresh</button>
+    </div>
+    ${state.library.rootError ? `<p class="detail" style="color:var(--red)">${esc(state.library.rootError)}</p>` : ""}
+    ${!state.library.root ? `<p class="detail">Pick the folder that holds your spec files. Drag-drops on slots are copied into this folder so the references stay local.</p>` : ""}
+  </div>`;
+}
+
+async function renderLibrary() {
+  if (!state.library.root && !state.library.rootInputDraft && !state.library.rootError) {
+    try { await fetchLibrary(); } catch (err) { state.library.error = err.message || String(err); }
+  }
+  const groups = libraryGroupedSpokes();
+  const canEdit = !!state.library.root && state.library.rootExists;
+
+  content().innerHTML = `<header class="page-header library-header"><h2>Library</h2></header>
+    ${renderLibraryTopbar()}
+    ${canEdit
+      ? `<div class="library-canvas">
+          <div class="library-focus-col">
+            ${renderLibraryFocusCard()}
+            ${state.library.focusId ? `<button class="library-add-row library-add-row--side" data-library-add-row>＋ Add</button>` : ""}
+          </div>
+          <div class="library-rows">
+            ${groups.map(renderLibraryRow).join("") || `<p class="detail library-rows__empty">No relationships yet — click ＋ Add to start.</p>`}
+            ${state.library.focusId ? renderLibraryAddRow() : ""}
+          </div>
+        </div>`
+      : `<p class="detail">Set a library folder above to start building the trace map.</p>`
+    }
+    ${renderLibraryPicker()}`;
+
+  bindLibraryTopbar();
+  bindLibraryCanvas();
+  bindLibraryPicker();
+}
+
+function bindLibraryTopbar() {
+  const setBtn = $("#btn-library-set-root");
+  const input = $("#library-root-input");
+  if (input) {
+    input.oninput = (ev) => { state.library.rootInputDraft = ev.target.value; };
+    input.onkeydown = (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        setBtn?.click();
+      }
+    };
+  }
+  if (setBtn) {
+    setBtn.onclick = () => {
+      const value = (input?.value || "").trim();
+      if (!value) {
+        state.library.rootError = "Enter an absolute path to a local folder.";
+        renderLibrary();
+        return;
+      }
+      setLibraryRoot(value);
+    };
+  }
+  const refresh = $("#btn-library-refresh");
+  if (refresh) {
+    refresh.onclick = async () => {
+      try { await fetchLibrary(); } catch (err) { state.library.rootError = err.message || String(err); }
+      renderLibrary();
+    };
+  }
+}
+
+function bindLibraryCanvas() {
+  // Drag-and-drop + click-to-pick for every slot.
+  content().querySelectorAll("[data-library-slot]").forEach((el) => {
+    el.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      el.classList.add("is-dragging");
+    });
+    el.addEventListener("dragleave", () => el.classList.remove("is-dragging"));
+    el.addEventListener("drop", async (ev) => {
+      ev.preventDefault();
+      el.classList.remove("is-dragging");
+      const file = ev.dataTransfer?.files?.[0];
+      if (!file) return;
+      const itemId = el.dataset.libraryItemId;
+      try {
+        state.library.busy = true;
+        await libraryUploadFile(file, { itemId });
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        state.library.busy = false;
+        renderLibrary();
+      }
+    });
+    el.addEventListener("click", (ev) => {
+      // Ignore clicks bubbling from action buttons.
+      if (ev.target.closest("[data-library-clear],[data-library-remove-link]")) return;
+      const itemId = el.dataset.libraryItemId;
+      if (!itemId) return;
+      const previewUrl = el.dataset.libraryPreviewUrl;
+      if (previewUrl) {
+        // Filled slot → open the file in a new browser tab.
+        window.open(previewUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      openLibraryPicker(itemId);
+    });
+  });
+
+  // Focus placeholder (no item yet) — clicking creates the focus item then opens picker.
+  const createFocus = content().querySelector("[data-library-create-focus]");
+  if (createFocus) {
+    createFocus.onclick = async () => {
+      try {
+        const item = await libraryAddItem();
+        await librarySetFocus(item.id);
+        openLibraryPicker(item.id);
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+      renderLibrary();
+    };
+    createFocus.addEventListener("dragover", (ev) => { ev.preventDefault(); createFocus.classList.add("is-dragging"); });
+    createFocus.addEventListener("dragleave", () => createFocus.classList.remove("is-dragging"));
+    createFocus.addEventListener("drop", async (ev) => {
+      ev.preventDefault();
+      createFocus.classList.remove("is-dragging");
+      const file = ev.dataTransfer?.files?.[0];
+      if (!file) return;
+      try {
+        const newId = await libraryUploadFile(file);
+        await librarySetFocus(newId);
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+      renderLibrary();
+    });
+  }
+
+  content().querySelectorAll("[data-library-clear]").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.libraryClear;
+      try { await libraryUpdateItemFile(id, ""); } catch (err) { alert(err.message); }
+      renderLibrary();
+    };
+  });
+  content().querySelectorAll("[data-library-remove-link]").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.libraryRemoveLink;
+      try { await libraryDeleteLink(id); } catch (err) { alert(err.message); }
+      renderLibrary();
+    };
+  });
+  content().querySelectorAll("[data-library-stop]").forEach((el) => {
+    el.addEventListener("click", (ev) => ev.stopPropagation());
+  });
+
+  // Row rename (label) on Enter / blur.
+  content().querySelectorAll("[data-library-row-rename]").forEach((input) => {
+    const original = input.dataset.libraryRowRename;
+    const commit = async () => {
+      const next = (input.value || "").trim();
+      if (!next || next === original) return;
+      // Rename every link in this row in parallel.
+      const linkIds = state.library.links
+        .filter((l) => l.source === state.library.focusId && l.label === original)
+        .map((l) => l.id);
+      try {
+        await Promise.all(linkIds.map((id) => libraryUpdateLinkLabel(id, next)));
+      } catch (err) {
+        alert(err.message);
+      }
+      renderLibrary();
+    };
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+      else if (ev.key === "Escape") { input.value = original; input.blur(); }
+    });
+  });
+
+  // Add another slot to an existing row.
+  content().querySelectorAll("[data-library-row-add]").forEach((btn) => {
+    btn.onclick = async () => {
+      try { await libraryAddRow(btn.dataset.libraryRowAdd); } catch (err) { alert(err.message); }
+      renderLibrary();
+    };
+  });
+
+  // + Add relationship.
+  const addRowBtn = content().querySelector("[data-library-add-row]");
+  if (addRowBtn) {
+    addRowBtn.onclick = () => {
+      state.library.addRowMode = true;
+      state.library.addRowDraft = "";
+      renderLibrary().then(() => $("#library-new-row")?.focus());
+    };
+  }
+  const saveNewRow = $("#library-new-row-save");
+  const cancelNewRow = $("#library-new-row-cancel");
+  const newRowInput = $("#library-new-row");
+  if (newRowInput) {
+    newRowInput.oninput = (ev) => { state.library.addRowDraft = ev.target.value; };
+    newRowInput.onkeydown = (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); saveNewRow?.click(); }
+      else if (ev.key === "Escape") { cancelNewRow?.click(); }
+    };
+  }
+  if (saveNewRow) {
+    saveNewRow.onclick = async () => {
+      const label = (newRowInput?.value || "").trim();
+      if (!label) { newRowInput?.focus(); return; }
+      try { await libraryAddRow(label); } catch (err) { alert(err.message); return; }
+      state.library.addRowMode = false;
+      state.library.addRowDraft = "";
+      renderLibrary();
+    };
+  }
+  if (cancelNewRow) {
+    cancelNewRow.onclick = () => {
+      state.library.addRowMode = false;
+      state.library.addRowDraft = "";
+      renderLibrary();
+    };
+  }
+}
+
+async function openLibraryPicker(itemId) {
+  state.library.pickerOpenItemId = itemId;
+  state.library.pickerError = null;
+  state.library.pickerCwd = state.library.root;
+  state.library.pickerListing = null;
+  state.library.pickerLoading = true;
+  await renderLibrary();
+  try {
+    const data = await api("/api/library/browse");
+    state.library.pickerListing = data;
+  } catch (err) {
+    state.library.pickerError = err.message || String(err);
+  } finally {
+    state.library.pickerLoading = false;
+  }
+  await renderLibrary();
+}
+
+async function loadPickerDir(path) {
+  state.library.pickerLoading = true;
+  state.library.pickerError = null;
+  await renderLibrary();
+  try {
+    const data = await api(`/api/library/browse?path=${encodeURIComponent(path)}`);
+    state.library.pickerListing = data;
+    state.library.pickerCwd = data.cwd;
+  } catch (err) {
+    state.library.pickerError = err.message || String(err);
+  } finally {
+    state.library.pickerLoading = false;
+  }
+  await renderLibrary();
+}
+
+async function pickLibraryFile(filePath) {
+  const itemId = state.library.pickerOpenItemId;
+  if (!itemId) return;
+  try {
+    await libraryUpdateItemFile(itemId, filePath);
+  } catch (err) {
+    alert(err.message || String(err));
+    return;
+  }
+  closeLibraryPicker();
+  await renderLibrary();
+}
+
+function closeLibraryPicker() {
+  state.library.pickerOpenItemId = null;
+  state.library.pickerListing = null;
+  state.library.pickerError = null;
+}
+
+function bindLibraryPicker() {
+  if (!state.library.pickerOpenItemId) return;
+  content().querySelectorAll("[data-library-picker-close]").forEach((el) => {
+    el.onclick = (ev) => {
+      if (el === ev.target || el.classList.contains("library-picker-backdrop")) {
+        closeLibraryPicker();
+        renderLibrary();
+      }
+    };
+  });
+  // Stop propagation inside the modal so clicking the dialog body doesn't dismiss.
+  const dialog = content().querySelector(".library-picker");
+  if (dialog) dialog.addEventListener("click", (ev) => ev.stopPropagation());
+  content().querySelectorAll("[data-library-picker-dir]").forEach((btn) => {
+    btn.onclick = () => loadPickerDir(btn.dataset.libraryPickerDir);
+  });
+  content().querySelectorAll("[data-library-picker-file]").forEach((btn) => {
+    btn.onclick = () => pickLibraryFile(btn.dataset.libraryPickerFile);
+  });
+}
+
+
 async function renderDiagramGraph() {
   if (!state.jobId) {
     content().innerHTML = requireJobHtml();
@@ -2571,10 +3473,12 @@ async function renderLogicReview() {
     }
     const sel = state.selectedLogicId || items[0].logic_id;
     const item = items.find((x) => x.logic_id === sel) || items[0];
-    const [inbox, workbench] = await Promise.all([
+    const [inbox, workbench, assistStatus] = await Promise.all([
       api(`/api/review/definition-inbox?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`),
       fetchWorkbench(state.exportLanguage),
+      api("/api/llm/status").catch(() => ({})),
     ]);
+    state.assistStatus = assistStatus;
     const queueByLogic = Object.fromEntries(((data.ai_queue?.logic_groups) || []).map((row) => [row.logic_id, row]));
     const queueItem = queueByLogic[item.logic_id] || {};
     const engineerNote = (data.ai_assists?.engineer_notes || {})[item.logic_id] || "";
@@ -2587,11 +3491,9 @@ async function renderLogicReview() {
     const listHtml = items
       .map(
         (it) =>
-          `<button class="logic-pick ${it.logic_id === item.logic_id ? "active" : ""}" data-lid="${esc(
-            it.logic_id
-          )}">${esc(it.control_name)} <span class="tag ${queueStatusClass(queueByLogic[it.logic_id]?.queue_status)}">${esc(
-            queueStatusLabel(queueByLogic[it.logic_id]?.queue_status)
-          )}</span></button>`
+          `<option value="${esc(it.logic_id)}" ${it.logic_id === item.logic_id ? "selected" : ""}>${esc(
+            `${it.control_name} · ${queueStatusLabel(queueByLogic[it.logic_id]?.queue_status)}`
+          )}</option>`
       )
       .join("");
     const tableRows = (item.table_rows || []).map((r) => [
@@ -2617,7 +3519,11 @@ async function renderLogicReview() {
         : renderEvidenceNotes(parseLegacyEvidenceString(item.source_evidence), { label: "Source file" })
       : "";
     content().innerHTML = `<div class="alex-layout-logic">
-      <div class="logic-pick-bar">${listHtml}</div>
+      <div class="logic-pick-bar logic-pick-bar--compact">
+        <label class="detail logic-picker-label">Logic group (${items.length})
+          <select id="logic-group-select" class="clarify-box logic-group-select">${listHtml}</select>
+        </label>
+      </div>
       <header class="alex-hero">
         <div>
           <h2 class="alex-hero__title">${esc(item.control_name)}</h2>
@@ -2648,6 +3554,13 @@ async function renderLogicReview() {
             <pre class="expr-block expr-block--spec">${esc(logicSpecExpression(item))}</pre>
           </div>
         </div>
+        <details class="alex-ref-panel" style="margin-top:0.75rem">
+          <summary>Show source table / detected context (${tableRows.length} row${tableRows.length === 1 ? "" : "s"})</summary>
+          <div class="alex-ref-body grid-wrap">
+            ${renderVisualSourcePreview(item.visual_source, tableRows)}
+            <p class="detail">State-machine context appears on the Diagram Graph tab when detected. Keep this collapsed unless you need to verify the original source.</p>
+          </div>
+        </details>
         ${parserNotes.length ? `<ul class="detail" style="margin-top:0.75rem">${parserNotes.map((n) => `<li>${n}</li>`).join("")}</ul>` : ""}
       </section>
       <div class="alex-secondary-row alex-secondary-row--full">
@@ -2665,7 +3578,7 @@ async function renderLogicReview() {
           ${renderTraceRows(item.trace_rows || [])}
           <div class="alex-definitions-block" style="margin-top:1.25rem">
             <h4>Definitions</h4>
-            ${renderDefinitionInbox(inbox, { engineerNote, attachments })}
+            ${renderDefinitionInbox(inbox, { engineerNote, attachments, assistStatus })}
           </div>
           ${(item.issues || []).length ? `<div style="margin-top:1rem"><h4>Linked issues</h4>${renderIssueList(item.issues || [])}</div>` : ""}
         </section>
@@ -2677,29 +3590,37 @@ async function renderLogicReview() {
         <p id="logic-row-save-status" class="detail"></p>
       </section>
     </div>`;
-    content().querySelectorAll(".logic-pick").forEach((btn) => {
-      btn.onclick = () => {
-        state.selectedLogicId = btn.dataset.lid;
+    const logicSelect = $("#logic-group-select");
+    if (logicSelect) {
+      logicSelect.onchange = () => {
+        state.selectedLogicId = logicSelect.value;
         renderLogicReview();
       };
-    });
-    content().querySelectorAll("[data-term-pick]").forEach((btn) => {
-      btn.onclick = () => {
-        state.inboxFocus[item.logic_id] = btn.dataset.termPick;
+    }
+    const termSelect = $("#definition-term-select");
+    if (termSelect) {
+      termSelect.onchange = () => {
+        state.inboxFocus[item.logic_id] = termSelect.value;
         renderLogicReview();
       };
-    });
-    const applyKnowledge = async (statusMessage = "Saving knowledge…") => {
+    }
+    const applyKnowledge = async (statusMessage = "Saving knowledge…", providerOverride = "") => {
       const note = $("#definition-workbench-note")?.value || "";
       const current = inboxFocusTerm(inbox);
+      const provider = providerOverride || $("#knowledge-provider")?.value || getKnowledgeProvider();
+      setKnowledgeProvider(provider);
       const statusEl = document.querySelector("[data-definition-query-status]");
       if (statusEl) statusEl.textContent = statusMessage;
       return api(`/api/review/logic-clarification?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logic_id: item.logic_id, note, term: current?.term || "" }),
+        body: JSON.stringify({ logic_id: item.logic_id, note, term: current?.term || "", provider }),
       });
     };
+    const providerSelect = $("#knowledge-provider");
+    if (providerSelect) {
+      providerSelect.onchange = () => setKnowledgeProvider(providerSelect.value);
+    }
     $("#logic-attachment-upload").onchange = async () => {
       const inp = $("#logic-attachment-upload");
       if (!inp.files.length) return;
@@ -2723,47 +3644,23 @@ async function renderLogicReview() {
     const definitionQueryBtn = $("#btn-definition-query");
     if (definitionQueryBtn) {
       definitionQueryBtn.onclick = async () => {
-        const current = inboxFocusTerm(inbox);
         const note = $("#definition-workbench-note")?.value || "";
-        const question = note.trim();
+        const provider = $("#knowledge-provider")?.value || getKnowledgeProvider();
         const statusEl = document.querySelector("[data-definition-query-status]");
-        if (!question.trim()) {
-          if (statusEl) statusEl.textContent = "Enter the missing meaning or pasted evidence first.";
+        if (!note.trim()) {
+          if (statusEl) statusEl.textContent = "Enter engineer knowledge first (rules, boundaries, signal meanings).";
           return;
         }
-        const requireM365 = state.appConfig?.assist?.require_m365_login !== false;
-        if (requireM365 && !m365KnowledgeReady()) {
-          const msg = "Sign in to M365 on the Review tab first.";
-          if (statusEl) statusEl.textContent = msg;
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Resolve with AI is running…";
+        if (statusEl) statusEl.textContent = `Resolve with AI (${provider})…`;
+        definitionQueryBtn.disabled = true;
         try {
-          await applyKnowledge("Applying knowledge…");
-          const res = await api(`/api/review/definition-query?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              logic_id: item.logic_id,
-              term: current?.term || "",
-              question,
-              note,
-            }),
-          });
-          if (res.provider === "ollama" && res.status === "completed") {
-            if (statusEl) statusEl.textContent = res.result?.answer || "AI updated this knowledge item.";
-            await renderLogicReview();
-            return;
-          }
-          state.copilot.assistCommandId = res.command_id;
-          state.copilot.assistCommand = res;
-          refreshAssistContainers();
-          await pollCopilotAssist(res.command_id, async () => {
-            if (statusEl) statusEl.textContent = "AI updated this knowledge item.";
-            await renderLogicReview();
-          });
+          const res = await applyKnowledge(`Applying via ${provider}…`, provider);
+          if (statusEl) statusEl.textContent = formatKnowledgeApplyStatus(res, provider);
+          await renderLogicReview();
         } catch (e) {
           if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          definitionQueryBtn.disabled = false;
         }
       };
     }
@@ -2937,19 +3834,27 @@ async function renderGuide() {
       <h2>How to review with ALEX</h2>
       <p class="lead">Work in this order — each step builds on traceable evidence from the spec.</p>
     </header>
-    <section class="card">
-      <h3>Recommended workflow</h3>
-      <ol class="alex-guide-steps">
-        <li><b>Review</b> — select files and run one analysis pass.</li>
-        <li><b>Logic &amp; definitions</b> — confirm the logic tree, then resolve missing terms.</li>
-        <li><b>Diagram graph</b> — validate states and transitions against source evidence.</li>
-        <li><b>Final file</b> — edit workbook rows, switch EN/JP view, and export when ready.</li>
-      </ol>
-    </section>
     ${renderGuideCard()}`;
 }
 
+function initWelcomeSplash() {
+  const splash = document.getElementById("welcome-splash");
+  if (!splash) return;
+  let hidden = false;
+  const hide = () => {
+    if (hidden) return;
+    hidden = true;
+    splash.classList.add("is-hidden");
+    splash.setAttribute("aria-hidden", "true");
+  };
+  splash.addEventListener("animationend", (event) => {
+    if (event.animationName === "welcomeSplashFade") hide();
+  });
+  window.setTimeout(hide, 3000);
+}
+
 async function boot() {
+  initWelcomeSplash();
   initNav();
   await loadAppConfig();
   startServiceStatusPolling();

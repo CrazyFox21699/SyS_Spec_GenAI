@@ -1,0 +1,63 @@
+version: '3'
+root: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs
+focus_id: LIB_b9914190
+items:
+- id: LIB_720eaa8c
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/edited_Shutoff_Condition_Spec.docx
+- id: LIB_6b627dc4
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/pm_controller_sample.cpp
+- id: LIB_d1162600
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/Shutoff_Condition_Spec_v2.docx
+- id: LIB_703fbf8c
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Behavior_Logic_Sample.xlsx
+- id: LIB_5ef13ddc
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/GPT_GenLogic.xlsx
+- id: LIB_a7060b15
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Timing_Chart.png
+- id: LIB_851f026c
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/power_mode_gtest_sample.cpp
+- id: LIB_96d64529
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_System_Spec_Sample.docx
+- id: LIB_3b4fe896
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/Sample_Power_Control_Specification.docx
+- id: LIB_bc292ba3
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_StateFlow_Timing_Sample.pdf
+- id: LIB_23bd4fac
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_State_Machine_Diagram.png
+- id: LIB_0981f46e
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Condition_Tree_Diagram.png
+- id: LIB_8f546b16
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/output/PM_TestSpec_Reference_Sample.xlsx
+- id: LIB_b9914190
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/edited_Shutoff_Condition_Spec.docx
+- id: LIB_a35511ce
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/GPT_GenLogic.xlsx
+- id: LIB_7a689d10
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/PM_Condition_Tree_Diagram.png
+- id: LIB_87fc5438
+  file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/Sample_Power_Control_Specification.docx
+- id: LIB_0b945b8a
+  file: ''
+- id: LIB_b9b5a617
+  file: ''
+links:
+- id: LNK_84edb302
+  source: LIB_b9914190
+  target: LIB_a35511ce
+  label: me may
+- id: LNK_78581abd
+  source: LIB_b9914190
+  target: LIB_7a689d10
+  label: vạhdabijsd
+- id: LNK_3eb09b25
+  source: LIB_b9914190
+  target: LIB_87fc5438
+  label: ádahsgduasda
+- id: LNK_f7e0fa0a
+  source: LIB_b9914190
+  target: LIB_0b945b8a
+  label: jhgjh
+- id: LNK_3c1f201d
+  source: LIB_b9914190
+  target: LIB_b9b5a617
+  label: me may

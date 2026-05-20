@@ -100,6 +100,14 @@ def _parse_copilot_response(text: str) -> tuple[list[dict[str, Any]], list[dict[
     return patches, definition_updates
 
 
+def strict_knowledge_procedure_prompt(brief: str) -> str:
+    return _strict_procedure_prompt(brief)
+
+
+def parse_knowledge_response(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return _parse_copilot_response(text)
+
+
 def apply_knowledge_via_m365(
     bundle: dict[str, Any],
     cfg: dict[str, Any],

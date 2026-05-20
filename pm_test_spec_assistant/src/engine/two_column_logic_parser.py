@@ -64,6 +64,12 @@ def parse_table_to_logic_block(table: ParsedTwoColumnTable) -> dict[str, Any]:
         "source": source,
         "table_kind": table.table_kind,
         "row_paths": paths,
+        "visual_source": {
+            "kind": "logic_table",
+            "title": table.control_name,
+            "source": source,
+            "rows": table.visual_rows,
+        },
         "issues": issues,
         "parser_notes": parser_notes,
     }

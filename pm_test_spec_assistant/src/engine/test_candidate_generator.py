@@ -13,7 +13,7 @@ from src.engine.term_role_classifier import classify_term
 def _flatten_signals_from_tree(tree: dict[str, Any]) -> list[str]:
     out: list[str] = []
     t = tree.get("type")
-    if t == "signal_condition":
+    if t in ("signal_condition", "boolean_predicate"):
         out.append(str(tree.get("signal", "")))
     for ch in tree.get("children") or []:
         if isinstance(ch, dict):
@@ -667,7 +667,7 @@ def _output_assertions_from_tree(tree: dict[str, Any]) -> dict[str, str]:
 
     def walk(node: dict[str, Any]) -> None:
         t = node.get("type")
-        if t == "signal_condition":
+        if t in ("signal_condition", "boolean_predicate"):
             sig = str(node.get("signal") or "").strip()
             if sig and classify_term(sig) == "output_assertion":
                 out[sig] = str(node.get("value") or "1")
@@ -696,14 +696,14 @@ def _given_from_tree(
 
     def walk(node: dict[str, Any]) -> None:
         t = node.get("type")
-        if t == "signal_condition":
+        if t in ("signal_condition", "boolean_predicate"):
             sig = str(node.get("signal") or "").strip()
             if sig and classify_term(sig, control_name=ctrl) != "output_assertion":
                 given.append(
                     {
                         "signal": sig,
-                        "value": node.get("value"),
-                        "operator": node.get("operator"),
+                        "value": node.get("value") or _default_value_for_signal(sig, definitions=definition_by_name),
+                        "operator": node.get("operator") or "==",
                     }
                 )
         elif t == "condition":
@@ -744,6 +744,17 @@ def _given_from_tree(
                             {
                                 "signal": sig,
                                 "value": val,
+                                "operator": "!=",
+                                "negated": True,
+                            }
+                        )
+                elif isinstance(c, dict) and c.get("type") == "boolean_predicate":
+                    sig = str(c.get("signal") or "").strip()
+                    if sig:
+                        given.append(
+                            {
+                                "signal": sig,
+                                "value": c.get("value") or _default_value_for_signal(sig, definitions=definition_by_name),
                                 "operator": "!=",
                                 "negated": True,
                             }

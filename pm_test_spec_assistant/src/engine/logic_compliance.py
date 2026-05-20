@@ -38,7 +38,7 @@ def _signals_in_tree(tree: dict[str, Any]) -> set[str]:
 
     def walk(node: dict[str, Any]) -> None:
         t = node.get("type")
-        if t == "signal_condition":
+        if t in ("signal_condition", "boolean_predicate"):
             sig = _clean_signal_name(str(node.get("signal") or ""))
             if sig:
                 out.add(sig)

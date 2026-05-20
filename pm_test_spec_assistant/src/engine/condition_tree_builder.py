@@ -68,6 +68,14 @@ def _parse_atom(chunk: str) -> dict[str, Any]:
             return {"type": "timing_condition", "raw_text": chunk}
         if re.match(r"^Condition_[A-Za-z0-9_]+$", chunk) or re.match(r"^Cond(ition)?_[A-Za-z0-9_]+$", chunk, re.I):
             return {"type": "reference", "name": chunk}
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", chunk):
+            return {
+                "type": "boolean_predicate",
+                "signal": chunk,
+                "operator": "==",
+                "value": "1",
+                "raw_text": chunk,
+            }
         return {"type": "opaque", "raw_text": chunk}
 
     left, op, right = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
@@ -125,7 +133,7 @@ def parse_condition_and_segment(segment: str, _depth: int = 0) -> dict[str, Any]
         }
     if "(" in segment or ")" in segment:
         inner = parse_condition_and_segment(segment, _depth + 1)
-        if inner.get("type") not in ("signal_condition", "timing_condition", "reference", "opaque", "empty"):
+        if inner.get("type") not in ("signal_condition", "boolean_predicate", "timing_condition", "reference", "opaque", "empty"):
             return inner
     atom = _parse_atom(segment)
     atom["raw_condition"] = segment

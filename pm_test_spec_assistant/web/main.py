@@ -55,6 +55,27 @@ from web.candidate_mutations import (
 from web.jobs import append_log, create_job, get_job, run_job_background, update_job
 from src.engine.condition_resolver import resolve_condition
 from src.engine.source_index import build_source_index
+from src.engine.document_graph_builder import (
+    add_user_edge as add_doc_user_edge,
+    delete_user_edge as delete_doc_user_edge,
+    node_detail as doc_node_detail,
+    update_user_edge as update_doc_user_edge,
+)
+from src.library import (
+    add_item as library_add_item,
+    add_link as library_add_link,
+    delete_item as library_delete_item,
+    delete_link as library_delete_link,
+    import_dropped_file as library_import_dropped_file,
+    load_library,
+    save_library,
+    scan_folder_listing,
+    set_focus as library_set_focus,
+    set_root as library_set_root,
+    update_item as library_update_item,
+    update_link as library_update_link,
+    validate_inside_root as library_validate_inside_root,
+)
 from web import m365_auth
 from web.ai_provider import (
     apply_knowledge,
@@ -74,6 +95,10 @@ from web.review_workbench import (
     build_workbench_summary,
     paginate_workbook_rows,
 )
+from web.reasoning_session import append_turn as append_reasoning_turn
+from web.reasoning_session import append_hypothesis as append_reasoning_hypothesis
+from web.reasoning_session import create_session as create_reasoning_session
+from web.reasoning_session import load_session as load_reasoning_session
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DATA = ROOT / "web_data"
@@ -173,6 +198,7 @@ class LogicClarificationRequest(BaseModel):
     note: str = ""
     term: str = ""
     force_ollama: bool = False
+    provider: str = "auto"
 
 
 class ImportKnowledgeRequest(BaseModel):
@@ -196,6 +222,26 @@ class DefinitionQueryRequest(BaseModel):
     note: str = ""
 
 
+class ReasoningSessionRequest(BaseModel):
+    logic_id: str
+    note: str = ""
+    provider: str = "auto"
+
+
+class ReasoningTurnRequest(BaseModel):
+    logic_id: str
+    role: str = "engineer"
+    content: str
+    provider: str = "auto"
+    metadata: dict[str, Any] = {}
+
+
+class ReasoningHypothesisRequest(BaseModel):
+    logic_id: str
+    provider: str = "auto"
+    hypothesis: dict[str, Any]
+
+
 class WorkbookReviewUpdateRequest(BaseModel):
     candidate_id: str
     use_case: Optional[str] = None
@@ -217,6 +263,46 @@ class TestCandidateCreateRequest(BaseModel):
 class TestCandidateCloneRequest(BaseModel):
     source_candidate_id: str
     logic_id: Optional[str] = None
+
+
+class DocumentEdgeCreateRequest(BaseModel):
+    source_id: str
+    target_id: str
+    label: Optional[str] = ""
+    kind: Optional[str] = "user_defined"
+    note: Optional[str] = ""
+
+
+class DocumentEdgeUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    kind: Optional[str] = None
+    note: Optional[str] = None
+
+
+class LibraryRootRequest(BaseModel):
+    path: str
+
+
+class LibraryItemCreateRequest(BaseModel):
+    file: Optional[str] = None
+
+
+class LibraryItemUpdateRequest(BaseModel):
+    file: Optional[str] = None
+
+
+class LibraryFocusRequest(BaseModel):
+    item_id: str
+
+
+class LibraryLinkCreateRequest(BaseModel):
+    label: str
+    source_id: Optional[str] = None
+    target_id: Optional[str] = None
+
+
+class LibraryLinkUpdateRequest(BaseModel):
+    label: Optional[str] = None
 
 
 def _cfg() -> dict[str, Any]:
@@ -316,9 +402,26 @@ def _save_bundle_to_job(job_id: str, bundle: dict[str, Any]) -> None:
         update_job(job_id, bundle=bundle)
 
 
+def _library_root() -> Path | None:
+    try:
+        state = load_library(WEB_DATA)
+    except Exception:  # noqa: BLE001
+        return None
+    root = (state or {}).get("root") or ""
+    if not root:
+        return None
+    try:
+        return Path(root).expanduser().resolve()
+    except OSError:
+        return None
+
+
 def _safe_file_path(raw_path: str) -> Path:
     path = Path(raw_path).expanduser().resolve()
     allowed_roots = [ROOT.resolve(), UPLOADS.resolve(), OUTPUT.resolve()]
+    library_root = _library_root()
+    if library_root and library_root.exists():
+        allowed_roots.append(library_root)
     if not any(path.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(403, "File path is outside the review workspace")
     if not path.exists() or not path.is_file():
@@ -898,6 +1001,275 @@ def api_review_source_index(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "source_index": idx}
 
 
+@app.get("/api/review/document-graph")
+def api_document_graph(job_id: str) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    graph = b.get("document_graph") or {}
+    return {
+        "job_id": job_id,
+        "document_graph": graph,
+        "feature_enabled": feature_enabled(_cfg(), "document_map", default=True),
+    }
+
+
+@app.get("/api/review/document-graph/node/{node_id}")
+def api_document_graph_node(job_id: str, node_id: str) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    graph = b.get("document_graph") or {}
+    try:
+        detail = doc_node_detail(b, graph, node_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    return {"job_id": job_id, "node_id": node_id, "detail": detail}
+
+
+@app.post("/api/review/document-graph/edges")
+def api_document_graph_add_edge(job_id: str, req: DocumentEdgeCreateRequest) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    graph = b.get("document_graph") or {}
+    try:
+        edge = add_doc_user_edge(
+            graph,
+            source_id=req.source_id,
+            target_id=req.target_id,
+            label=req.label or "",
+            kind=req.kind or "user_defined",
+            note=req.note or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    b["document_graph"] = graph
+    _save_bundle_to_job(job_id, b)
+    return {"job_id": job_id, "edge": edge, "user_edge_count": graph["summary"]["user_edge_count"]}
+
+
+@app.patch("/api/review/document-graph/edges/{edge_id}")
+def api_document_graph_update_edge(
+    job_id: str, edge_id: str, req: DocumentEdgeUpdateRequest
+) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    graph = b.get("document_graph") or {}
+    try:
+        edge = update_doc_user_edge(
+            graph, edge_id, label=req.label, kind=req.kind, note=req.note,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    b["document_graph"] = graph
+    _save_bundle_to_job(job_id, b)
+    return {"job_id": job_id, "edge": edge}
+
+
+@app.delete("/api/review/document-graph/edges/{edge_id}")
+def api_document_graph_delete_edge(job_id: str, edge_id: str) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    graph = b.get("document_graph") or {}
+    try:
+        delete_doc_user_edge(graph, edge_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    b["document_graph"] = graph
+    _save_bundle_to_job(job_id, b)
+    return {"job_id": job_id, "deleted": edge_id, "user_edge_count": graph["summary"]["user_edge_count"]}
+
+
+def _require_library_feature() -> None:
+    if not feature_enabled(_cfg(), "library_map", default=True):
+        raise HTTPException(403, "Library Map is disabled in config.yaml")
+
+
+def _library_state_payload(state: dict[str, Any]) -> dict[str, Any]:
+    root = state.get("root") or ""
+    root_exists = bool(root) and Path(root).expanduser().resolve().is_dir()
+    return {
+        "version": state.get("version", "3"),
+        "root": root,
+        "root_exists": root_exists,
+        "focus_id": state.get("focus_id", ""),
+        "items": list(state.get("items", [])),
+        "links": list(state.get("links", [])),
+    }
+
+
+@app.get("/api/library")
+def api_library_get() -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    return _library_state_payload(state)
+
+
+@app.post("/api/library/root")
+def api_library_set_root(req: LibraryRootRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        library_set_root(state, req.path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    save_library(WEB_DATA, state)
+    return _library_state_payload(state)
+
+
+@app.get("/api/library/browse")
+def api_library_browse(path: Optional[str] = None) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        return scan_folder_listing(state, path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/library/items")
+def api_library_add_item(req: LibraryItemCreateRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        item = library_add_item(state, file_path=req.file or None)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    save_library(WEB_DATA, state)
+    return {"item": item, "state": _library_state_payload(state)}
+
+
+@app.patch("/api/library/items/{item_id}")
+def api_library_update_item(item_id: str, req: LibraryItemUpdateRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        item = library_update_item(state, item_id, file_path=req.file)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    save_library(WEB_DATA, state)
+    return {"item": item, "state": _library_state_payload(state)}
+
+
+@app.delete("/api/library/items/{item_id}")
+def api_library_delete_item(item_id: str) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        removed_links = library_delete_item(state, item_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    save_library(WEB_DATA, state)
+    return {
+        "deleted": item_id,
+        "removed_link_count": removed_links,
+        "state": _library_state_payload(state),
+    }
+
+
+@app.post("/api/library/focus")
+def api_library_set_focus(req: LibraryFocusRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        library_set_focus(state, req.item_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    save_library(WEB_DATA, state)
+    return _library_state_payload(state)
+
+
+@app.post("/api/library/links")
+def api_library_add_link(req: LibraryLinkCreateRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    source_id = req.source_id or state.get("focus_id") or ""
+    if not source_id:
+        # No focus yet → create one to act as anchor.
+        anchor = library_add_item(state)
+        source_id = anchor["id"]
+    try:
+        link = library_add_link(
+            state,
+            source_id=source_id,
+            target_id=req.target_id,
+            label=req.label,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    save_library(WEB_DATA, state)
+    return {"link": link, "state": _library_state_payload(state)}
+
+
+@app.patch("/api/library/links/{link_id}")
+def api_library_update_link(link_id: str, req: LibraryLinkUpdateRequest) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        link = library_update_link(state, link_id, label=req.label)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    save_library(WEB_DATA, state)
+    return {"link": link, "state": _library_state_payload(state)}
+
+
+@app.delete("/api/library/links/{link_id}")
+def api_library_delete_link(link_id: str) -> dict[str, Any]:
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    try:
+        result = library_delete_link(state, link_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    save_library(WEB_DATA, state)
+    return {
+        "deleted": link_id,
+        "removed_item": result.get("removed_item"),
+        "state": _library_state_payload(state),
+    }
+
+
+@app.post("/api/library/upload")
+async def api_library_upload(
+    item_id: Optional[str] = Query(None),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Receive a file dragged from the OS, copy it into the library root, and
+    optionally attach it to an existing slot.
+    """
+    _require_library_feature()
+    state = load_library(WEB_DATA)
+    if not state.get("root"):
+        raise HTTPException(400, "Set a library root before uploading files.")
+    # Persist the upload into a temp file first, then hand off to the helper.
+    import tempfile
+
+    suffix = Path(file.filename or "drop.bin").suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp_path = Path(tmp.name)
+    try:
+        dest = library_import_dropped_file(state, tmp_path, original_name=file.filename)
+    except ValueError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(400, str(exc))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    if item_id:
+        try:
+            library_update_item(state, item_id, file_path=str(dest))
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+    else:
+        new_item = library_add_item(state, file_path=str(dest))
+        item_id = new_item["id"]
+    save_library(WEB_DATA, state)
+    return {
+        "item_id": item_id,
+        "stored_path": str(dest),
+        "state": _library_state_payload(state),
+    }
+
+
 @app.get("/api/review/condition-resolve")
 def api_review_condition_resolve(
     job_id: str,
@@ -955,6 +1327,12 @@ def api_m365_login_poll() -> dict[str, Any]:
         return m365_auth.poll_device_login(_cfg())
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/m365/login/cancel")
+def api_m365_login_cancel() -> dict[str, Any]:
+    m365_auth.cancel_device_login()
+    return {"ok": True, **m365_auth.m365_status(_cfg())}
 
 
 @app.post("/api/m365/disconnect")
@@ -1217,7 +1595,12 @@ def api_logic_clarification(body: LogicClarificationRequest, job_id: str) -> dic
     for name, meta in extracted.items():
         engineer_defs[name] = meta
     applied = apply_knowledge(
-        bundle, body.logic_id, body.note, _cfg(), force_ollama=body.force_ollama
+        bundle,
+        body.logic_id,
+        body.note,
+        _cfg(),
+        force_ollama=body.force_ollama,
+        provider=body.provider,
     )
     _save_bundle_to_job(job_id, bundle)
     return {
@@ -1228,11 +1611,67 @@ def api_logic_clarification(body: LogicClarificationRequest, job_id: str) -> dic
         "applied_terms": sorted(extracted.keys()),
         "candidates_updated": applied.get("candidates_updated", 0),
         "apply_provider": applied.get("provider"),
+        "apply_ok": bool(applied.get("ok")),
+        "providers_tried": applied.get("providers_tried"),
         "apply_error": applied.get("error"),
         "apply_hint": applied.get("hint"),
         "failures_remaining": applied.get("failures_remaining", 0),
         "retries_used": applied.get("retries_used", 0),
     }
+
+
+@app.post("/api/reasoning/start")
+def api_reasoning_start(body: ReasoningSessionRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    out_dir = OUTPUT / job_id
+    session = create_reasoning_session(
+        out_dir,
+        bundle,
+        logic_id=body.logic_id,
+        engineer_note=body.note,
+        provider=body.provider,
+    )
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, "session": session}
+
+
+@app.post("/api/reasoning/continue")
+def api_reasoning_continue(body: ReasoningTurnRequest, job_id: str) -> dict[str, Any]:
+    out_dir = OUTPUT / job_id
+    session = append_reasoning_turn(
+        out_dir,
+        logic_id=body.logic_id,
+        role=body.role,
+        content=body.content,
+        provider=body.provider,
+        metadata=body.metadata,
+    )
+    return {"ok": True, "job_id": job_id, "session": session}
+
+
+@app.post("/api/reasoning/hypothesis")
+def api_reasoning_hypothesis(body: ReasoningHypothesisRequest, job_id: str) -> dict[str, Any]:
+    session = append_reasoning_hypothesis(
+        OUTPUT / job_id,
+        logic_id=body.logic_id,
+        hypothesis=body.hypothesis,
+        provider=body.provider,
+    )
+    latest = (session.get("hypotheses") or [])[-1] if session.get("hypotheses") else {}
+    return {
+        "ok": bool((latest.get("validation") or {}).get("ok")),
+        "job_id": job_id,
+        "session": session,
+        "validation": latest.get("validation") or {},
+    }
+
+
+@app.get("/api/reasoning/{logic_id}")
+def api_reasoning_get(logic_id: str, job_id: str) -> dict[str, Any]:
+    session = load_reasoning_session(OUTPUT / job_id, logic_id)
+    if not session:
+        raise HTTPException(404, "No reasoning session for this logic group.")
+    return {"ok": True, "job_id": job_id, "session": session}
 
 
 @app.get("/api/review/m365-brief")

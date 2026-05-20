@@ -371,6 +371,19 @@ def build_logic_review_items(
                     "control": (lb.get("source") or {}).get("control", ""),
                     "summary": _format_source(lb.get("source")),
                 },
+                "visual_source": lb.get("visual_source")
+                or {
+                    "kind": "logic_table_rows",
+                    "title": name,
+                    "source": lb.get("source") or {},
+                    "rows": [
+                        {
+                            "row_no": row.get("row_no"),
+                            "cells": [row.get("control"), row.get("raw_condition")],
+                        }
+                        for row in table_rows
+                    ],
+                },
                 "unresolved_refs": list(unresolved_terms),
                 "engineer_resolved_terms": sorted(
                     {

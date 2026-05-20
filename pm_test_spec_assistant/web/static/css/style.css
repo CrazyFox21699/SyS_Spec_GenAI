@@ -33,6 +33,89 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
+.welcome-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: welcomeSplashFade 2.2s ease-in-out forwards;
+}
+.welcome-splash.is-hidden {
+  display: none;
+}
+.welcome-splash__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transform-origin: center;
+  animation: welcomeContentExit 2.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.welcome-splash__logo {
+  display: block;
+  width: clamp(160px, 28vw, 320px);
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  object-fit: contain;
+  animation: toyotaLogoFade 1.6s ease-in-out forwards;
+}
+.welcome-splash__title {
+  margin-top: 0.35rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--text-primary);
+}
+.welcome-splash__sub {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+@keyframes toyotaLogoFade {
+  0% {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes welcomeContentExit {
+  0%, 68% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes welcomeSplashFade {
+  0%, 72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-splash,
+  .welcome-splash__content,
+  .welcome-splash__logo {
+    animation-duration: 0.4s;
+  }
+}
 a {
   color: var(--accent-hover);
 }
@@ -297,6 +380,28 @@ input[type="file"], select, input[type="text"] {
 }
 .checkbox-row { margin: 0.4rem 0; }
 .logic-pick-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+.logic-pick-bar--compact {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 0.5rem 0;
+  background: var(--surface-base);
+}
+.logic-picker-label,
+.tcase-select-label,
+.definition-term-picker {
+  display: block;
+  margin: 0;
+}
+select.logic-group-select,
+select.tcase-select,
+select.definition-term-select {
+  width: 100%;
+  min-height: 2.6rem;
+  margin-top: 0.35rem;
+  resize: none;
+}
 .logic-pick {
   background: var(--surface-input);
   border: 1px solid var(--border);
@@ -445,17 +550,28 @@ tr.source-row:hover td { background: var(--surface-hover); }
   margin-top: 0.75rem;
 }
 .definition-workbench {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 1rem;
   margin-top: 0.75rem;
   width: 100%;
+  align-items: start;
 }
 .definition-term-list {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 0.65rem;
+  min-width: 0;
+}
+.definition-term-summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  gap: 0.35rem;
+}
+.definition-term-summary .tag {
+  justify-content: center;
+  width: 100%;
 }
 .term-chip {
   display: inline-flex;
@@ -503,7 +619,7 @@ tr.source-row:hover td { background: var(--surface-hover); }
   padding: 0.75rem;
 }
 .definition-query-box {
-  min-height: 12rem;
+  min-height: 18rem;
   width: 100%;
   box-sizing: border-box;
 }
@@ -693,6 +809,12 @@ tr.source-row:hover td { background: var(--surface-hover); }
   max-width: 100%;
 }
 
+.tcase-bar--compact {
+  display: block;
+  max-height: none;
+  overflow: visible;
+}
+
 .workbook-table-panel {
   margin-top: var(--space-4);
   border: 1px solid var(--border-subtle);
@@ -870,6 +992,28 @@ tr.source-row:hover td { background: var(--surface-hover); }
 }
 .guide-grid h4 {
   margin: 0 0 0.5rem;
+}
+.alex-guide-sections {
+  display: grid;
+  gap: 1rem;
+}
+.alex-guide-section h3 {
+  margin-top: 0;
+}
+.alex-guide-section .grid-wrap {
+  margin-top: 0.75rem;
+}
+.alex-source-preview__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.alex-source-preview__table td,
+.alex-source-preview__table th {
+  white-space: pre-wrap;
+  vertical-align: middle;
 }
 .gate-diagram {
   overflow: auto;

@@ -133,6 +133,7 @@
 .tag {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 22px;
   padding: 0 var(--space-2);
   border-radius: 999px;
@@ -143,6 +144,8 @@
   vertical-align: middle;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 .tag.high { background: var(--status-ok-bg); color: var(--status-ok); }
 .tag.medium { background: var(--status-warn-bg); color: var(--status-warn); }

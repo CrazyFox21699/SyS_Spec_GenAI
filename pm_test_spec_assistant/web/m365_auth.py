@@ -69,10 +69,36 @@ def _friendly_auth_error(message: str) -> str:
         )
     if "admin consent" in lower or "consent" in lower:
         return "An administrator must grant admin consent for this app in Azure Portal."
+    hint = _device_code_error_hint(lower)
+    if hint:
+        return hint
     return raw
 
+
+def _device_code_error_hint(lower: str) -> str:
+    if "expired_token" in lower or "code has expired" in lower or "hết hạn" in lower:
+        return (
+            "Device sign-in code expired. Click Sign in once, open the link immediately, "
+            "enter the code shown in ALEX (do not reuse an old code or QR). "
+            "Do not click Sign in again while waiting."
+        )
+    if "authorization_declined" in lower or "access_denied" in lower:
+        return "Sign-in was cancelled or denied. Click Sign in and approve the request."
+    if "bad_verification_code" in lower:
+        return "Wrong or expired code at login.microsoft.com/device. Use the exact code shown in ALEX."
+    return ""
+
+
 GRAPH_BASE = "https://graph.microsoft.com/beta"
-DEFAULT_SCOPES = [
+
+DEVICE_LOGIN_SCOPES = [
+    "openid",
+    "profile",
+    "offline_access",
+    "User.Read",
+]
+
+COPILOT_API_SCOPES = [
     "https://graph.microsoft.com/Sites.Read.All",
     "https://graph.microsoft.com/Mail.Read",
     "https://graph.microsoft.com/People.Read.All",
@@ -80,11 +106,9 @@ DEFAULT_SCOPES = [
     "https://graph.microsoft.com/Chat.Read",
     "https://graph.microsoft.com/ChannelMessage.Read.All",
     "https://graph.microsoft.com/ExternalItem.Read.All",
-    "offline_access",
-    "openid",
-    "profile",
-    "User.Read",
 ]
+
+DEFAULT_SCOPES = DEVICE_LOGIN_SCOPES + COPILOT_API_SCOPES
 
 
 def _now_iso() -> str:
@@ -174,15 +198,29 @@ def clear_local_registration(cfg: dict[str, Any] | None = None) -> dict[str, Any
     return m365_status(cfg)
 
 
-def _scopes(cfg: dict[str, Any]) -> str:
+def _is_explicit_tenant(tenant: str) -> bool:
+    return bool(GUID_RE.match(str(tenant or "").strip()))
+
+
+def _scope_list(cfg: dict[str, Any], *, for_device_login: bool = False) -> list[str]:
     raw = _m365_cfg(cfg).get("scopes")
     if isinstance(raw, list) and raw:
         parts = [str(s).strip() for s in raw if str(s).strip()]
+    elif for_device_login:
+        login_raw = _m365_cfg(cfg).get("login_scopes")
+        if isinstance(login_raw, list) and login_raw:
+            parts = [str(s).strip() for s in login_raw if str(s).strip()]
+        else:
+            parts = DEVICE_LOGIN_SCOPES[:]
     else:
         parts = DEFAULT_SCOPES[:]
     if "offline_access" not in parts:
         parts.append("offline_access")
-    return " ".join(parts)
+    return parts
+
+
+def _scopes(cfg: dict[str, Any], *, for_device_login: bool = False) -> str:
+    return " ".join(_scope_list(cfg, for_device_login=for_device_login))
 
 
 def _read_session() -> dict[str, Any]:
@@ -288,12 +326,18 @@ def _device_code_request(tenant: str, client_id: str, scope: str) -> requests.Re
     )
 
 
+def cancel_device_login() -> None:
+    if PENDING_LOGIN_FILE.exists():
+        PENDING_LOGIN_FILE.unlink(missing_ok=True)
+
+
 def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
+    cancel_device_login()
     client_id = _client_id(cfg)
-    scope = _scopes(cfg)
+    scope = _scopes(cfg, for_device_login=True)
     tenant = _tenant_id(cfg)
     r = _device_code_request(tenant, client_id, scope)
-    if r.status_code != 200 and tenant != DEFAULT_TENANT:
+    if r.status_code != 200 and not _is_explicit_tenant(tenant) and tenant != DEFAULT_TENANT:
         r = _device_code_request(DEFAULT_TENANT, client_id, scope)
         tenant = DEFAULT_TENANT
     if r.status_code != 200:
@@ -304,14 +348,19 @@ def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
             detail = r.text[:400]
         raise RuntimeError(_friendly_auth_error(str(detail)))
     payload = r.json()
+    expires_in = int(payload.get("expires_in") or 900)
+    interval = int(payload.get("interval") or 5)
     pending = {
         "device_code": payload.get("device_code"),
         "user_code": payload.get("user_code"),
         "verification_uri": payload.get("verification_uri"),
-        "expires_in": payload.get("expires_in"),
-        "interval": payload.get("interval", 5),
+        "verification_uri_complete": payload.get("verification_uri_complete"),
+        "expires_in": expires_in,
+        "expires_at": time.time() + expires_in,
+        "interval": interval,
         "started_at": _now_iso(),
         "tenant_used": tenant,
+        "scope_used": scope,
     }
     M365_DIR.mkdir(parents=True, exist_ok=True)
     PENDING_LOGIN_FILE.write_text(json.dumps(pending, indent=2), encoding="utf-8")
@@ -319,9 +368,10 @@ def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "user_code": pending.get("user_code"),
         "verification_uri": pending.get("verification_uri"),
+        "verification_uri_complete": pending.get("verification_uri_complete"),
         "message": payload.get("message"),
-        "expires_in": pending.get("expires_in"),
-        "interval": pending.get("interval"),
+        "expires_in": expires_in,
+        "interval": interval,
     }
 
 
@@ -332,6 +382,17 @@ def poll_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "status": "completed", **m365_status(cfg)}
         return {"ok": False, "status": "no_pending_login", "error": "Call login/start first."}
     pending = json.loads(PENDING_LOGIN_FILE.read_text(encoding="utf-8"))
+    expires_at = pending.get("expires_at")
+    try:
+        if expires_at and float(expires_at) < time.time():
+            cancel_device_login()
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": _friendly_auth_error("expired_token"),
+            }
+    except (TypeError, ValueError):
+        pass
     device_code = pending.get("device_code")
     tenant = str(pending.get("tenant_used") or _tenant_id(cfg) or DEFAULT_TENANT)
     client_id = _client_id(cfg)
@@ -347,9 +408,22 @@ def poll_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
     body = r.json() if r.text else {}
     err = body.get("error")
     if err == "authorization_pending":
-        return {"ok": False, "status": "pending", "message": "Complete sign-in in the browser."}
+        remaining = None
+        try:
+            if expires_at:
+                remaining = max(0, int(float(expires_at) - time.time()))
+        except (TypeError, ValueError):
+            pass
+        return {
+            "ok": False,
+            "status": "pending",
+            "message": "Complete sign-in in the browser.",
+            "expires_in": remaining,
+        }
     if err == "slow_down":
         return {"ok": False, "status": "pending", "interval": int(body.get("interval", 5))}
+    if err in ("expired_token", "authorization_declined", "bad_verification_code"):
+        cancel_device_login()
     if r.status_code != 200:
         raw_err = str(body.get("error_description") or body.get("error") or r.text[:300])
         return {"ok": False, "status": "failed", "error": _friendly_auth_error(raw_err), "error_raw": raw_err[:500]}
@@ -390,8 +464,10 @@ def m365_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "setup_message": SETUP_MESSAGE,
         "tenant_id": _resolved_tenant_id(cfg) if cfg else DEFAULT_TENANT,
         "client_id_preview": f"{resolved_cid[:8]}…" if len(resolved_cid) > 8 else "",
+        "local_client_id": str(local.get("client_id") or ""),
+        "local_tenant_id": str(local.get("tenant_id") or DEFAULT_TENANT),
         "has_local_config": bool(local.get("client_id")),
-        "device_login_url": "https://microsoft.com/devicelogin",
+        "device_login_url": "https://login.microsoft.com/device",
         "azure_portal_url": "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/applicationsListBlade",
         "note": (
             "Signed in to Microsoft 365 Copilot (Graph API)."
@@ -406,8 +482,7 @@ def m365_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
 def disconnect() -> dict[str, Any]:
     if SESSION_FILE.exists():
         SESSION_FILE.unlink(missing_ok=True)
-    if PENDING_LOGIN_FILE.exists():
-        PENDING_LOGIN_FILE.unlink(missing_ok=True)
+    cancel_device_login()
     return m365_status()
 
 

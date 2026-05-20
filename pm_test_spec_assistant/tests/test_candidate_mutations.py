@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from web.candidate_mutations import (
     clone_candidate,
     create_blank_candidate,
@@ -22,7 +20,7 @@ def test_create_and_clone_candidate() -> None:
     assert len(bundle["test_candidates"]) == 3
 
 
-def test_soft_delete_only_engineer_rows() -> None:
+def test_soft_delete_any_candidate_source() -> None:
     bundle: dict = {
         "test_candidates": [
             {"id": "TC_ENG_001", "source": "engineer_manual", "status": "candidate"},
@@ -31,5 +29,6 @@ def test_soft_delete_only_engineer_rows() -> None:
     }
     soft_delete_candidate(bundle, "TC_ENG_001")
     assert bundle["test_candidates"][0]["status"] == "removed"
-    with pytest.raises(ValueError):
-        soft_delete_candidate(bundle, "TC_PM_001")
+    soft_delete_candidate(bundle, "TC_PM_001")
+    assert bundle["test_candidates"][1]["status"] == "removed"
+    assert bundle["test_candidates"][1]["removed_by"] == "engineer_review"
