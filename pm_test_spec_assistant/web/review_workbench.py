@@ -126,6 +126,7 @@ def _definition_lookup(bundle: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     seen_by_key: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     all_rows = [
         *({**row, "kind": "spec_definition"} for row in bundle.get("condition_definitions") or []),
+        *({**row, "kind": "signal_registry"} for row in (bundle.get("signals") or [])),
         *_supplemental_rows(bundle),
         *_engineer_rows(bundle),
     ]
@@ -137,6 +138,19 @@ def _definition_lookup(bundle: dict[str, Any]) -> dict[str, list[dict[str, Any]]
             if not key:
                 continue
             _append_unique(lookup[key], row, seen_by_key[key])
+    for sig in bundle.get("signals") or []:
+        name = str(sig.get("name") or "").strip()
+        if not name:
+            continue
+        row = {
+            "name": name,
+            "definition": sig.get("definition") or sig.get("description") or name,
+            "source": sig.get("source") or {},
+            "kind": "signal_registry",
+        }
+        for key in {name, _normalize_term(name)}:
+            if key:
+                _append_unique(lookup[key], row, seen_by_key[key])
     return lookup
 
 

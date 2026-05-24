@@ -24,6 +24,8 @@ class TwoColumnRow:
     parsed_hint: str = ""
     source: dict[str, Any] = field(default_factory=dict)
     issue_status: str = "ok"
+    branch_group: str = ""
+    control_kind: str = "logic_control"
 
 
 @dataclass
@@ -98,6 +100,7 @@ def parse_control_condition_grid(
     source: dict[str, Any],
     *,
     table_id: str = "T01",
+    merge_branch_by_row: dict[int, dict[str, Any]] | None = None,
 ) -> list[ParsedTwoColumnTable]:
     """Parse one Word/Excel grid into one or more control-group tables."""
     grid = _normalize_grid(grid)
@@ -120,7 +123,9 @@ def parse_control_condition_grid(
     if kind == "constant":
         return [_parse_constant_table(body, source, table_id)]
 
-    return _parse_nested_logic_tables(body, ctrl_idx, cond_indices, source, table_id)
+    return _parse_nested_logic_tables(
+        body, ctrl_idx, cond_indices, source, table_id, merge_branch_by_row=merge_branch_by_row
+    )
 
 
 def _parse_alias_table(
@@ -168,8 +173,13 @@ def _parse_constant_table(
         hint = val
         dtype = "timing_constant"
         status = "ok"
-        if m and m.group(3):
-            hint = f"value_ms={m.group(1)} unit={m.group(2)} ambiguous_trailing={m.group(3)}"
+        if m:
+            value, unit, tolerance = m.group(1), m.group(2), m.group(3)
+            if tolerance:
+                hint = f"value={value} unit={unit} tolerance=±{tolerance}"
+            else:
+                hint = f"value={value} unit={unit}"
+        elif val.strip():
             status = "review_required"
         rows.append(
             TwoColumnRow(
@@ -197,23 +207,45 @@ def _parse_nested_logic_tables(
     cond_indices: list[int],
     source: dict[str, Any],
     table_id: str,
+    *,
+    merge_branch_by_row: dict[int, dict[str, Any]] | None = None,
 ) -> list[ParsedTwoColumnTable]:
     """Multi-column Condition columns represent nesting depth (common in Word merges)."""
+    from src.engine.control_cell_classifier import classify_control_cell
+
     by_control: dict[str, list[list[str]]] = {}
+    branch_by_control: dict[str, list[str]] = {}
+    control_meta_by_control: dict[str, dict[str, Any]] = {}
     visual_by_control: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
+    current_control = ""
 
     for ri, cells in enumerate(body, start=2):
+        merge_meta = (merge_branch_by_row or {}).get(ri, {})
         cells = _dedupe_row_cells(cells)
         while len(cells) <= max([ctrl_idx] + cond_indices):
             cells.append("")
         ctrl = cells[ctrl_idx] if ctrl_idx < len(cells) else ""
+        if not ctrl and merge_meta.get("control"):
+            ctrl = str(merge_meta["control"])
+        if not ctrl and current_control:
+            ctrl = current_control
         if not ctrl:
+            continue
+        current_control = ctrl
+        ctrl_kind = classify_control_cell(ctrl)
+        if ctrl_kind == "lifecycle":
             continue
         visual_cells = [c for c in cells if c]
         if ctrl not in visual_by_control:
             visual_by_control[ctrl] = []
-        visual_by_control[ctrl].append({"row_no": ri, "cells": visual_cells})
+        visual_by_control[ctrl].append(
+            {
+                "row_no": ri,
+                "cells": visual_cells,
+                "branch_group": str(merge_meta.get("branch_group") or f"row:{ri}"),
+            }
+        )
         path: list[str] = []
         if len(cond_indices) == 1 and cond_indices[0] < len(cells):
             raw = cells[cond_indices[0]]
@@ -233,12 +265,18 @@ def _parse_nested_logic_tables(
             continue
         if ctrl not in by_control:
             by_control[ctrl] = []
+            branch_by_control[ctrl] = []
             order.append(ctrl)
+            if ctrl_kind == "transition_outcome":
+                control_meta_by_control[ctrl] = classify_control_cell(ctrl, as_meta=True) or {}
         by_control[ctrl].append(path)
+        branch_by_control[ctrl].append(str(merge_meta.get("branch_group") or f"row:{ri}"))
 
     tables: list[ParsedTwoColumnTable] = []
     for i, ctrl in enumerate(order):
         paths = by_control[ctrl]
+        branch_groups = branch_by_control.get(ctrl, [])
+        ctrl_meta = control_meta_by_control.get(ctrl, {})
         rows: list[TwoColumnRow] = []
         for pi, path in enumerate(paths):
             raw = " / ".join(path)
@@ -259,6 +297,8 @@ def _parse_nested_logic_tables(
                     detected_type=dtype,
                     parsed_hint=" -> ".join(path),
                     source={**source, "path_index": pi},
+                    branch_group=branch_groups[pi] if pi < len(branch_groups) else "",
+                    control_kind=ctrl_meta.get("kind", "logic_control"),
                 )
             )
         tables.append(
@@ -267,7 +307,7 @@ def _parse_nested_logic_tables(
                 control_name=ctrl,
                 rows=rows,
                 table_kind="logic",
-                source=source,
+                source={**source, **ctrl_meta},
                 visual_rows=visual_by_control.get(ctrl, []),
             )
         )
@@ -295,6 +335,8 @@ def tables_to_dicts(tables: list[ParsedTwoColumnTable]) -> list[dict[str, Any]]:
                         "parsed_hint": r.parsed_hint,
                         "issue_status": r.issue_status,
                         "source": r.source,
+                        "branch_group": r.branch_group,
+                        "control_kind": r.control_kind,
                     }
                     for r in t.rows
                 ],

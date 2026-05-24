@@ -10,8 +10,10 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from src.engine.condition_tree_builder import parse_condition_tree
+from src.engine.excel_priority_parser import annotate_logic_block_decision_mode
 from src.engine.two_column_logic_parser import parse_table_to_logic_block
 from src.parsers.excel_drawing_parser import extract_excel_drawing_semantics
+from src.parsers.signal_table_parser import parse_signal_grid
 from src.parsers.table_logic_parser import rows_from_grid, parse_transition_table
 from src.models.evidence_model import make_evidence_ref
 from src.parsers.two_column_table_parser import (
@@ -73,6 +75,41 @@ def collect_merged_cell_evidence(
             )
         )
     return refs
+
+
+def collect_sheet_comments(
+    ws: Worksheet,
+    file_name: str,
+    sheet_name: str,
+    *,
+    max_rows: int = 250,
+    max_cols: int = 30,
+) -> list[dict[str, Any]]:
+    """Extract non-executable Excel cell review comments."""
+    out: list[dict[str, Any]] = []
+    for row in ws.iter_rows(min_row=1, max_row=max_rows, max_col=max_cols):
+        for cell in row:
+            comment = getattr(cell, "comment", None)
+            if not comment:
+                continue
+            text = str(getattr(comment, "text", "") or "").strip()
+            if not text:
+                continue
+            out.append(
+                {
+                    "cell": cell.coordinate,
+                    "text": text,
+                    "author": str(getattr(comment, "author", "") or ""),
+                    "executable": False,
+                    "source": {
+                        "file": file_name,
+                        "sheet": sheet_name,
+                        "row": cell.row,
+                        "column": cell.column,
+                    },
+                }
+            )
+    return out
 
 
 def _sheet_to_filled_rows(
@@ -387,7 +424,11 @@ def _parse_gate_spine_region(
         expression, _ = _build_gate_spine_expression(tokens)
         if not expression:
             continue
-        tree = parse_condition_tree(expression)
+        from src.engine.gate_spine_ast import build_gate_spine_ast
+
+        tree = build_gate_spine_ast(rows)
+        if str((tree or {}).get("type") or "") in ("empty", ""):
+            tree = parse_condition_tree(expression)
         parse_status = "ok"
         parser_notes: list[dict[str, Any]] = []
         if str((tree or {}).get("parse_status") or "") != "ok":
@@ -397,24 +438,25 @@ def _parse_gate_spine_region(
                     "parser_reason": "Expression recovered from Excel gate spine; inner timing/value clauses may still need review.",
                 }
             )
-        blocks.append(
-            {
-                "id": f"TC2_{table_id}_{index:02d}",
-                "name": control_name,
-                "raw_expression": expression,
-                "tree": tree,
-                "block_type": "two_column_control",
-                "parse_status": parse_status,
-                "review_required": True,
-                "can_generate_candidates": True,
-                "source": {**source, "control": control_name, "table_id": f"{table_id}_{index:02d}"},
-                "table_kind": "logic",
-                "row_paths": _build_gate_spine_paths(tokens),
-                "issues": [],
-                "parser_notes": parser_notes,
-                "unresolved_refs": [],
-            }
-        )
+        context_texts = tokens + [str(row.get("detail") or "") for row in rows]
+        block = {
+            "id": f"TC2_{table_id}_{index:02d}",
+            "name": control_name,
+            "raw_expression": expression,
+            "tree": tree,
+            "block_type": "two_column_control",
+            "parse_status": parse_status,
+            "review_required": True,
+            "can_generate_candidates": True,
+            "source": {**source, "control": control_name, "table_id": f"{table_id}_{index:02d}"},
+            "table_kind": "logic",
+            "row_paths": _build_gate_spine_paths(tokens),
+            "issues": [],
+            "parser_notes": parser_notes,
+            "unresolved_refs": [],
+        }
+        annotate_logic_block_decision_mode(block, context_texts)
+        blocks.append(block)
     return blocks
 
 
@@ -657,7 +699,12 @@ def _extract_cell_diagram_hints(
     return diagrams, state_rules
 
 
-def extract_excel_workbook(path: Path, state_patterns: list[str]) -> dict[str, Any]:
+def extract_excel_workbook(
+    path: Path,
+    state_patterns: list[str],
+    *,
+    include_comments: bool = False,
+) -> dict[str, Any]:
     """Extract logic blocks, transitions, and legacy transition rows from workbook."""
     import re as _re
 
@@ -670,6 +717,7 @@ def extract_excel_workbook(path: Path, state_patterns: list[str]) -> dict[str, A
     region_summaries: list[dict[str, Any]] = []
     extra_diagram_meta: list[dict[str, Any]] = []
     extra_state_rules: list[dict[str, Any]] = []
+    review_annotations: list[dict[str, Any]] = []
     compiled = []
     for p in state_patterns:
         try:
@@ -677,14 +725,18 @@ def extract_excel_workbook(path: Path, state_patterns: list[str]) -> dict[str, A
         except _re.error:
             continue
 
+    signals: list[dict[str, Any]] = []
     tid = 0
     file_name = path.name
     for sheet_name in wb.sheetnames[:20]:
         ws = wb[sheet_name]
         merged_cell_evidence.extend(collect_merged_cell_evidence(ws, file_name, sheet_name))
+        if include_comments:
+            review_annotations.extend(collect_sheet_comments(ws, file_name, sheet_name))
         sheet_rows = _sheet_to_filled_rows(ws)
         grid = [cells for _, cells in sheet_rows]
         source = {"file": path.name, "sheet": sheet_name}
+        signals.extend(parse_signal_grid(grid, source))
         cell_diagrams, cell_state_rules = _extract_cell_diagram_hints(sheet_rows, source)
         extra_diagram_meta.extend(cell_diagrams)
         extra_state_rules.extend(cell_state_rules)
@@ -864,6 +916,7 @@ def extract_excel_workbook(path: Path, state_patterns: list[str]) -> dict[str, A
         "sheets": out_sheets,
         "sheet_regions": region_summaries,
         "logic_blocks": logic_blocks,
+        "signals": signals,
         "condition_definitions": condition_definitions,
         "transition_candidates": transitions + drawing.get("transition_candidates", []),
         "drawing_shapes": drawing.get("drawing_shapes", []),
@@ -871,4 +924,5 @@ def extract_excel_workbook(path: Path, state_patterns: list[str]) -> dict[str, A
         "diagram_meta": extra_diagram_meta + drawing.get("diagram_meta", []),
         "state_rules": extra_state_rules + drawing.get("state_rules", []),
         "merged_cell_evidence": merged_cell_evidence,
+        "review_annotations": review_annotations,
     }

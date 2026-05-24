@@ -197,5 +197,6 @@ def test_preview_includes_engineer_and_attachment_definitions_in_expected_input(
     preview = build_customer_testspec_preview(bundle, language="EN")
 
     row = preview["rows"][0]
-    assert "Given: MODE_STS=1 and IGN_STS = 0" in row["expected_input"]
+    assert "Given: MODE_STS=1" in row["expected_input"]
+    assert "Given: IGN_STS=0" in row["expected_input"] or "IGN_STS = 0" in row["expected_input"]
     assert "Given: GEAR_POS=P" in row["expected_input"] or "VEH_SPD" in row["expected_input"]

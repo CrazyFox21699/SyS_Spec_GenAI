@@ -7,8 +7,23 @@ const PAGES = [
   { id: "diagram-graph", step: "3", label: "Diagram Graph", icon: "diagram" },
   { id: "library", step: "4", label: "Library", icon: "library" },
   { id: "export", step: "5", label: "Final File", icon: "export" },
-  { id: "guide", step: "6", label: "Guide", icon: "guide" },
+  { id: "test-code", step: "6", label: "Test Code", icon: "code" },
+  { id: "guide", step: "7", label: "Guide", icon: "guide" },
 ];
+
+const PAGE_ROUTES = {
+  review: { slug: "review", title: "Spec review" },
+  "logic-review": { slug: "logic", title: "Logic & Definitions" },
+  "diagram-graph": { slug: "diagram", title: "Diagram Graph" },
+  library: { slug: "library", title: "Library" },
+  export: { slug: "export", title: "Final File" },
+  "test-code": { slug: "test-code", title: "Test Code" },
+  guide: { slug: "guide", title: "Guide" },
+};
+
+const SLUG_TO_PAGE = Object.fromEntries(
+  Object.entries(PAGE_ROUTES).map(([id, meta]) => [meta.slug, id])
+);
 
 const FILE_TYPE_OPTIONS = [
   { value: "system_spec", label: "System Spec" },
@@ -16,6 +31,227 @@ const FILE_TYPE_OPTIONS = [
   { value: "sample_code", label: "Sample Code" },
   { value: "test_code", label: "Test Code" },
 ];
+
+const DRAFT_STORAGE_VERSION = "v1";
+const AUTOSAVE_DEBOUNCE_MS = 800;
+const THEME_STORAGE_KEY = "alex.theme";
+const _autosaveTimers = {};
+
+const API_CACHE_TTL = {
+  summary: 4000,
+  logicReview: 12000,
+  workbench: 10000,
+  gtestWorkspace: 15000,
+  states: 12000,
+};
+
+const _apiCache = new Map();
+const _apiInflight = new Map();
+
+function invalidateApiCache(prefix = "") {
+  for (const key of [..._apiCache.keys()]) {
+    if (!prefix || key.startsWith(prefix)) _apiCache.delete(key);
+  }
+}
+
+function noteBundleVersion(version) {
+  if (version == null) return;
+  if (state.bundleVersion != null && state.bundleVersion !== version) {
+    invalidateApiCache();
+  }
+  state.bundleVersion = version;
+}
+
+async function cachedApi(key, fetcher, ttlMs = 10000) {
+  const hit = _apiCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) {
+    return hit.data;
+  }
+  if (_apiInflight.has(key)) {
+    return _apiInflight.get(key);
+  }
+  const pending = Promise.resolve()
+    .then(fetcher)
+    .then((data) => {
+      _apiCache.set(key, { data, at: Date.now() });
+      return data;
+    })
+    .finally(() => _apiInflight.delete(key));
+  _apiInflight.set(key, pending);
+  return pending;
+}
+
+function debounceAutosave(key, fn, ms = AUTOSAVE_DEBOUNCE_MS) {
+  if (_autosaveTimers[key]) window.clearTimeout(_autosaveTimers[key]);
+  _autosaveTimers[key] = window.setTimeout(fn, ms);
+}
+
+function readJsonDraft(storageKey) {
+  if (!storageKey) return null;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeJsonDraft(storageKey, payload) {
+  if (!storageKey) return;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify({ ...payload, ts: Date.now() }));
+  } catch (_) {
+    /* quota or private mode */
+  }
+}
+
+function clearJsonDraft(storageKey) {
+  if (!storageKey) return;
+  try {
+    localStorage.removeItem(storageKey);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function workbookDraftKey(scope, candidateId) {
+  if (!state.jobId || !candidateId) return "";
+  return `alex.draft.${DRAFT_STORAGE_VERSION}.${state.jobId}.${scope}.${candidateId}`;
+}
+
+function readWorkbookDraft(scope, candidateId) {
+  return readJsonDraft(workbookDraftKey(scope, candidateId));
+}
+
+function writeWorkbookDraft(scope, candidateId, fields) {
+  writeJsonDraft(workbookDraftKey(scope, candidateId), { fields });
+}
+
+function clearWorkbookDraft(scope, candidateId) {
+  clearJsonDraft(workbookDraftKey(scope, candidateId));
+}
+
+function mergeRowWithDraft(row, scope) {
+  const draft = readWorkbookDraft(scope, row?.candidate_id);
+  if (!draft?.fields) return row;
+  return { ...row, ...draft.fields };
+}
+
+function collectWorkbookDraftFields(scope) {
+  return {
+    use_case: document.getElementById(`${scope}-focus-use_case`)?.value || "",
+    operation: document.getElementById(`${scope}-focus-operation`)?.value || "",
+    expected_input: document.getElementById(`${scope}-focus-expected_input`)?.value || "",
+    expected_output: document.getElementById(`${scope}-focus-expected_output`)?.value || "",
+    review_status: document.getElementById(`${scope}-focus-review_status`)?.value || "pending",
+    engineer_confirmation_required:
+      document.getElementById(`${scope}-focus-engineer_confirmation_required`)?.value || "yes",
+    open_questions: document.getElementById(`${scope}-focus-open_questions`)?.value || "",
+  };
+}
+
+function bindWorkbookDraftAutosave(scope, candidateId, statusElSelector) {
+  if (!state.jobId || !candidateId) return;
+  const draft = readWorkbookDraft(scope, candidateId);
+  const timerKey = `${scope}:${candidateId}`;
+  const fields = [
+    `${scope}-focus-use_case`,
+    `${scope}-focus-operation`,
+    `${scope}-focus-expected_input`,
+    `${scope}-focus-expected_output`,
+    `${scope}-focus-review_status`,
+    `${scope}-focus-engineer_confirmation_required`,
+    `${scope}-focus-open_questions`,
+  ];
+  const saveDraft = () => {
+    writeWorkbookDraft(scope, candidateId, collectWorkbookDraftFields(scope));
+    const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
+    if (statusEl && !statusEl.dataset.busy) {
+      statusEl.textContent = "Draft saved locally.";
+    }
+  };
+  fields.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input", () => debounceAutosave(timerKey, saveDraft));
+    el.addEventListener("change", () => debounceAutosave(timerKey, saveDraft));
+  });
+  if (draft?.fields) {
+    const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
+    if (statusEl) statusEl.textContent = "Restored unsaved draft.";
+  }
+}
+
+function definitionDraftKey(logicId) {
+  if (!state.jobId || !logicId) return "";
+  return `alex.draft.${DRAFT_STORAGE_VERSION}.${state.jobId}.definition.${logicId}`;
+}
+
+function readDefinitionDraft(logicId) {
+  return readJsonDraft(definitionDraftKey(logicId));
+}
+
+function writeDefinitionDraft(logicId, text) {
+  writeJsonDraft(definitionDraftKey(logicId), { text: String(text ?? "") });
+}
+
+function clearDefinitionDraft(logicId) {
+  clearJsonDraft(definitionDraftKey(logicId));
+}
+
+function bindDefinitionDraftAutosave(logicId) {
+  const noteEl = document.getElementById("definition-workbench-note");
+  if (!noteEl || !state.jobId || !logicId) return;
+  const timerKey = `definition:${logicId}`;
+  const draft = readDefinitionDraft(logicId);
+  noteEl.addEventListener("input", () => {
+    debounceAutosave(timerKey, () => writeDefinitionDraft(logicId, noteEl.value));
+  });
+  const statusEl = document.querySelector("[data-definition-query-status]");
+  if (draft?.text != null && String(draft.text).trim()) {
+    if (statusEl) statusEl.textContent = "Restored unsaved draft.";
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
+}
+
+function initThemeToggle() {
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  let theme = "dark";
+  try {
+    theme = localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark";
+  } catch (_) {
+    theme = "dark";
+  }
+  const sync = (next) => {
+    applyTheme(next);
+    btn.classList.toggle("is-light", next === "light");
+    btn.setAttribute("aria-pressed", next === "light" ? "true" : "false");
+    btn.title = next === "light" ? "Switch to dark theme" : "Switch to light theme";
+  };
+  sync(theme);
+  btn.onclick = () => {
+    const next = btn.classList.contains("is-light") ? "dark" : "light";
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch (_) {
+      /* ignore */
+    }
+    sync(next);
+  };
+}
+
+function setTopbarChipState(chipId, { ok = false, warn = false, err = false } = {}) {
+  const chip = document.getElementById(chipId);
+  if (!chip) return;
+  chip.classList.remove("topbar-chip--ok", "topbar-chip--warn", "topbar-chip--err");
+  if (ok) chip.classList.add("topbar-chip--ok");
+  else if (err) chip.classList.add("topbar-chip--err");
+  else if (warn) chip.classList.add("topbar-chip--warn");
+}
 
 let state = {
   jobId: null,
@@ -28,8 +264,13 @@ let state = {
   workbookFocus: {
     logic: null,
     export: null,
+    testcode: null,
   },
   inboxFocus: {},
+  logicTreeFocus: { nodeId: null, highlightTerms: [] },
+  pathSimAssignments: {},
+  pathSimResult: {},
+  pathRegenProposal: {},
   diagramFocus: {
     state: null,
     edgeKey: null,
@@ -48,12 +289,19 @@ let state = {
     pickerListing: null,
     pickerLoading: false,
     pickerError: null,
+    rootPickerOpen: false,
+    rootPickerCwd: "",
+    rootPickerListing: null,
+    rootPickerLoading: false,
+    rootPickerError: null,
     addRowMode: false,        // toggles inline "+ Add relationship" form
     addRowDraft: "",
     busy: false,
     error: null,
   },
   serviceStatusTimer: null,
+  currentPageId: "review",
+  routingBoot: false,
   copilot: {
     status: null,
     loginCommandId: null,
@@ -68,6 +316,21 @@ let state = {
     features: { validator: false, add_clone_tc: false },
     export: { strict: false },
   },
+  currentUser: null,
+  teamAuthEnabled: false,
+  bundleVersion: null,
+  testCode: {
+    workspace: null,
+    loading: false,
+    error: null,
+    selectedCandidateId: null,
+    selectedLogicId: null,
+    draft: null,
+    variableMapDraft: {},
+    harnessDraft: {},
+    status: "",
+  },
+  guideOpenSection: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -77,10 +340,97 @@ function setJobId(id) {
   state.jobId = id;
   const el = $("#job-id");
   if (el) el.textContent = id ? id.slice(-16) : "—";
+  try {
+    if (id) sessionStorage.setItem("alex.currentJobId", id);
+    else sessionStorage.removeItem("alex.currentJobId");
+  } catch (_) {
+    /* private mode */
+  }
+  if (state.currentPageId && !state.routingBoot) {
+    syncUrlForPage(state.currentPageId, { replace: true });
+  }
+}
+
+function pageSlug(pageId) {
+  return PAGE_ROUTES[pageId]?.slug || "review";
+}
+
+function pageFromPath(pathname) {
+  const slug = String(pathname || "")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+  if (!slug || slug === "index.html") return "review";
+  return SLUG_TO_PAGE[slug] || "review";
+}
+
+function buildAppUrl(pageId, { jobId } = {}) {
+  const slug = pageSlug(pageId);
+  const path = `/${slug}`;
+  const params = new URLSearchParams();
+  const job = jobId !== undefined ? jobId : state.jobId;
+  if (job) params.set("job", job);
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+function syncUrlForPage(pageId, { replace = false } = {}) {
+  const next = buildAppUrl(pageId);
+  const current = `${window.location.pathname}${window.location.search}`;
+  if (next === current) return;
+  const historyState = { pageId, jobId: state.jobId || null };
+  if (replace) history.replaceState(historyState, "", next);
+  else history.pushState(historyState, "", next);
+}
+
+function updatePageChrome(pageId) {
+  const meta = PAGE_ROUTES[pageId] || PAGE_ROUTES.review;
+  document.title = `ALEX — ${meta.title}`;
+  const stepEl = $("#topbar-page-step");
+  const titleEl = $("#topbar-page-title");
+  const page = PAGES.find((p) => p.id === pageId);
+  if (stepEl) stepEl.textContent = page ? `Step ${page.step}` : "";
+  if (titleEl) titleEl.textContent = meta.title;
+}
+
+function initRouting() {
+  window.addEventListener("popstate", (ev) => {
+    const pageId = ev.state?.pageId || pageFromPath(window.location.pathname);
+    if (ev.state?.jobId) setJobId(ev.state.jobId);
+    showPage(pageId, { skipHistory: true });
+  });
+}
+
+function readJobIdFromUrl() {
+  try {
+    return new URLSearchParams(window.location.search).get("job");
+  } catch (_) {
+    return null;
+  }
 }
 
 function api(path, opts = {}) {
-  return fetch(path, opts).then(async (r) => {
+  const headers = { ...(opts.headers || {}) };
+  const method = (opts.method || "GET").toUpperCase();
+  if (state.bundleVersion != null && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    headers["If-Match"] = String(state.bundleVersion);
+  }
+  return fetch(path, { ...opts, headers, credentials: "same-origin" }).then(async (r) => {
+    if (r.status === 401) {
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+      throw new Error("Not authenticated");
+    }
+    if (r.status === 409) {
+      let detail = "Someone else saved — refresh the page and try again.";
+      try {
+        const j = await r.json();
+        detail = j.detail || detail;
+      } catch (_) {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
     if (!r.ok) {
       let detail = r.statusText;
       try {
@@ -96,7 +446,17 @@ function api(path, opts = {}) {
       throw new Error(detail || `HTTP ${r.status}`);
     }
     const ct = r.headers.get("content-type") || "";
-    if (ct.includes("json")) return r.json();
+    if (ct.includes("json")) {
+      const data = await r.json();
+      if (data?.bundle_version != null) noteBundleVersion(data.bundle_version);
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        invalidateApiCache();
+      }
+      return data;
+    }
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      invalidateApiCache();
+    }
     return r;
   });
 }
@@ -124,11 +484,11 @@ function formatSourceReadable(src) {
   if (file && loc.length) return `${file} — ${loc.join(" · ")}`;
   if (file) return file;
   if (loc.length) return loc.join(" · ");
-  try {
-    return JSON.stringify(src);
-  } catch {
-    return String(src);
-  }
+  const compact = compactSourceLabel(src);
+  if (compact) return compact;
+  const summary = src.summary || src.control || src.document;
+  if (summary) return String(summary);
+  return "source";
 }
 
 function compactSourceLabel(src) {
@@ -208,7 +568,7 @@ function renderSourceCards(sources) {
     .join("")}</div>`;
 }
 
-function renderVisualSourcePreview(visualSource, tableRows = []) {
+function renderVisualSourcePreview(visualSource, tableRows = [], highlightTerms = [], highlightRowNos = []) {
   const rows = (visualSource?.rows || []).filter((row) => (row.cells || []).some((cell) => String(cell || "").trim()));
   if (!rows.length && !tableRows.length) {
     return `<p class="detail">No source table snapshot available yet.</p>`;
@@ -216,20 +576,49 @@ function renderVisualSourcePreview(visualSource, tableRows = []) {
   const source = visualSource?.source || {};
   const title = visualSource?.title || source.control || "Source table";
   const loc = compactSourceLabel(source) || formatSourceReadable(source);
+  const terms = (highlightTerms || []).map((t) => String(t || "").toUpperCase()).filter(Boolean);
+  const rowNoSet = new Set((highlightRowNos || []).map((n) => String(n)));
   const bodyRows = rows.length
     ? rows
     : tableRows.map((row) => ({ row_no: row[0], cells: [row[1]] }));
+  const branchGroupCounts = {};
+  bodyRows.forEach((row) => {
+    const key = String(row.branch_group || "").trim();
+    if (key) branchGroupCounts[key] = (branchGroupCounts[key] || 0) + 1;
+  });
+  const mergedGroups = Object.keys(branchGroupCounts).filter((k) => branchGroupCounts[k] > 1);
+  const branchStripe = (group) => {
+    const key = String(group || "").trim();
+    if (!key || branchGroupCounts[key] < 2) return "";
+    return "var(--merge-stripe)";
+  };
+  const rowMatches = (row) => {
+    const rowNo = String(row.row_no ?? "");
+    if (rowNoSet.size && rowNoSet.has(rowNo)) return true;
+    if (!terms.length) return false;
+    const text = [(row.cells || []).join(" "), row.row_no].join(" ").toUpperCase();
+    return terms.some((term) => text.includes(term));
+  };
   return `<div class="alex-source-preview">
     <div class="alex-source-preview__head">
       <b>${esc(title)}</b>
       ${loc ? `<span class="detail">${esc(loc)}</span>` : ""}
+      ${mergedGroups.length ? `<span class="detail alex-source-preview__legend">Grey bar = rows sharing a merged Word cell (same OR branch)</span>` : ""}
     </div>
-    <div class="grid-wrap">
-      <table class="data-grid alex-table alex-source-preview__table">
+    <div class="grid-wrap alex-source-preview__grid">
+      <table class="data-grid alex-table alex-source-preview__table" id="logic-source-table">
         <tbody>${bodyRows
           .map((row) => {
             const cells = row.cells || [];
-            return `<tr>
+            const hl = rowMatches(row) ? " logic-source-row--highlight" : "";
+            const stripe = branchStripe(row.branch_group || "");
+            const focus =
+              rowNoSet.has(String(row.row_no ?? "")) && state.logicTreeFocus?.nodeId ? " is-tree-focus" : "";
+            const branchAttr = row.branch_group ? ` data-branch-group="${esc(row.branch_group)}"` : "";
+            const branchStyle = stripe ? ` style="--branch-stripe:${stripe}"` : "";
+            return `<tr class="logic-source-row${hl}${focus}" data-source-row="${esc(row.row_no ?? "")}"${branchAttr}${branchStyle}${
+              row.branch_group ? ` title="merge group: ${esc(row.branch_group)}"` : ""
+            }>
               <th class="col-no">${esc(row.row_no ?? "")}</th>
               ${cells.map((cell) => `<td>${esc(cell)}</td>`).join("")}
             </tr>`;
@@ -238,6 +627,113 @@ function renderVisualSourcePreview(visualSource, tableRows = []) {
       </table>
     </div>
   </div>`;
+}
+
+function syncLogicTreeSourceFocus(treeNodes = []) {
+  const focus = state.logicTreeFocus || {};
+  const terms = (focus.highlightTerms || []).map((t) => String(t).toUpperCase()).filter(Boolean);
+  const rowNos = new Set((focus.highlightRowNos || []).map(String));
+  const root = content();
+  if (!root) return;
+  root.querySelectorAll(".logic-tree-node").forEach((el) => {
+    el.classList.toggle("is-focus", el.getAttribute("data-tree-node") === focus.nodeId);
+  });
+  root.querySelectorAll(".logic-source-row").forEach((row) => {
+    const rowNo = String(row.dataset.sourceRow || "");
+    const text = row.textContent.toUpperCase();
+    const termMatch = terms.length > 0 && terms.some((t) => text.includes(t));
+    const rowMatch = rowNos.has(rowNo);
+    row.classList.toggle("logic-source-row--highlight", termMatch || rowMatch);
+    row.classList.toggle("is-tree-focus", rowMatch);
+  });
+  if (focus.scrollSourceRow && rowNos.size) {
+    const target = root.querySelector(`.logic-source-row[data-source-row="${CSS.escape(String([...rowNos][0]))}"]`);
+    target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    state.logicTreeFocus = { ...focus, scrollSourceRow: false };
+  }
+}
+
+function bindLogicTreeSourceNavigation(item) {
+  const treeNodes = item?.tree_nodes || [];
+  const nodeById = Object.fromEntries(treeNodes.map((n) => [n.node_id, n]));
+  const nodeByRow = Object.fromEntries(
+    treeNodes.filter((n) => n.source_row != null).map((n) => [String(n.source_row), n])
+  );
+
+  content().querySelectorAll(".logic-tree-node").forEach((btn) => {
+    btn.querySelector(".logic-tree-node__btn")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const nodeId = btn.getAttribute("data-tree-node") || "";
+      const node = nodeById[nodeId];
+      const label = btn.getAttribute("data-tree-label") || "";
+      const terms = label.match(/[A-Z][A-Z0-9_]+/g) || [];
+      const highlightRowNos = node?.source_row != null ? [node.source_row] : [];
+      state.logicTreeFocus = {
+        nodeId,
+        highlightTerms: terms,
+        highlightRowNos,
+        scrollSourceRow: highlightRowNos.length > 0,
+      };
+      syncLogicTreeSourceFocus(treeNodes);
+    });
+  });
+
+  content().querySelectorAll(".logic-source-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      const rowNo = String(row.dataset.sourceRow || "");
+      const node = nodeByRow[rowNo];
+      const terms = node ? (logicNodeLabel(node).match(/[A-Z][A-Z0-9_]+/g) || []) : [];
+      state.logicTreeFocus = {
+        nodeId: node?.node_id || null,
+        highlightTerms: terms,
+        highlightRowNos: rowNo ? [rowNo] : [],
+        scrollSourceRow: false,
+      };
+      syncLogicTreeSourceFocus(treeNodes);
+    });
+  });
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      return true;
+    } catch (_e) {
+      return false;
+    } finally {
+      ta.remove();
+    }
+  }
+}
+
+function applyM365ExpiredBanner(st) {
+  const banner = document.getElementById("m365-expired-banner");
+  const textEl = document.getElementById("m365-expired-banner-text");
+  if (!banner) return;
+  const show = !!(st?.session_refresh_failed || (st?.session_expired && st?.client_id_configured));
+  if (!show) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (textEl) {
+    textEl.textContent = st?.session_refresh_failed
+      ? "Microsoft 365 session expired — sign in again to use M365 Copilot in-app."
+      : "Microsoft 365 sign-in required for in-app Copilot.";
+  }
 }
 
 
@@ -413,12 +909,279 @@ function githubAuthBadge(st) {
 function m365AuthBadge(m) {
   if (!m) return `<span class="auth-badge auth-badge--warn">LOADING</span>`;
   if (m.api_ready || m.connected) {
+    if (m.copilot_chat_entitled === false) {
+      const label = m.not_entitled_reason === "msa" ? "MSA (NO API)" : "NO LICENSE";
+      return `<span class="auth-badge auth-badge--warn" title="${esc(m.entitlement_note || "Copilot Chat API not entitled")}">${label}</span>`;
+    }
     return `<span class="auth-badge auth-badge--ok">${icon("check", "alex-icon--badge")} AUTH OK</span>`;
   }
   if (m.client_id_configured) {
     return `<span class="auth-badge auth-badge--warn">SIGN IN</span>`;
   }
   return `<span class="auth-badge auth-badge--err">NEEDS CLIENT ID</span>`;
+}
+
+function renderM365EntitlementBanner(m, { compact = false } = {}) {
+  if (!m || m.copilot_chat_entitled !== false || !(m.api_ready || m.connected)) {
+    return "";
+  }
+  const reasonText =
+    m.not_entitled_reason === "msa"
+      ? "Personal Microsoft account — Microsoft 365 Copilot Chat API is blocked. ALEX will auto-fall back to GitHub Copilot CLI / Ollama, or use Paste from Copilot Web."
+      : "No Microsoft 365 Copilot license assigned to this work account. Ask IT to add the SKU Microsoft_365_Copilot, or use the fallbacks below.";
+  const guide = m.activation_guide_url || "docs/M365_COPILOT_ACTIVATION_GUIDE.md";
+  const cls = compact ? "m365-entitlement-banner m365-entitlement-banner--compact" : "m365-entitlement-banner";
+  return `<div class="${cls}" role="status">
+    <strong>M365 Copilot API not entitled.</strong>
+    <span class="detail"> ${esc(reasonText)}</span>
+    <a class="detail" href="${esc(guide)}" target="_blank" rel="noreferrer">Activation guide</a>
+  </div>`;
+}
+
+function renderBriefReadinessHtml(readiness) {
+  if (!readiness) return "";
+  const blockers = readiness.blockers || [];
+  const warnings = readiness.warnings || [];
+  const tc = readiness.test_case_count ?? 0;
+  const cls = blockers.length ? "brief-readiness brief-readiness--blocked" : warnings.length ? "brief-readiness brief-readiness--warn" : "brief-readiness brief-readiness--ok";
+  const title = blockers.length
+    ? "Brief chưa sẵn sàng — sửa blocker trước khi hỏi Copilot"
+    : warnings.length
+      ? "Brief sẵn sàng (có cảnh báo)"
+      : "Brief sẵn sàng";
+  const stats = `<span class="brief-readiness__stats">${tc} test case(s) · parse <code>${esc(readiness.parse_status || "—")}</code>${
+    readiness.compliance_fail_count != null
+      ? ` · compliance fail ${readiness.compliance_fail_count}/${readiness.compliance_total || tc}`
+      : ""
+  }</span>`;
+  const blockerHtml = blockers.length
+    ? `<ul class="brief-readiness__list brief-readiness__list--err">${blockers.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>`
+    : "";
+  const warnHtml = warnings.length
+    ? `<ul class="brief-readiness__list brief-readiness__list--warn">${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`
+    : "";
+  return `<div class="${cls}" data-brief-readiness>${stats}<strong>${esc(title)}</strong>${blockerHtml}${warnHtml}</div>`;
+}
+
+/**
+ * Copilot Web wizard: copy brief → ask on copilot.microsoft.com → paste JSON back.
+ */
+async function openCopilotPasteModal(logicId) {
+  const modal = document.createElement("div");
+  modal.className = "copilot-paste-backdrop";
+  modal.innerHTML = `<div class="copilot-paste-modal copilot-paste-modal--wide" role="dialog" aria-modal="true" aria-label="Copilot Web workflow">
+    <header class="copilot-paste-modal__head">
+      <strong>Copilot Web — 1 control, nhiều test case</strong>
+      <button type="button" class="btn ghost btn-xs" data-copilot-paste-close>Close</button>
+    </header>
+    <div class="copilot-paste-modal__body">
+      <div class="copilot-wizard-steps">
+        <span class="copilot-wizard-step is-active">1 · Copy brief</span>
+        <span class="copilot-wizard-step is-active">2 · Ask Copilot</span>
+        <span class="copilot-wizard-step is-active">3 · Preview JSON</span>
+      </div>
+      <p class="detail">Logic group: <code>${esc(logicId)}</code> — brief gồm <b>tất cả TC</b> của control; JSON trả về theo từng <code>candidate_id</code>.</p>
+      <div data-copilot-readiness></div>
+      <p class="detail" data-copilot-brief-status>Loading brief…</p>
+      <div class="copilot-brief-meta" data-copilot-brief-meta hidden></div>
+      <details class="alex-tab-help copilot-brief-details" open>
+        <summary class="alex-tab-help__summary"><span class="alex-tab-help__icon" aria-hidden="true">📋</span> Brief cho Copilot (markdown)</summary>
+        <div class="alex-tab-help__body">
+          <textarea class="copilot-brief-box" data-copilot-brief-text readonly></textarea>
+        </div>
+      </details>
+      <div class="review-actions" style="margin:0.5rem 0 1rem">
+        <button type="button" class="btn secondary" data-copilot-copy-brief disabled>Copy brief</button>
+        <button type="button" class="btn ghost btn-xs" data-copilot-copy-anyway hidden>Copy anyway</button>
+        <a class="btn secondary" href="https://copilot.microsoft.com" target="_blank" rel="noopener noreferrer">Open Copilot Web</a>
+      </div>
+      <label class="detail">Paste JSON reply
+        <textarea class="clarify-box copilot-paste-modal__textarea" data-copilot-json placeholder='{"candidates":[{"candidate_id":"TC_001","given":[{"signal":"A","value":"1"}],"note":"row 3 pass path"}]}'></textarea>
+      </label>
+      <div data-copilot-preview-panel hidden></div>
+      <p class="detail copilot-paste-modal__status" data-copilot-paste-status></p>
+    </div>
+    <footer class="copilot-paste-modal__foot">
+      <button type="button" class="btn secondary" data-copilot-paste-close>Cancel</button>
+      <button type="button" class="btn" data-copilot-paste-apply disabled>Validate &amp; preview</button>
+    </footer>
+  </div>`;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) close();
+  });
+  modal.querySelectorAll("[data-copilot-paste-close]").forEach((b) => (b.onclick = close));
+
+  const readinessEl = modal.querySelector("[data-copilot-readiness]");
+  const briefStatus = modal.querySelector("[data-copilot-brief-status]");
+  const briefMeta = modal.querySelector("[data-copilot-brief-meta]");
+  const briefText = modal.querySelector("[data-copilot-brief-text]");
+  const copyBtn = modal.querySelector("[data-copilot-copy-brief]");
+  const copyAnywayBtn = modal.querySelector("[data-copilot-copy-anyway]");
+  const applyBtn = modal.querySelector("[data-copilot-paste-apply]");
+  const statusEl = modal.querySelector("[data-copilot-paste-status]");
+  const jsonArea = modal.querySelector("[data-copilot-json]");
+  const previewPanel = modal.querySelector("[data-copilot-preview-panel]");
+
+  let briefPayload = "";
+  let readiness = null;
+  try {
+    const res = await api(
+      `/api/review/m365-brief?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(logicId)}`
+    );
+    briefPayload = res.brief_with_header || res.brief || "";
+    readiness = res.readiness || null;
+    if (readinessEl) readinessEl.innerHTML = renderBriefReadinessHtml(readiness);
+    if (briefText) briefText.value = briefPayload;
+    const tc = readiness?.test_case_count ?? 0;
+    if (briefStatus) {
+      briefStatus.textContent =
+        "Copy brief (1 lần/control) → paste vào Copilot Web → copy JSON trả về → Validate & preview ở đây.";
+    }
+    if (briefMeta) {
+      briefMeta.hidden = false;
+      briefMeta.innerHTML = `<span>Brief ID: <code>${esc(res.brief_hash_short || (res.brief_hash || "").slice(0, 12))}</code></span>
+        <span>Evidence: <code>${esc(res.evidence_hash_short || (res.evidence_hash || "").slice(0, 12))}</code></span>
+        <span>${tc} TC</span>`;
+    }
+    const blocked = (readiness?.blockers || []).length > 0;
+    if (copyBtn) {
+      copyBtn.disabled = !briefPayload || blocked;
+      copyBtn.textContent = tc ? `Copy brief (${tc} TC)` : "Copy brief";
+    }
+    if (copyAnywayBtn) {
+      copyAnywayBtn.hidden = !blocked || !briefPayload;
+      copyAnywayBtn.onclick = async () => {
+        const ok = await copyTextToClipboard(briefText?.value || briefPayload);
+        if (statusEl) {
+          statusEl.textContent = ok
+            ? "Brief copied (override) — Copilot có thể thiếu context."
+            : "Copy failed — select brief text manually.";
+        }
+      };
+    }
+    if (applyBtn) applyBtn.disabled = false;
+  } catch (err) {
+    if (briefStatus) briefStatus.textContent = err.message || "Could not load brief.";
+  }
+
+  if (copyBtn) {
+    copyBtn.onclick = async () => {
+      const ok = await copyTextToClipboard(briefText?.value || briefPayload);
+      if (statusEl) statusEl.textContent = ok ? "Brief copied — paste it into Copilot Web." : "Copy failed — select the brief text manually.";
+    };
+  }
+
+  function renderInlinePreview(res) {
+    if (!previewPanel) return;
+    const diffs = res.diffs || [];
+    if (!diffs.length) {
+      previewPanel.hidden = true;
+      return;
+    }
+    previewPanel.hidden = false;
+    previewPanel.innerHTML = `<div class="knowledge-diff-list knowledge-diff-list--modal">${diffs
+      .map((d) => {
+        const comply = d.logic_comply || "—";
+        const complyCls = comply === "pass" ? "high" : comply === "fail" ? "error" : "warning";
+        const checked = d.default_selected !== false ? "checked" : "";
+        return `<article class="knowledge-diff-row">
+          <header class="knowledge-diff-row__head">
+            <span class="tag ${complyCls}">${esc(comply)}</span>
+            <code>${esc(d.candidate_id || "—")}</code>
+          </header>
+          ${d.reason ? `<p class="detail">${esc(d.reason)}</p>` : ""}
+          ${(d.missing_signals || []).length ? `<p class="detail">Missing: ${esc(d.missing_signals.join(", "))}</p>` : ""}
+          <div class="knowledge-diff-grid">
+            <div class="alex-io-block"><h5>Before</h5>${formatIoBlock(d.before_expected_input || "—")}</div>
+            <div class="alex-io-block"><h5>After</h5>${formatIoBlock(d.after_expected_input || "—")}</div>
+          </div>
+        </article>`;
+      })
+      .join("")}</div>
+    <p class="detail">Scroll Logic tab → <b>AI patch review</b> để chọn TC và Apply selected.</p>`;
+  }
+
+  jsonArea?.focus();
+  applyBtn.onclick = async () => {
+    const payload = (jsonArea?.value || "").trim();
+    if (!payload) {
+      if (statusEl) statusEl.textContent = "Paste the JSON reply first.";
+      return;
+    }
+    if (statusEl) statusEl.textContent = "Validating JSON & previewing compliance…";
+    applyBtn.disabled = true;
+    try {
+      const res = await api(
+        `/api/review/import-knowledge-patches?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ logic_id: logicId, payload }),
+        }
+      );
+      if (!res.ok) {
+        const errs = res.schema_errors || (res.error ? [res.error] : []);
+        if (statusEl) {
+          statusEl.textContent = errs.length ? errs.join(" · ") : res.error || "Validation failed.";
+        }
+        if (previewPanel) {
+          previewPanel.hidden = false;
+          previewPanel.innerHTML = `<ul class="brief-readiness__list brief-readiness__list--err">${errs
+            .map((e) => `<li>${esc(e)}</li>`)
+            .join("")}</ul>`;
+        }
+        return;
+      }
+      invalidateApiCache(`knowledge:${state.jobId}:${logicId}`);
+      const pending = res.pending_patches || res.patches_received || 0;
+      const failing = res.failures_remaining || 0;
+      renderInlinePreview(res);
+      if (statusEl) {
+        statusEl.textContent = res.preview
+          ? `${pending} patch(es) validated${failing ? ` — ${failing} fail logic_compliance (review before Apply).` : " — review in Logic tab."}`
+          : `Applied ${res.candidates_updated || 0} test case(s).`;
+      }
+      await renderLogicReview();
+      if (res.preview) {
+        document.getElementById("knowledge-reconciliation-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        setTimeout(close, 800);
+      }
+    } catch (err) {
+      if (statusEl) statusEl.textContent = err.message || "Failed to import patches.";
+    } finally {
+      applyBtn.disabled = false;
+    }
+  };
+}
+
+async function copyCopilotBrief(logicId, statusEl) {
+  if (!state.jobId || !logicId) return;
+  if (statusEl) statusEl.textContent = "Loading brief…";
+  try {
+    const res = await api(
+      `/api/review/m365-brief?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(logicId)}`
+    );
+    const readiness = res.readiness || {};
+    if ((readiness.blockers || []).length) {
+      if (statusEl) {
+        statusEl.textContent = `Blocked: ${readiness.blockers[0]} — dùng “Paste Copilot reply…” để xem chi tiết.`;
+      }
+      return;
+    }
+    const ok = await copyTextToClipboard(res.brief_with_header || res.brief || "");
+    const tc = readiness.test_case_count ?? 0;
+    if (statusEl) {
+      statusEl.textContent = ok
+        ? `Brief copied (${tc} TC, ID ${res.brief_hash_short || "—"}). Paste vào Copilot Web.`
+        : "Could not copy — use “Paste from Copilot Web”.";
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || "Failed to load brief.";
+  }
 }
 
 function isCopilotPolicyError(text) {
@@ -724,13 +1487,13 @@ function queueStatusClass(status) {
 
 function queueStatusLabel(status) {
   return {
-    ready_for_ai: "ready for AI",
-    blocked_missing_definition: "blocked",
-    needs_engineer_answer: "needs answer",
-    ai_drafted: "AI drafted",
-    completed: "completed",
-    no_rows: "no rows",
-  }[status] || status || "unknown";
+    ready_for_ai: "Ready for AI",
+    blocked_missing_definition: "Blocked — missing defs",
+    needs_engineer_answer: "Needs your review",
+    ai_drafted: "AI draft ready",
+    completed: "Ready",
+    no_rows: "No rows yet",
+  }[status] || status || "Unknown";
 }
 
 function queueShortReason(row = {}) {
@@ -758,113 +1521,190 @@ function reasonCodeLabel(code) {
   }[code] || code || "Review";
 }
 
-function resolutionLabel(value) {
-  return {
-    definition_found: "found",
-    added_context_found: "added context",
-    missing_definition: "missing",
-  }[value] || value || "review";
+function renderTermSummaryBrief(counts, total) {
+  if (!total) return "";
+  if (!counts.missing) return `<p class="detail term-counts">${total} terms · all defined</p>`;
+  const bits = [`${counts.missing} need define`];
+  if (counts.added) bits.push(`${counts.added} from note`);
+  return `<p class="detail term-counts">${total} terms · ${bits.join(", ")}</p>`;
 }
 
 function renderCapabilitySummary(_capability) {
   return "";
 }
 
-function guideSection(title, body, id = "") {
-  const attr = id ? ` id="${esc(id)}"` : "";
-  return `<section class="card alex-guide-section"${attr}>
-    <h3>${esc(title)}</h3>
-    ${body}
-  </section>`;
+function guideDetails(title, body, { id = "", open = false, step = "" } = {}) {
+  const stepHtml = step ? `<span class="alex-guide-details__step">${esc(step)}</span>` : "";
+  return `<details class="alex-guide-details card"${id ? ` id="${esc(id)}"` : ""}${open ? " open" : ""}>
+    <summary class="alex-guide-details__summary">${stepHtml}<span class="alex-guide-details__title">${esc(title)}</span></summary>
+    <div class="alex-guide-details__body">${body}</div>
+  </details>`;
+}
+
+function renderTabHelp(title, body, { id = "" } = {}) {
+  return `<details class="alex-tab-help"${id ? ` id="${esc(id)}"` : ""}>
+    <summary class="alex-tab-help__summary"><span class="alex-tab-help__icon" aria-hidden="true">?</span> ${esc(title)}</summary>
+    <div class="alex-tab-help__body">${body}</div>
+  </details>`;
 }
 
 function renderGuideWorkflow() {
-  return guideSection(
-    "Start here (5 minutes)",
+  return guideDetails(
+    "Bắt đầu nhanh (5 phút)",
     `<ol class="alex-guide-steps">
-      <li><b>Review</b> — upload or load samples, select files, sign in to AI providers, then run <b>Review specification</b>.</li>
-      <li><b>Logic &amp; Definitions</b> — read Raw vs Tree, resolve missing definitions, then apply knowledge with AI.</li>
-      <li><b>Diagram Graph</b> — check states/transitions only when your spec has state-machine evidence.</li>
-      <li><b>Final File</b> — review/edit workbook rows, switch EN/JP view, and export.</li>
-    </ol>`
+      <li><b>Review</b> — chọn file spec → <b>Review specification</b> → đợi job xong.</li>
+      <li><b>Logic &amp; Definitions</b> — đối chiếu cây logic với bảng spec, bổ sung definition còn thiếu.</li>
+      <li><b>Final File</b> — sửa Before/After, đánh dấu row <b>ready</b> / <b>approved</b>.</li>
+      <li><b>Test Code</b> — chọn TC → copy <code>TEST_F</code> (chỉ map tên khi spec ≠ code).</li>
+      <li><b>Diagram Graph</b> — chỉ khi spec có state machine / diagram.</li>
+    </ol>
+    <p class="detail">Bookmark URL: <code>/review</code> · <code>/logic</code> · <code>/export</code> · <code>/test-code?job=…</code></p>`,
+    { id: "guide-start", open: true, step: "★" }
   );
 }
 
 function renderGuideReviewTab() {
-  return guideSection(
-    "Tab 1 — Review",
-    `<p class="detail">Use this tab to prepare input and authentication. Re-run analysis after changing source files.</p>
+  return guideDetails(
+    "Tab 1 — Review (Sources & analyze)",
+    `<p class="detail">Chuẩn bị input và chạy phân tích. Phải có job trước khi sang tab khác.</p>
     <ol class="alex-guide-steps">
-      <li>Upload files or use <b>Load sample package</b>.</li>
-      <li>Tick only the files for the current job and fix the file type if auto-detection is wrong.</li>
-      <li>Sign in: M365 uses Client ID + Tenant + device code; GitHub Copilot CLI uses its own login.</li>
-      <li>Click <b>Review specification</b>. When the job finishes, continue to Logic &amp; Definitions.</li>
+      <li><b>Upload</b> hoặc <b>Load sample package</b> — tick đúng file cần review.</li>
+      <li>Chỉnh <b>Type</b> nếu auto-detect sai (System Spec / Test Spec / Sample Code).</li>
+      <li>Đăng nhập AI (M365 / Copilot CLI / Ollama) nếu cần Resolve with AI sau này.</li>
+      <li><b>Review specification</b> — theo dõi progress bar đến <b>completed</b>.</li>
+      <li>Top bar hiện JOB id, Rows Ready/Blocked, Missing Terms.</li>
     </ol>
-    <p class="detail"><b>M365 tip:</b> click Sign in once, open <code>login.microsoft.com/device</code>, type the code on this Mac, and wait for ALEX to complete polling.</p>`,
-    "guide-review"
+    <p class="detail"><b>M365:</b> Sign in một lần → mở <code>login.microsoft.com/device</code> → nhập code trên Mac → đợi ALEX poll xong.</p>`,
+    { id: "guide-review", step: "1" }
   );
 }
 
 function renderGuideLogicTab() {
-  return guideSection(
+  return guideDetails(
     "Tab 2 — Logic & Definitions",
-    `<p class="detail">One logic group is one control. Fix the logic group first, then review the affected test cases.</p>
-    <div class="grid-wrap"><table class="data-grid alex-table">
-      <thead><tr><th>Panel</th><th>How to use it</th></tr></thead>
+    `<p class="detail">Một <b>logic group</b> = một control trong spec. Sửa definition trước, rồi mới tin workbook rows.</p>
+    <div class="grid-wrap"><table class="data-grid alex-table alex-guide-table">
+      <thead><tr><th>Khu vực</th><th>Cách dùng</th></tr></thead>
       <tbody>
-        <tr><td><b>Logic structure</b></td><td>Raw expression is what ALEX recovered from the spec. Tree logic is the parsed AST. If Tree is partial, use Raw + source evidence to guide AI.</td></tr>
-        <tr><td><b>Source table / state context</b></td><td>Collapsed by default. Open it only when you need to verify the original logic table or related state-machine transition.</td></tr>
-        <tr><td><b>Dependency trace</b></td><td>Shows terms and whether ALEX found a trusted definition.</td></tr>
-        <tr><td><b>Knowledge workbench</b></td><td>Choose provider: Auto, M365, GitHub Copilot CLI, or Ollama. Write engineer knowledge, then click Resolve with AI.</td></tr>
-        <tr><td><b>Workbook rows</b></td><td>Review the final Given/Then text for this logic group and edit when needed.</td></tr>
+        <tr><td><b>Logic group</b></td><td>Dropdown chọn control. Đổi group → cây + bảng spec cập nhật.</td></tr>
+        <tr><td><b>Tree logic</b></td><td>Click node → highlight dòng tương ứng ở <b>Source table</b> bên phải.</td></tr>
+        <tr><td><b>Source table</b></td><td>Bảng Word/Excel gốc — nguồn tin cậy nhất khi cây parse lạ.</td></tr>
+        <tr><td><b>Path simulator</b></td><td>Nhập giá trị signal → <b>Run what-if</b> xem nhánh nào active (thử nhanh, không thay test case).</td></tr>
+        <tr><td><b>Definitions</b></td><td>Term thiếu → ghi engineer note → <b>Resolve with AI</b> → Apply.</td></tr>
+        <tr><td><b>Workbook rows</b></td><td>Given/When/Then của TC thuộc logic group — sửa trực tiếp nếu cần.</td></tr>
       </tbody>
-    </table></div>`,
-    "guide-logic"
+    </table></div>
+    <p class="detail">Tag <b>parse ok / partial</b> = độ tin cậy parser. Tree phức tạp → ưu tiên đọc source table.</p>`,
+    { id: "guide-logic", step: "2" }
+  );
+}
+
+function renderGuideDiagramTab() {
+  return guideDetails(
+    "Tab 3 — Diagram Graph",
+    `<p class="detail">Chỉ dùng khi spec có state machine hoặc diagram OCR.</p>
+    <ol class="alex-guide-steps">
+      <li>Chọn <b>state</b> ở trên → lọc transition liên quan.</li>
+      <li>Chọn <b>edge</b> → xem condition + evidence bên phải.</li>
+      <li><b>Jump to linked logic</b> — nhảy sang Logic tab của control liên kết.</li>
+      <li>Arrow purely visual (không có spec text) vẫn cần engineer review.</li>
+    </ol>`,
+    { id: "guide-diagram", step: "3" }
+  );
+}
+
+function renderGuideLibraryTab() {
+  return guideDetails(
+    "Tab 4 — Library",
+    `<p class="detail">Quản lý file mẫu và quan hệ traceability tái sử dụng giữa các job.</p>
+    <ol class="alex-guide-steps">
+      <li>Chọn thư mục <b>Library root</b> (folder trên máy).</li>
+      <li>Thêm relationship: file spec ↔ code ↔ test.</li>
+      <li>Từ <b>Test Code</b>: <b>Library</b> lưu harness preset (fixture, in/out, evaluate fn).</li>
+    </ol>`,
+    { id: "guide-library", step: "4" }
+  );
+}
+
+function renderGuideExportTab() {
+  return guideDetails(
+    "Tab 5 — Final File",
+    `<p class="detail">Workbook cuối — nguồn cho export Excel và sinh Test Code.</p>
+    <ol class="alex-guide-steps">
+      <li>Chọn test case ở dropdown → sửa <b>Expected input</b> / <b>Expected output</b>.</li>
+      <li>Đặt <b>Status</b>: <b>ready</b> hoặc <b>approved</b> khi đã review xong.</li>
+      <li><b>Save row</b> sau mỗi lần sửa.</li>
+      <li><b>Open in Test Code</b> — nhảy sang tab 6 với TC đang chọn.</li>
+      <li>Export Excel EN/JP khi blocked rows đã xử lý hoặc chấp nhận cố ý.</li>
+    </ol>
+    <p class="detail">Test Code đọc Before/After từ đây — sửa Final File trước khi regenerate code.</p>`,
+    { id: "guide-export", step: "5" }
+  );
+}
+
+function renderGuideTestCodeTab() {
+  return guideDetails(
+    "Tab 6 — Test Code",
+    `<p class="detail">Sinh <code>TEST_F</code> từ Before/After của Final File — không cần config nhiều nếu tên signal trùng code.</p>
+    <ol class="alex-guide-steps">
+      <li>Chọn <b>Test case</b> — code + Before/After đổi ngay (không reload cả trang).</li>
+      <li>Mặc định: <code>Given → in.SIGNAL</code>, <code>Then → out.SIGNAL</code> — copy được luôn.</li>
+      <li>Chỉ mở <b>Rename map</b> khi spec name ≠ code (vd. <code>IGN_SW</code> → <code>inputs.ign</code>):
+        <ul class="alex-guide-sublist">
+          <li><b>Suggest</b> — chỉ signal của TC đang chọn (không dump cả bundle).</li>
+          <li><b>Apply</b> — lưu map + regenerate.</li>
+        </ul>
+      </li>
+      <li><b>Regenerate</b> sau khi sửa Final File · <b>Copy</b> / <b>.cpp</b> khi ổn · <b>Save</b> giữ bản engineer đã sửa.</li>
+      <li><b>Harness defaults</b> — fixture class, in/out, evaluate fn (đóng sẵn, chỉ đổi một lần).</li>
+    </ol>
+    <p class="detail">Row chưa <b>ready</b> vẫn sinh code được nhưng nội dung có thể còn placeholder — ưu tiên approve ở Final File trước.</p>`,
+    { id: "guide-testcode", step: "6" }
   );
 }
 
 function renderGuideProviders() {
-  return guideSection(
-    "AI providers",
-    `<div class="grid-wrap"><table class="data-grid alex-table">
-      <thead><tr><th>Provider</th><th>Use when</th><th>Prepare</th></tr></thead>
+  return guideDetails(
+    "AI providers (Review & Logic)",
+    `<div class="grid-wrap"><table class="data-grid alex-table alex-guide-table">
+      <thead><tr><th>Provider</th><th>Khi nào dùng</th><th>Chuẩn bị</th></tr></thead>
       <tbody>
-        <tr><td><b>Auto</b></td><td>Default path for Resolve with AI. Tries M365, then GitHub Copilot CLI, then Ollama when enabled.</td><td>Sign in to at least one provider on Review.</td></tr>
-        <tr><td><b>M365 Copilot</b></td><td>Enterprise Graph Copilot reasoning.</td><td>Azure app, tenant, M365 login, Copilot license.</td></tr>
-        <tr><td><b>GitHub Copilot CLI</b></td><td>Pilot or fallback when M365 chat is unavailable.</td><td>GitHub Copilot CLI AUTH OK on Review.</td></tr>
-        <tr><td><b>Ollama</b></td><td>Offline experiments or fallback only.</td><td>Local model reachable and enabled.</td></tr>
+        <tr><td><b>Auto</b></td><td>Mặc định Resolve with AI — thử M365 → Copilot CLI → Ollama.</td><td>Sign in ít nhất một provider.</td></tr>
+        <tr><td><b>M365 Copilot</b></td><td>Enterprise reasoning qua Graph.</td><td>Azure app, tenant, license Copilot.</td></tr>
+        <tr><td><b>GitHub Copilot CLI</b></td><td>Fallback khi M365 không chat được.</td><td>CLI AUTH OK trên Review.</td></tr>
+        <tr><td><b>Ollama</b></td><td>Offline / thử nghiệm.</td><td>Model local + enabled trong config.</td></tr>
       </tbody>
     </table></div>
-    <p class="detail"><b>AUTH OK</b> means the provider is logged in on this machine. Use Test for a live runtime check.</p>`,
-    "guide-providers"
+    <p class="detail"><b>AUTH OK</b> = đã login trên máy này. Nút <b>Test</b> kiểm tra runtime thật.</p>`,
+    { id: "guide-providers" }
   );
 }
 
 function renderGuideReference() {
-  return `<details class="alex-ref-panel">
-    <summary>Reference: statuses, metrics, and known limitations</summary>
-    <div class="alex-ref-body">
-      <h4>Top bar</h4>
-      <ul>
-        <li><b>Rows Ready / Rows Blocked</b> — final workbook health.</li>
-        <li><b>Missing Terms</b> — definition gaps found in current job.</li>
-        <li><b>Logic Groups</b> — number of controls/logic blocks in review.</li>
-      </ul>
-      <h4>Logic labels</h4>
-      <ul>
-        <li><b>parse ok</b> — deterministic parser produced a usable tree.</li>
-        <li><b>partial</b> — ALEX recovered evidence, but some parts still need review.</li>
-        <li><b>opaque</b> — ALEX could not classify the leaf; boolean flags are being upgraded to avoid this when possible.</li>
-        <li><b>gate ready / needs_llm / blocked</b> — whether generated rows can be trusted without more knowledge.</li>
-      </ul>
-      <h4>Troubleshooting</h4>
-      <ul>
-        <li>M365 code expired: start one login flow, open a fresh device-code tab, and type the current code.</li>
-        <li>Raw looks simple but Tree looks weak: use the collapsed source table and Resolve with AI; parser upgrades continue to reduce this.</li>
-        <li>Resolve fails: try provider GitHub Copilot CLI and read the provider error below the button.</li>
-      </ul>
-    </div>
-  </details>`;
+  return guideDetails(
+    "Tham chiếu: status, metrics, xử lý sự cố",
+    `<h4>Top bar</h4>
+    <ul class="alex-guide-list">
+      <li><b>Rows Ready / Blocked</b> — sức khỏe workbook.</li>
+      <li><b>Missing Terms</b> — definition còn thiếu trong job.</li>
+      <li><b>Logic Groups</b> — số control đã parse.</li>
+      <li><b>M365 / Ollama</b> — trạng thái provider.</li>
+    </ul>
+    <h4>Logic</h4>
+    <ul class="alex-guide-list">
+      <li><b>parse ok</b> — parser deterministic ổn.</li>
+      <li><b>partial</b> — cần review thêm.</li>
+      <li>Vạch xám ở source table = các dòng cùng merge cell Word (cùng nhánh OR).</li>
+    </ul>
+    <h4>Sự cố thường gặp</h4>
+    <ul class="alex-guide-list">
+      <li><b>Test Code API unavailable</b> — restart server: <code>python run_web.py</code> + hard refresh.</li>
+      <li><b>Job not found</b> — chạy lại Review specification.</li>
+      <li><b>M365 code expired</b> — Sign in lại, tab device code mới.</li>
+      <li><b>UI chậm</b> — data cache vài giây; Save/Apply tự refresh.</li>
+    </ul>`,
+    { id: "guide-reference" }
+  );
 }
 
 function renderGuideCard() {
@@ -872,19 +1712,112 @@ function renderGuideCard() {
     ${renderGuideWorkflow()}
     ${renderGuideReviewTab()}
     ${renderGuideLogicTab()}
-    ${guideSection(
-      "Tab 3 — Diagram Graph",
-      `<p class="detail">Use this only when the spec contains state-machine or diagram evidence. Select a state, select a transition, then inspect conditions and source evidence. Purely visual arrows are still review-required.</p>`,
-      "guide-diagram"
-    )}
-    ${guideSection(
-      "Tab 4 — Final File",
-      `<p class="detail">This is the final workbook surface. Review expected input/output, edit rows directly, switch EN/JP view if needed, then export when blocked rows are resolved or intentionally accepted.</p>`,
-      "guide-export"
-    )}
+    ${renderGuideDiagramTab()}
+    ${renderGuideLibraryTab()}
+    ${renderGuideExportTab()}
+    ${renderGuideTestCodeTab()}
     ${renderGuideProviders()}
     ${renderGuideReference()}
   </div>`;
+}
+
+function renderGuideReviewHelp() {
+  return renderTabHelp(
+    "Review — chuẩn bị & chạy phân tích",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Tick file spec cần review · chỉnh Type nếu sai.</li>
+      <li>Sign in AI (nếu cần Resolve sau này).</li>
+      <li><b>Review specification</b> → đợi completed.</li>
+    </ol>
+    <p class="detail"><a href="#guide-review" data-goto-page="guide" data-goto-anchor="guide-review">Mở Guide tab 1 →</a></p>`,
+    { id: "help-review" }
+  );
+}
+
+function renderGuideLogicHelp() {
+  return renderTabHelp(
+    "Logic — đối chiếu spec & definition",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Chọn logic group → click cây logic ↔ highlight source table.</li>
+      <li>Term thiếu: engineer note → <b>Resolve with AI</b>.</li>
+      <li>Sửa workbook row Before/After nếu cần.</li>
+    </ol>
+    <p class="detail"><a href="#guide-logic" data-goto-page="guide" data-goto-anchor="guide-logic">Guide tab 2 →</a></p>`,
+    { id: "help-logic" }
+  );
+}
+
+function renderGuideExportHelp() {
+  return renderTabHelp(
+    "Final File — workbook & export",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Sửa Expected input/output → <b>Save row</b>.</li>
+      <li>Status <b>ready</b> / <b>approved</b> khi OK.</li>
+      <li><b>Open in Test Code</b> hoặc export Excel.</li>
+    </ol>
+    <p class="detail"><a href="#guide-export" data-goto-page="guide" data-goto-anchor="guide-export">Guide tab 5 →</a></p>`,
+    { id: "help-export" }
+  );
+}
+
+function renderGuideTestCodeHelp() {
+  return renderTabHelp(
+    "Test Code — sinh Google Test",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Chọn TC → code sinh từ Before/After Final File.</li>
+      <li>Mặc định <code>in.</code> / <code>out.</code> — copy luôn nếu tên trùng.</li>
+      <li>Rename map + Suggest chỉ khi spec ≠ code · <b>Regenerate</b> · <b>Copy</b>.</li>
+    </ol>
+    <p class="detail"><a href="#guide-testcode" data-goto-page="guide" data-goto-anchor="guide-testcode">Guide tab 6 →</a></p>`,
+    { id: "help-testcode" }
+  );
+}
+
+function renderGuideDiagramHelp() {
+  return renderTabHelp(
+    "Diagram Graph — state machine",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Chọn state → chọn transition (edge).</li>
+      <li>Xem condition + evidence · <b>Jump to linked logic</b> nếu có.</li>
+    </ol>
+    <p class="detail"><a href="#guide-diagram" data-goto-page="guide" data-goto-anchor="guide-diagram">Guide tab 3 →</a></p>`,
+    { id: "help-diagram" }
+  );
+}
+
+function renderGuideLibraryHelp() {
+  return renderTabHelp(
+    "Library — file & trace map",
+    `<ol class="alex-guide-steps alex-guide-steps--compact">
+      <li>Đặt Library root folder.</li>
+      <li>Thêm relationship spec ↔ code ↔ test.</li>
+      <li>Lưu gtest harness preset từ Test Code.</li>
+    </ol>
+    <p class="detail"><a href="#guide-library" data-goto-page="guide" data-goto-anchor="guide-library">Guide tab 4 →</a></p>`,
+    { id: "help-library" }
+  );
+}
+
+function openGuideSection(anchorId) {
+  state.guideOpenSection = anchorId || null;
+  showPage("guide");
+}
+
+function bindTabHelpLinks(root = content()) {
+  root?.querySelectorAll("[data-goto-page]").forEach((link) => {
+    link.onclick = (ev) => {
+      ev.preventDefault();
+      const page = link.getAttribute("data-goto-page");
+      const anchor =
+        link.getAttribute("data-goto-anchor") ||
+        (link.getAttribute("href")?.startsWith("#") ? link.getAttribute("href").slice(1) : "");
+      if (page === "guide" && anchor) {
+        openGuideSection(anchor);
+        return;
+      }
+      if (page) showPage(page);
+    };
+  });
 }
 
 function inboxFocusTerm(inbox) {
@@ -897,19 +1830,40 @@ function renderAiQueue(_queue) {
   return "";
 }
 
-async function refreshJobSummary() {
+async function refreshJobSummary(force = false) {
   if (!state.jobId) {
     $("#stat-ready").textContent = "—";
     $("#stat-blocked").textContent = "—";
     $("#stat-missing").textContent = "—";
     $("#stat-logic").textContent = "—";
-    return;
+    return false;
+  }
+  const cached = state._summaryCache;
+  if (
+    !force &&
+    cached?.jobId === state.jobId &&
+    Date.now() - cached.at < API_CACHE_TTL.summary
+  ) {
+    applyJobSummary(cached.summary);
+    return true;
   }
   try {
-    const s = await api(`/api/jobs/${encodeURIComponent(state.jobId)}/summary`);
-    applyJobSummary(s.summary || {});
-  } catch (_) {
-    /* job bundle not ready */
+    const s = await cachedApi(
+      `summary:${state.jobId}`,
+      () => api(`/api/jobs/${encodeURIComponent(state.jobId)}/summary`),
+      API_CACHE_TTL.summary
+    );
+    if (s.bundle_version != null) noteBundleVersion(s.bundle_version);
+    const summary = s.summary || {};
+    applyJobSummary(summary);
+    state._summaryCache = { jobId: state.jobId, summary, at: Date.now() };
+    return true;
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (/not found|no analysis bundle/i.test(msg)) {
+      setJobId(null);
+    }
+    return false;
   }
 }
 
@@ -946,14 +1900,19 @@ function initNav() {
   nav.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
       showPage(btn.dataset.page);
-      if (btn.dataset.page !== "review") refreshJobSummary();
     });
   });
 }
 
-function showPage(id) {
+function showPage(id, opts = {}) {
+  const pageId = PAGE_ROUTES[id] ? id : "review";
+  state.currentPageId = pageId;
+  if (!opts.skipHistory) {
+    syncUrlForPage(pageId, { replace: !!opts.replace });
+  }
+  updatePageChrome(pageId);
   $("#nav").querySelectorAll("button").forEach((b) => {
-    b.classList.toggle("active", b.dataset.page === id);
+    b.classList.toggle("active", b.dataset.page === pageId);
   });
   const map = {
     review: renderReview,
@@ -961,9 +1920,11 @@ function showPage(id) {
     "diagram-graph": renderDiagramGraph,
     library: renderLibrary,
     export: renderExport,
+    "test-code": renderTestCode,
     guide: renderGuide,
   };
-  (map[id] || renderReview)();
+  const render = map[pageId] || renderReview;
+  render();
 }
 
 async function saveFileSelection() {
@@ -1087,6 +2048,12 @@ function renderReviewSummaryPanel(dash, preview, containerId) {
       ["Missing terms", wb.missing_terms ?? ev.terms_missing_definition ?? 0, "warn"],
       ["Logic groups", wb.logic_groups ?? 0, "info"],
     ])}
+    ${renderSpecOverviewPanel(dash.overview)}
+    ${
+      (dash.prioritized_issues || []).length
+        ? `<div style="margin-top:1rem"><h3 class="alex-primary-panel__label">Notes</h3>${renderPrioritizedIssues((dash.prioritized_issues || []).slice(0, 10))}</div>`
+        : ""
+    }
   </section>`;
   el.querySelector("#btn-logic-review").onclick = () => showPage("logic-review");
   el.querySelector("#btn-diagram-graph").onclick = () => showPage("diagram-graph");
@@ -1120,18 +2087,17 @@ function pollProgress(jobId) {
   state.pollTimer = setInterval(async () => {
     try {
       const st = await api(`/api/analysis/status?job_id=${encodeURIComponent(jobId)}`);
-      const pt = $("#progress-text");
-      const pf = $("#progress-fill");
-      if (pt) pt.textContent = st.current_step || st.status;
-      if (pf) pf.style.width = (st.progress || 0) + "%";
+      updateProgressUI(st);
       if (st.status === "completed") {
         clearInterval(state.pollTimer);
         await refreshJobSummary();
+        const pt = $("#progress-text");
         if (pt) pt.textContent = "Review complete.";
         await loadReviewResults();
       }
       if (st.status === "failed") {
         clearInterval(state.pollTimer);
+        const pt = $("#progress-text");
         if (pt) pt.textContent = "Failed: " + (st.error_message || "unknown");
       }
     } catch (e) {
@@ -1139,6 +2105,88 @@ function pollProgress(jobId) {
       if (pt) pt.textContent = e.message;
     }
   }, 800);
+}
+
+function isAiSigninOpen() {
+  return localStorage.getItem(AI_SIGNIN_OPEN_KEY) === "1";
+}
+
+function setAiSigninOpen(open) {
+  localStorage.setItem(AI_SIGNIN_OPEN_KEY, open ? "1" : "0");
+}
+
+function updateProgressUI(st) {
+  const area = $("#progress-area");
+  if (!area || !st) return;
+  area.style.display = "block";
+  const status = st.status || "waiting";
+  const progress = Number(st.progress) || 0;
+  const step = st.current_step || st.status || "…";
+  const pt = $("#progress-text");
+  const pf = $("#progress-fill");
+  const badge = $("#progress-status-badge");
+  const pct = $("#progress-percent");
+  const hint = $("#progress-worker-hint");
+  const logEl = $("#progress-log");
+  const barWrap = $("#progress-bar-wrap");
+  if (pt) pt.textContent = step;
+  if (pct) pct.textContent = status === "queued" ? "waiting" : `${progress}%`;
+  if (badge) {
+    const label =
+      status === "completed"
+        ? "done"
+        : status === "failed"
+          ? "failed"
+          : status === "queued"
+            ? "queued"
+            : status === "running"
+              ? "running"
+              : status;
+    badge.textContent = label;
+    badge.className = `tag ${
+      status === "completed" ? "high" : status === "failed" ? "error" : status === "queued" ? "warning" : "warn"
+    }`;
+  }
+  if (barWrap && pf) {
+    if (status === "queued") {
+      barWrap.classList.add("progress-bar--indeterminate");
+      pf.style.width = "35%";
+    } else {
+      barWrap.classList.remove("progress-bar--indeterminate");
+      pf.style.width = `${Math.max(progress, status === "running" && progress === 0 ? 4 : 0)}%`;
+    }
+  }
+  if (hint) {
+    if (status === "queued") {
+      hint.hidden = false;
+      hint.innerHTML =
+        'Analyze is waiting for the worker process. In another terminal run: <code>python -m web.worker</code> (keep it open). Or set <code>deployment.mode: local</code> in config.yaml to run without a worker.';
+    } else {
+      hint.hidden = true;
+    }
+  }
+  if (logEl) {
+    const lines = st.log || [];
+    logEl.innerHTML = lines.length
+      ? `<ul class="analyze-progress-log">${lines
+          .slice(-8)
+          .map((line) => `<li>${esc(line)}</li>`)
+          .join("")}</ul>`
+      : "";
+  }
+}
+
+async function resumeAnalyzeProgress(jobId) {
+  if (!jobId) return;
+  try {
+    const st = await api(`/api/analysis/status?job_id=${encodeURIComponent(jobId)}`);
+    updateProgressUI(st);
+    if (st.status !== "completed" && st.status !== "failed") {
+      pollProgress(jobId);
+    }
+  } catch (_) {
+    /* job may not exist yet */
+  }
 }
 
 function updateReviewButton() {
@@ -1165,6 +2213,7 @@ async function renderReview() {
         <p class="lead">Select files, run one analysis pass, then continue to Logic review. Re-upload if you changed a local file.</p>
         <button type="button" class="btn secondary btn-with-icon" id="btn-review-guide">${icon("guide", "alex-icon--btn")} Open Guide</button>
       </header>
+      ${renderGuideReviewHelp()}
       ${renderReviewLoginHub(copilot)}
       <section class="card">
         <div class="toolbar-row">
@@ -1188,9 +2237,15 @@ async function renderReview() {
           </table>
         </div>
       </section>
-      <div id="progress-area" class="card" style="display:none;margin-top:0.75rem">
+      <div id="progress-area" class="card analyze-progress" style="display:none;margin-top:0.75rem">
+        <div class="analyze-progress__head">
+          <span id="progress-status-badge" class="tag warning">—</span>
+          <span id="progress-percent" class="detail">0%</span>
+        </div>
         <p id="progress-text">Starting…</p>
-        <div class="progress-bar"><div id="progress-fill" style="width:0%"></div></div>
+        <div class="progress-bar" id="progress-bar-wrap"><div id="progress-fill" style="width:0%"></div></div>
+        <p id="progress-worker-hint" class="detail analyze-worker-hint" hidden></p>
+        <div id="progress-log"></div>
       </div>
       <p id="review-run-status" class="detail"></p>
       <div id="review-results" style="display:none;margin-top:0.75rem"></div>`;
@@ -1216,7 +2271,8 @@ async function renderReview() {
       }
       inp.value = "";
     };
-    $("#btn-review-guide").onclick = () => showPage("guide");
+    $("#btn-review-guide").onclick = () => openGuideSection("guide-start");
+    bindTabHelpLinks();
 
     $("#btn-clear-files").onclick = async () => {
       $("#src-status").textContent = "Clearing uploaded files…";
@@ -1304,7 +2360,10 @@ async function renderReview() {
     renderSourcesTable();
     updateReviewButton();
     refreshJobSummary();
-    if (state.jobId) loadReviewResults();
+    if (state.jobId) {
+      resumeAnalyzeProgress(state.jobId);
+      loadReviewResults();
+    }
   } catch (e) {
     content().innerHTML = `<p class="detail" style="color:var(--red)">${esc(e.message)}</p>`;
   }
@@ -1314,28 +2373,360 @@ function renderTreeLines(lines) {
   return `<pre class="tree-view logic-tree-pre">${esc(lines.join("\n"))}</pre>`;
 }
 
+function logicNodeLabel(node) {
+  const t = node?.node_type || node?.type || "";
+  if (t === "edge_event" || node?.atom_kind === "edge_event") {
+    const raw = node.raw_text || "";
+    if (raw.includes("→") || raw.includes("->")) return raw;
+    return `${node.from_state || "?"} → ${node.to_state || "?"}`;
+  }
+  if (t === "timing_condition" || node?.atom_kind === "timing_condition") {
+    const tq = node.timer_qualified || {};
+    if (tq.timer_symbol) return `${tq.timer_symbol} ${tq.qualifier || "elapsed"}`;
+    return node.raw_text || node.normalized_text || "timer";
+  }
+  if (t === "signal_condition") {
+    return [node.condition_name || node.signal, node.operator, node.value].filter(Boolean).join(" ");
+  }
+  if (t === "boolean_predicate") {
+    return node.condition_name || node.signal || node.raw_text || node.normalized_text || "flag";
+  }
+  if (t === "timing_condition" || t === "opaque") {
+    return node.raw_text || node.normalized_text || t;
+  }
+  if (t === "condition") {
+    return node.condition_name || node.name || node.raw_text || "condition";
+  }
+  if (t === "AND" || t === "OR" || t === "NOT" || node.gate) {
+    return node.gate || t;
+  }
+  return node.condition_name || node.raw_text || node.normalized_text || node.node_type || "?";
+}
+
+function renderInteractiveLogicTree(item, activeNodeIds = []) {
+  const nodes = item?.tree_nodes || [];
+  if (!nodes.length) {
+    return renderTreeLines(item?.tree_lines || []);
+  }
+  const byParent = {};
+  nodes.forEach((node) => {
+    const pid = node.parent_node_id || "__root__";
+    if (!byParent[pid]) byParent[pid] = [];
+    byParent[pid].push(node);
+  });
+  Object.values(byParent).forEach((list) => list.sort((a, b) => (a.depth || 0) - (b.depth || 0)));
+
+  const renderNodeLi = (node, isLast) => {
+    const nid = node.node_id || "";
+    const active = activeNodeIds.includes(nid) ? " is-active" : "";
+    const focus = state.logicTreeFocus?.nodeId === nid ? " is-focus" : "";
+    const typeClass = ` logic-tree-node--${esc(node.node_type || "ref")}`;
+    const cssClass = node.css_class ? ` ${esc(node.css_class)}` : "";
+    const lastClass = isLast ? " logic-tree-node--last" : "";
+    const sourceRow = node.source_row != null ? String(node.source_row) : "";
+    const opClass = ` logic-tree-node__btn--${esc(node.node_type || "ref")}`;
+    const kindChip =
+      node.atom_kind === "edge_event" || node.node_type === "edge_event"
+        ? `<span class="logic-node-kind logic-node-kind--edge" title="Edge event (one cycle)">edge</span>`
+        : node.atom_kind === "timing_condition" || node.node_type === "timing_condition"
+          ? `<span class="logic-node-kind logic-node-kind--timer" title="Timer-qualified">T</span>`
+          : node.value_domain === "sentinel"
+            ? `<span class="logic-node-kind logic-node-kind--sentinel" title="Multivalued sentinel">Σ</span>`
+            : "";
+    return `<li class="logic-tree-node${active}${focus}${typeClass}${lastClass}${cssClass}" data-tree-node="${esc(nid)}" data-tree-label="${esc(logicNodeLabel(node))}" data-source-row="${esc(sourceRow)}">
+      <span class="logic-tree-node__connector" aria-hidden="true"></span>
+      <button type="button" class="logic-tree-node__btn${opClass}">${kindChip}${esc(logicNodeLabel(node))}</button>
+      ${renderBranch(nid)}
+    </li>`;
+  };
+
+  const renderBranch = (parentId) => {
+    const children = byParent[parentId] || [];
+    if (!children.length) return "";
+    return `<ul class="logic-tree-interactive">${children
+      .map((node, idx) => renderNodeLi(node, idx === children.length - 1))
+      .join("")}</ul>`;
+  };
+
+  const roots = byParent["__root__"] || nodes.filter((n) => !n.parent_node_id);
+  if (!roots.length) {
+    return `<div class="logic-tree-interactive-wrap">${renderBranch("__root__")}</div>`;
+  }
+  return `<div class="logic-tree-interactive-wrap"><ul class="logic-tree-interactive">${roots
+    .map((node, idx) => renderNodeLi(node, idx === roots.length - 1))
+    .join("")}</ul></div>`;
+}
+
+function renderPathSimulatorPanel(item, simResult = null) {
+  const signals = simResult?.signals || [];
+  const defaults = Object.fromEntries(
+    signals.map((row) => [row.signal, row.default ?? "0"])
+  );
+  const saved = state.pathSimAssignments?.[item.logic_id] || {};
+  const inputs = signals.length
+    ? signals
+    : (item.trace_rows || [])
+        .map((row) => row.term)
+        .filter(Boolean)
+        .slice(0, 12)
+        .map((term) => ({ signal: term, default: "0" }));
+  if (!inputs.length) {
+    return `<p class="detail">No simulatable signals detected in this logic tree yet.</p>`;
+  }
+  const status = simResult?.status || "unknown";
+  const statusLabel =
+    status === "active" ? "Logic path ACTIVE" : status === "inactive" ? "Logic path INACTIVE" : "Partial / unknown";
+  const statusClass = status === "active" ? "high" : status === "inactive" ? "error" : "warning";
+  return `<div class="logic-path-simulator">
+    <div class="logic-path-simulator__head">
+      <h4>Path simulator</h4>
+      <span class="tag ${statusClass}" id="logic-sim-status">${esc(statusLabel)}</span>
+    </div>
+    <p class="detail">Set signal values, then run what-if to see which branches activate.</p>
+    <div class="logic-path-simulator__grid">${inputs
+      .map(
+        (row) => `<label class="logic-path-simulator__field">
+          <span>${esc(row.signal)}</span>
+          <input type="text" class="gtest-input logic-sim-input" data-sim-signal="${esc(row.signal)}" value="${esc(saved[row.signal] ?? row.default ?? "0")}" />
+        </label>`
+      )
+      .join("")}</div>
+    <button type="button" class="btn secondary" id="btn-logic-sim-run">Run what-if</button>
+  </div>`;
+}
+
+function renderFootnoteAttachmentsPanel(data) {
+  if (!data) return "";
+  const attached = data.by_logic ? Object.values(data.by_logic).flat() : data.attachments || [];
+  if (!attached.length) return "";
+  return `<details class="alex-ref-panel" style="margin-top:0.75rem">
+    <summary>Attached from footnote (${attached.length})</summary>
+    <div class="alex-ref-body">
+      <p class="detail">Cross-file logic materialized from footnote references.</p>
+      <ul class="detail footnote-attach-list">${attached
+        .map(
+          (row) =>
+            `<li><b>${esc(row.source_footnote || "footnote")}</b> → ${esc(row.control_name || row.logic_id || "")} · ${esc(row.from_file || "")}
+              <pre class="expr-block expr-block--spec" style="margin-top:0.35rem">${esc((row.materialized_excerpt?.raw_expression || "").slice(0, 240))}</pre>
+            </li>`
+        )
+        .join("")}</ul>
+      <label class="detail">Attach reference file (Excel/Word/PDF)
+        <input type="file" id="reference-file-upload" multiple accept=".xlsx,.xlsm,.docx,.pdf" />
+      </label>
+      <p id="reference-file-status" class="detail"></p>
+    </div>
+  </details>`;
+}
+
+function renderPathTcMatrixPanel(matrix, proposal) {
+  if (!matrix?.ok) return "";
+  const paths = matrix.paths || [];
+  const summary = matrix.summary || {};
+  if (!paths.length) return "";
+  const rows = paths
+    .map((p) => {
+      const cls =
+        p.coverage_status === "full" ? "high" : p.coverage_status === "partial" ? "warning" : "error";
+      return `<tr>
+        <td><code>${esc(p.path_id)}</code></td>
+        <td>${esc(p.label || "")}</td>
+        <td><span class="tag ${cls}">${esc(p.coverage_status)}</span></td>
+        <td>${p.covered_count || 0}</td>
+        <td class="detail">${esc((p.signals || []).join(", "))}</td>
+      </tr>`;
+    })
+    .join("");
+  const proposeNote = proposal?.proposed_count
+    ? `<p class="detail">${proposal.proposed_count} missing path TC(s) can be proposed.</p>`
+    : "";
+  return `<details class="alex-ref-panel" open style="margin-top:0.75rem">
+    <summary>Path × test case matrix (${summary.path_count || paths.length} paths)</summary>
+    <div class="alex-ref-body">
+      <p class="detail">${summary.paths_full || 0} full · ${summary.paths_partial || 0} partial · ${summary.paths_missing || 0} missing coverage</p>
+      <div class="grid-wrap"><table class="data-grid alex-table path-tc-matrix">
+        <thead><tr><th>Path</th><th>Label</th><th>Coverage</th><th>TCs</th><th>Signals</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${proposeNote}
+      <button type="button" class="btn secondary" id="btn-path-tc-propose">Propose missing TCs</button>
+      <p id="path-tc-propose-status" class="detail"></p>
+    </div>
+  </details>`;
+}
+
+function formatSectionZone(zone) {
+  const map = {
+    control_conditions: "Control conditions",
+    definitions: "Definitions",
+    constants: "Constants",
+    overview: "Overview",
+    state_charts: "State / timing chart",
+    changelog: "Changelog",
+    metadata: "Metadata",
+    unknown: "Unclassified",
+  };
+  return map[String(zone || "").toLowerCase()] || String(zone || "").replaceAll("_", " ");
+}
+
+function renderLogicSemanticsBadges(item) {
+  const chips = [];
+  if (item?.section_zone) {
+    chips.push({ cls: "logic-chip--zone", label: formatSectionZone(item.section_zone) });
+  }
+  if (item?.decision_mode === "sequential") {
+    chips.push({ cls: "logic-chip--priority", label: "Priority order" });
+  } else if (item?.decision_mode === "boolean") {
+    chips.push({ cls: "logic-chip--boolean", label: "Boolean OR/AND" });
+  }
+  (item?.timer_qualifiers || []).slice(0, 4).forEach((tq) => {
+    const sym = tq.timer_symbol || "Timer";
+    const q = tq.qualifier || "elapsed";
+    chips.push({ cls: "logic-chip--timer", label: `${sym} · ${q}` });
+  });
+  const treeNodes = item?.tree_nodes || [];
+  const edgeCount = treeNodes.filter((n) => n.atom_kind === "edge_event" || n.node_type === "edge_event").length;
+  if (edgeCount) {
+    chips.push({ cls: "logic-chip--edge", label: `${edgeCount} edge event${edgeCount > 1 ? "s" : ""}` });
+  }
+  if (!chips.length) return "";
+  return `<div class="logic-semantics-badges">${chips
+    .map((c) => `<span class="logic-chip ${c.cls}">${esc(c.label)}</span>`)
+    .join("")}</div>`;
+}
+
+function renderFormalSpecContextPanel(data, item) {
+  const profiles = data?.spec_profiles || [];
+  const machines = (data?.state_machines || []).filter(Boolean);
+  const retention = data?.retention_rules || [];
+  const annotations = data?.review_annotations || [];
+  const relatedMachine = machines.find((m) => m.state && item?.control_name && m.state === item.control_name);
+  const blocks = [];
+  if (profiles.length) {
+    const p = profiles[0];
+    blocks.push(
+      `<div class="formal-spec-card"><h4>Spec profile</h4>
+        <p class="detail">${p.is_logic_spec ? "Logic specification detected" : "Document type uncertain"}
+          · score ${Math.round((p.classifier_score || 0) * 100)}%</p>
+        ${(p.section_zones || []).length ? `<ul class="detail">${(p.section_zones || [])
+          .slice(0, 8)
+          .map((z) => `<li>${esc(z.title || "")} → ${esc(formatSectionZone(z.zone))}</li>`)
+          .join("")}</ul>` : ""}
+      </div>`
+    );
+  }
+  if (relatedMachine || machines.length) {
+    const m = relatedMachine || machines[0];
+    blocks.push(
+      `<div class="formal-spec-card"><h4>State lifecycle</h4>
+        <dl class="alex-meta-stats is-compact">
+          ${m.initial_value != null ? `<div><dt>Initial</dt><dd>${esc(m.initial_value)}</dd></div>` : ""}
+          ${m.start_expression ? `<div><dt>Get started</dt><dd>${esc(m.start_expression)}</dd></div>` : ""}
+          ${m.finish_expression ? `<div><dt>Finish</dt><dd>${esc(m.finish_expression)}</dd></div>` : ""}
+        </dl>
+      </div>`
+    );
+  }
+  if (retention.length) {
+    blocks.push(
+      `<div class="formal-spec-card"><h4>Memory / retention (${retention.length})</h4>
+        <ul class="detail">${retention
+          .slice(0, 5)
+          .map((r) => `<li><b>${esc(r.rule_kind || "rule")}</b> — ${esc((r.raw_text || "").slice(0, 120))}</li>`)
+          .join("")}</ul>
+      </div>`
+    );
+  }
+  if (annotations.length) {
+    blocks.push(
+      `<div class="formal-spec-card"><h4>Excel review notes (${annotations.length})</h4>
+        <ul class="detail">${annotations
+          .slice(0, 6)
+          .map(
+            (a) =>
+              `<li><b>${esc(a.cell || "")}</b> ${esc((a.text || "").slice(0, 100))}${a.source?.sheet ? ` <span class="muted">(${esc(a.source.sheet)})</span>` : ""}</li>`
+          )
+          .join("")}</ul>
+      </div>`
+    );
+  }
+  const signals = data?.signals || [];
+  if (signals.length) {
+    blocks.push(
+      `<div class="formal-spec-card"><h4>Signal registry (${signals.length})</h4>
+        <ul class="detail">${signals
+          .slice(0, 8)
+          .map(
+            (s) =>
+              `<li><b>${esc(s.name || "")}</b>${s.initial_value ? ` · init=${esc(s.initial_value)}` : ""}${s.fail_safe_value ? ` · fail=${esc(s.fail_safe_value)}` : ""}</li>`
+          )
+          .join("")}</ul>
+      </div>`
+    );
+  }
+  if (item?.outcome_label) {
+    blocks.push(
+      `<div class="formal-spec-card"><h4>Transition outcome</h4>
+        <p class="detail">${esc(item.outcome_label)}</p>
+      </div>`
+    );
+  }
+  if (!blocks.length) return "";
+  return `<section class="formal-spec-panel card"><h3 class="alex-primary-panel__label">Formal spec context</h3><div class="formal-spec-grid">${blocks.join("")}</div></section>`;
+}
+
+function renderSpecOverviewPanel(overview) {
+  if (!overview) return "";
+  return `<section class="alex-overview-panel card">
+    <h3 class="alex-primary-panel__label">Spec overview</h3>
+    <div class="alex-overview-grid">
+      <div><span class="detail">Logic OK</span><b>${overview.logic_groups_ok ?? 0}</b></div>
+      <div><span class="detail">Partial</span><b>${overview.logic_groups_partial ?? 0}</b></div>
+      <div><span class="detail">Failed</span><b>${overview.logic_groups_failed ?? 0}</b></div>
+      <div><span class="detail">Understanding</span><b>${overview.understanding_percent != null ? `${overview.understanding_percent}%` : "—"}</b></div>
+    </div>
+    ${
+      (overview.top_blockers || []).length
+        ? `<div style="margin-top:0.75rem"><h4>Notes</h4>${renderPrioritizedIssues(overview.top_blockers)}</div>`
+        : ""
+    }
+  </section>`;
+}
+
+function renderPrioritizedIssues(issues) {
+  if (!issues?.length) return "";
+  return `<ul class="detail issue-plain-list">${issues
+    .map((row) => {
+      const text = String(
+        row.message || row.parser_reason || (row.type || "issue").replaceAll("_", " ")
+      ).trim();
+      return `<li>${esc(text.slice(0, 220))}</li>`;
+    })
+    .join("")}</ul>`;
+}
+
 function traceStatusLabel(status) {
-  if (status === "resolved") return "resolved";
-  if (status === "needs_review") return "resolved, review";
-  return "missing definition";
+  if (status === "resolved") return "Defined";
+  if (status === "needs_review") return "Review added";
+  return "Needs define";
 }
 
 function renderTraceRows(traceRows) {
   if (!traceRows?.length) return "<p class='detail'>No referenced terms detected.</p>";
   return `<div class="grid-wrap"><table class="data-grid alex-table alex-trace-table"><thead><tr>
-    <th class="col-term">Term</th><th class="col-status">Status</th><th>What we found</th><th>Sources</th>
+    <th class="col-term">Term</th><th>What we found</th><th>Sources</th>
   </tr></thead><tbody>${traceRows
     .map((row) => {
-      const statusClass =
-        row.status === "resolved" ? "high" : row.status === "needs_review" ? "warning" : "error";
       const chips = [];
       (row.definitions || []).slice(0, 4).forEach((d) => {
         const kind = d.kind === "added_file" ? "file" : d.kind === "engineer_note" ? "note" : "spec";
         const label = (d.name || "term").length > 28 ? `${(d.name || "term").slice(0, 25)}…` : d.name || "term";
         chips.push({
           kind,
-          label,
-          detail: [d.name, formatSourceReadable(d.source), d.definition].filter(Boolean).join("\n"),
+          label: compactSourceLabel(d.source) ? `${label} · ${compactSourceLabel(d.source)}` : label,
+          detail: [d.name, compactSourceLabel(d.source) || formatSourceReadable(d.source), d.definition]
+            .filter(Boolean)
+            .join("\n"),
         });
       });
       (row.aliases || []).slice(0, 2).forEach((a) => {
@@ -1361,7 +2752,6 @@ function renderTraceRows(traceRows) {
         : "<span class='detail'>No definition found yet.</span>";
       return `<tr>
         <td><code>${esc(row.term)}</code></td>
-        <td><span class="tag ${statusClass}">${esc(traceStatusLabel(row.status))}</span></td>
         <td>${esc(row.preview || "")}</td>
         <td>${sources}</td>
       </tr>`;
@@ -1387,28 +2777,26 @@ function renderIssueList(issues) {
     map.get(key).count += 1;
   });
   return `<div class="logic-issue-list compact-list">${grouped
-    .map((row) => `<div class="issue-pill">
-      <span class="tag ${queueStatusClass(row.status === "ok" ? "completed" : row.status === "error" ? "blocked_missing_definition" : "needs_engineer_answer")}">${esc(row.status)}</span>
+    .map(
+      (row) => `<div class="issue-pill">
       <span class="issue-main"><b>${esc(row.title)}</b></span>
       <span class="issue-detail">${esc(row.message)}${row.count > 1 ? ` (${row.count})` : ""}</span>
-    </div>`)
+    </div>`
+    )
     .join("")}</div>`;
 }
 
-function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [], assistStatus = null } = {}) {
+function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [], assistStatus = null, logicId = "" } = {}) {
+  const draft = logicId ? readDefinitionDraft(logicId) : null;
+  const noteText = draft?.text != null ? draft.text : engineerNote;
   if (!inbox?.terms?.length) return "<p class='detail'>No definition work items for this logic group.</p>";
   const current = inboxFocusTerm(inbox);
   state.inboxFocus[inbox.logic_id] = current?.term || "";
-  const currentStatusClass = current?.resolution === "definition_found"
-    ? "high"
-    : current?.resolution === "added_context_found"
-      ? "warning"
-      : "error";
   const defs = (current?.definitions || [])
     .map((d) => {
       const fullSource = formatSourceReadable(d.source) || "unknown source";
       const compactSource = compactSourceLabel(d.source) || fullSource;
-      return `<li><b>${esc(d.kind)}</b>${d.match_mode && d.match_mode !== "exact" ? ` · ${esc(d.match_mode)} match` : ""} · <span title="${attrTitle(fullSource)}">${esc(compactSource)}</span><br>${esc(d.definition || "")}</li>`;
+      return `<li><b>${esc(d.kind)}</b>${d.match_mode && d.match_mode !== "exact" ? ` · ${esc(d.match_mode)} match` : ""} · <span title="${attrTitle(fullSource)}">${esc(compactSource)}</span> — ${esc(d.definition || "")}</li>`;
     })
     .join("");
   const queryHistory = (inbox.query_history || []).slice().reverse();
@@ -1424,52 +2812,56 @@ function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [], ass
     },
     { resolved: 0, added: 0, missing: 0 }
   );
+  const termChips = inbox.terms
+    .map((term) => {
+      const active = term.term === current?.term;
+      return `<button type="button" class="term-chip${active ? " active" : ""}" data-definition-term="${esc(term.term)}">
+        <code class="term-chip-name">${esc(term.term)}</code>
+      </button>`;
+    })
+    .join("");
   return `<div class="definition-workbench">
-    <div class="definition-term-list">
-      <label class="detail definition-term-picker">Definition term (${inbox.terms.length})
-        <select id="definition-term-select" class="clarify-box definition-term-select">
-          ${inbox.terms.map((term) => `<option value="${esc(term.term)}" ${term.term === current?.term ? "selected" : ""}>${esc(`${term.term} · ${resolutionLabel(term.resolution)}`)}</option>`).join("")}
-        </select>
-      </label>
-      <div class="definition-term-summary">
-        <span class="tag high">resolved ${statusCounts.resolved}</span>
-        <span class="tag warning">added context ${statusCounts.added}</span>
-        <span class="tag error">missing ${statusCounts.missing}</span>
-      </div>
+    <aside class="definition-term-list">
+      ${renderTermSummaryBrief(statusCounts, inbox.terms.length)}
+      <div class="definition-term-chips">${termChips}</div>
       ${inbox.unused_added_definitions?.length ? `<div class="definition-card mini">
         <div class="definition-head"><b>Unused added definitions</b></div>
         <ul class="detail">${inbox.unused_added_definitions
           .map((row) => `<li><code>${esc(row.name)}</code> · ${esc(row.source)}</li>`)
           .join("")}</ul>
       </div>` : ""}
-    </div>
+    </aside>
     <div class="definition-panel">
-      ${current ? `<div class="definition-card">
-        <div class="definition-head">
-          <code>${esc(current.term)}</code>
-          <span class="tag ${currentStatusClass}">${esc(resolutionLabel(current.resolution))}</span>
+      ${current ? `<div class="definition-term-detail">
+        <div class="definition-term-detail__head">
+          <code class="definition-term-detail__name">${esc(current.term)}</code>
         </div>
-        <p><b>${esc(reasonCodeLabel(current.reason_code))}</b> · ${esc(current.reason_detail || "")}</p>
-        ${defs ? `<ul class="detail">${defs}</ul>` : "<p class='detail'>No trusted definition attached yet.</p>"}
+        <p class="definition-term-detail__reason"><b>${esc(reasonCodeLabel(current.reason_code))}</b> · ${esc(current.reason_detail || "")}</p>
+        ${defs ? `<ul class="definition-evidence-list detail">${defs}</ul>` : "<p class='detail definition-term-detail__empty'>No trusted definition attached yet.</p>"}
       </div>` : ""}
-      <div class="definition-card">
+      <div class="definition-card definition-knowledge-card">
         <div class="definition-head">
           <b>Knowledge workbench</b>
+          <span class="detail">Focus term: <code>${esc(current?.term || "—")}</code></span>
         </div>
-        <p class="detail">Choose provider below. Sign in on the <b>Review</b> tab first (M365 and/or GitHub Copilot).</p>
+        <p class="detail">Describe signal meaning, engineer rules, or boundary values in plain language. Basic patterns (SIG=1, SIG >= 1, &lt; 5, SIG 1-5) can use <b>Apply locally</b> without AI. <b>Resolve with AI</b> tries Ollama → M365 → Copilot when running.</p>
+        ${renderM365EntitlementBanner(state.m365Status, { compact: true })}
         <label class="detail login-compact-label">AI provider
           <select id="knowledge-provider" class="clarify-box">${renderKnowledgeProviderOptions(assistStatus)}</select>
         </label>
-        <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Engineer rules, boundary values, signal meanings…">${esc(engineerNote)}</textarea>
+        <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Examples: HUY = 3 (RUN) · HUY >= 1, &lt; 5 · VEH_SPD 7-16 · CND_NORMAL_ROUTE=1">${esc(noteText)}</textarea>
         <div class="definition-workbench-actions">
+          <button class="btn secondary" id="btn-definition-local-apply" type="button">Apply locally</button>
           <button class="btn" id="btn-definition-query">Resolve with AI</button>
+          <button class="btn secondary" id="btn-copy-copilot-brief" type="button" title="1 brief / logic group — gồm tất cả test case">Copy brief (control)</button>
+          <button class="btn secondary" id="btn-paste-copilot-web" type="button">Paste Copilot reply…</button>
           <label class="btn secondary upload-label">Attach files<input type="file" id="logic-attachment-upload" multiple hidden /></label>
         </div>
         ${attachments.length ? `<div class="definition-attachments detail">${attachments.map((a) => `<div><b>${esc(a.name)}</b>${a.definition_count ? ` · ${esc(String(a.definition_count))} definition(s)` : ""}</div>`).join("")}</div>` : ""}
         <div data-definition-query-status class="detail"></div>
       </div>
-      ${queryHistory.length ? `<div class="definition-card">
-        <div class="definition-head"><b>Recent Copilot answers</b></div>
+      ${queryHistory.length ? `<details class="definition-history-panel">
+        <summary>Recent Copilot answers (${queryHistory.length})</summary>
         <div class="definition-history">${queryHistory
           .map((row) => `<div class="history-item">
             <p><b>${esc(row.term || "")}</b> · ${esc(row.question || "")}</p>
@@ -1478,7 +2870,7 @@ function renderDefinitionInbox(inbox, { engineerNote = "", attachments = [], ass
             ${row.follow_up_questions?.length ? `<p class="detail">Follow-up: ${esc(row.follow_up_questions[0])}</p>` : ""}
           </div>`)
           .join("")}</div>
-      </div>` : ""}
+      </details>` : ""}
     </div>
   </div>`;
 }
@@ -1569,11 +2961,50 @@ function currentFocusRow(rows, scope) {
 }
 
 async function saveWorkbookRow(payload) {
-  return api(`/api/review/workbench-row?job_id=${encodeURIComponent(state.jobId)}`, {
+  const res = await api(`/api/review/workbench-row?job_id=${encodeURIComponent(state.jobId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (res?.bundle_version != null) state.bundleVersion = res.bundle_version;
+  return res;
+}
+
+function applyAuthTopbar(user, enabled) {
+  const wrap = $("#topbar-user-wrap");
+  const nameEl = $("#stat-user");
+  const signOut = $("#btn-sign-out");
+  if (!wrap || !nameEl || !signOut) return;
+  if (enabled && user?.username) {
+    wrap.hidden = false;
+    signOut.hidden = false;
+    nameEl.textContent = user.username;
+  } else {
+    wrap.hidden = true;
+    signOut.hidden = true;
+    nameEl.textContent = "—";
+  }
+}
+
+async function ensureAuthenticated() {
+  const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error("Not authenticated");
+  }
+  const me = await res.json();
+  state.teamAuthEnabled = me.enabled !== false;
+  state.currentUser = me;
+  applyAuthTopbar(me, state.teamAuthEnabled);
+}
+
+async function signOut() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch (_) {
+    /* redirect anyway */
+  }
+  window.location.href = "/login";
 }
 
 async function loadAppConfig() {
@@ -1614,12 +3045,11 @@ function applyOllamaTopbarStatus(st) {
   el.textContent = formatOllamaTopbarStatus(st);
   const ok = !!(st?.ollama?.reachable);
   const enabled = !!(st?.enabled || st?.allow_ollama_fallback);
-  const parent = el.parentElement;
-  if (parent) {
-    parent.classList.toggle("high", ok);
-    parent.classList.toggle("err", enabled && !ok);
-    parent.classList.toggle("warn", !enabled);
-  }
+  setTopbarChipState("chip-ollama", {
+    ok,
+    err: enabled && !ok,
+    warn: !enabled,
+  });
 }
 
 function applyM365TopbarStatus(st) {
@@ -1627,12 +3057,11 @@ function applyM365TopbarStatus(st) {
   if (!el) return;
   el.textContent = formatM365TopbarStatus(st);
   const ready = !!(st?.api_ready || st?.connected);
-  const parent = el.parentElement;
-  if (parent) {
-    parent.classList.toggle("high", ready);
-    parent.classList.toggle("err", !ready);
-    parent.classList.toggle("warn", !ready && st?.client_id_configured);
-  }
+  setTopbarChipState("chip-m365", {
+    ok: ready,
+    err: !ready && !st?.client_id_configured,
+    warn: !ready && !!st?.client_id_configured,
+  });
 }
 
 async function loadOllamaStatus() {
@@ -1644,7 +3073,7 @@ async function loadOllamaStatus() {
     applyOllamaTopbarStatus(st);
   } catch {
     el.textContent = "Unavailable";
-    el.parentElement?.classList.add("err");
+    setTopbarChipState("chip-ollama", { err: true });
   }
 }
 
@@ -1671,6 +3100,7 @@ function m365KnowledgeReady() {
 }
 
 const KNOWLEDGE_PROVIDER_KEY = "alex_knowledge_provider";
+const AI_SIGNIN_OPEN_KEY = "alex.aiSigninOpen";
 
 function getKnowledgeProvider() {
   return localStorage.getItem(KNOWLEDGE_PROVIDER_KEY) || "auto";
@@ -1685,10 +3115,10 @@ function renderKnowledgeProviderOptions(assistStatus) {
   const selected = getKnowledgeProvider();
   const avail = assistStatus?.providers_available || {};
   const options = [
-    { id: "auto", label: "Auto (M365 → Copilot → Ollama)" },
+    { id: "auto", label: "Auto (Ollama → M365 → GitHub Copilot)" },
+    { id: "ollama", label: `Ollama${avail.ollama ? "" : " — not reachable"}` },
     { id: "m365", label: `M365 Copilot${avail.m365 ? "" : " — sign in on Review"}` },
     { id: "copilot", label: `GitHub Copilot CLI${avail.copilot ? "" : " — login on Review"}` },
-    { id: "ollama", label: `Ollama${avail.ollama ? "" : " — not reachable"}` },
   ];
   return options
     .map(
@@ -1696,6 +3126,145 @@ function renderKnowledgeProviderOptions(assistStatus) {
         `<option value="${esc(o.id)}" ${selected === o.id ? "selected" : ""}>${esc(o.label)}</option>`
     )
     .join("");
+}
+
+function parseStatusClass(status) {
+  if (status === "ok") return "high";
+  if (status === "partial") return "warn";
+  return "error";
+}
+
+function renderKnowledgeReconciliationPanel(knowledgeApply) {
+  if (!knowledgeApply || knowledgeApply.status === "none") return "";
+  const rec = knowledgeApply.reconciliation || {};
+  const summary = rec.summary || {};
+  const diffs = knowledgeApply.diffs || [];
+  const pending = knowledgeApply.status === "pending";
+  if (!pending && !diffs.length) return "";
+
+  const groups = ["update_existing", "add_new", "retire", "needs_review"];
+  const summaryHtml = groups
+    .filter((g) => summary[g])
+    .map(
+      (g) =>
+        `<span class="tag ${g === "needs_review" ? "error" : "warning"}">${esc(g.replace(/_/g, " "))} ${summary[g]}</span>`
+    )
+    .join(" ");
+
+  const actions = rec.actions || [];
+  const diffRows = diffs
+    .map((d) => {
+      const action = actions.find((a) => a.patch_index === d.patch_index);
+      const act = action?.action || d.action || "update_existing";
+      const comply = d.logic_comply || "—";
+      const complyCls = comply === "pass" ? "high" : comply === "fail" ? "error" : "warning";
+      const defaultOn = d.default_selected !== false;
+      return `<article class="knowledge-diff-row" data-patch-index="${d.patch_index}">
+        <header class="knowledge-diff-row__head">
+          ${
+            pending
+              ? `<label class="knowledge-diff-check"><input type="checkbox" class="knowledge-patch-check" data-patch-index="${d.patch_index}" ${defaultOn ? "checked" : ""} /> Apply</label>`
+              : ""
+          }
+          <span class="tag ${complyCls}" title="logic_compliance preview">${esc(comply)}</span>
+          <span class="tag">${esc(act)}</span>
+          <code>${esc(d.candidate_id || "new")}</code>
+        </header>
+        ${d.reason ? `<p class="detail">${esc(d.reason)}</p>` : ""}
+        ${(d.missing_signals || []).length ? `<p class="detail">Still missing: ${esc(d.missing_signals.join(", "))}</p>` : ""}
+        <div class="knowledge-diff-grid">
+          <div class="alex-io-block"><h5>Before</h5>${formatIoBlock(d.before_expected_input || "—")}</div>
+          <div class="alex-io-block"><h5>After (preview)</h5>${formatIoBlock(d.after_expected_input || "—")}</div>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  return `<section class="definition-card knowledge-reconciliation-card" id="knowledge-reconciliation-panel">
+    <div class="definition-head">
+      <b>AI patch review</b>
+      <span class="tag ${pending ? "warning" : "high"}">${esc(knowledgeApply.status || "unknown")}</span>
+      ${knowledgeApply.provider ? `<span class="detail">${esc(knowledgeApply.provider)}</span>` : ""}
+    </div>
+    ${summaryHtml ? `<div class="knowledge-rec-summary">${summaryHtml}</div>` : ""}
+    <div class="knowledge-diff-list">${diffRows || "<p class='detail'>No patch diffs.</p>"}</div>
+    ${
+      pending
+        ? `<div class="definition-workbench-actions">
+      <button class="btn" id="btn-knowledge-apply-selected" type="button">Apply selected</button>
+      <button class="btn secondary" id="btn-knowledge-reject-all" type="button">Reject all</button>
+    </div>
+    <p id="knowledge-reconcile-status" class="detail"></p>`
+        : ""
+    }
+  </section>`;
+}
+
+function renderHypothesisReviewPanel(session) {
+  if (!session?.hypotheses?.length) return "";
+  const latest = session.hypotheses[session.hypotheses.length - 1];
+  const hyp = latest.hypothesis || {};
+  const validation = latest.validation || {};
+  const claims = hyp.claims || [];
+  const openQs = hyp.open_questions || [];
+  const patchPlan = hyp.testcase_patch_plan || [];
+  if (!claims.length && !openQs.length && !patchPlan.length) return "";
+
+  const claimsHtml = claims
+    .map(
+      (c, i) => `<li class="hypothesis-claim">
+      <label class="hypothesis-claim-label">
+        <input type="checkbox" class="hypothesis-claim-check" data-claim-index="${i}" checked />
+        <code>${esc(c.term || c.signal || "")}</code> — ${esc(c.definition || c.claim || "")}
+      </label>
+      ${
+        (c.citations || []).length
+          ? `<span class="detail" title="${attrTitle(formatSourceReadable(c.citations[0]))}">${esc(compactSourceLabel(c.citations[0]) || "cited")}</span>`
+          : ""
+      }
+    </li>`
+    )
+    .join("");
+
+  const openHtml = openQs
+    .map((q) => `<li>${esc(q.question || q)}</li>`)
+    .join("");
+  const patchHtml = patchPlan
+    .map(
+      (p) =>
+        `<li><span class="tag">${esc(p.action || "")}</span> <code>${esc(p.candidate_id || "new")}</code> — ${esc(p.reason || p.note || "")}</li>`
+    )
+    .join("");
+
+  return `<section class="definition-card hypothesis-review-card" id="hypothesis-review-panel">
+    <div class="definition-head">
+      <b>Hypothesis review</b>
+      <span class="tag ${validation.ok ? "high" : "error"}">${validation.ok ? "valid" : "needs fix"}</span>
+    </div>
+    ${validation.errors?.length ? `<ul class="detail err">${validation.errors.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
+    ${claims.length ? `<h5>Claims</h5><ul class="hypothesis-claim-list">${claimsHtml}</ul>` : ""}
+    ${openQs.length ? `<h5>Open questions</h5><ul class="detail">${openHtml}</ul>` : ""}
+    ${patchPlan.length ? `<h5>Testcase patch plan</h5><ul class="detail">${patchHtml}</ul>` : ""}
+    ${
+      claims.length
+        ? `<div class="definition-workbench-actions">
+      <button class="btn secondary" id="btn-hypothesis-accept-claims" type="button">Accept selected claims</button>
+      <button class="btn ghost" id="btn-hypothesis-paste-json" type="button">Paste hypothesis JSON</button>
+    </div>
+    <p id="hypothesis-review-status" class="detail"></p>`
+        : ""
+    }
+  </section>`;
+}
+
+function formatLocalApplyStatus(res) {
+  if (!res.ok && res.apply_error) return res.apply_error;
+  const terms = (res.applied_terms || []).join(", ");
+  let msg = `Applied locally${terms ? `: ${terms}` : ""}.`;
+  if (res.definitions_applied_to_candidates) {
+    msg += ` Updated ${res.definitions_applied_to_candidates} test case(s).`;
+  }
+  return msg + formatUnderstandingLoopStatus(res.understanding_loop);
 }
 
 function formatKnowledgeApplyStatus(res, provider) {
@@ -1706,10 +3275,40 @@ function formatKnowledgeApplyStatus(res, provider) {
     return `${res.apply_error}${tried}`;
   }
   const who = res.apply_provider || provider || "AI";
+  const loopSuffix = formatUnderstandingLoopStatus(res.understanding_loop);
+  if (res.apply_preview) {
+    const pending = res.pending_patches || 0;
+    const rec = res.reconciliation?.summary || {};
+    let msg = `${who}: ${pending} patch(es) ready for review.`;
+    if (rec.update_existing) msg += ` ${rec.update_existing} update(s).`;
+    if (rec.add_new) msg += ` ${rec.add_new} new.`;
+    if (res.definitions_applied_to_candidates) {
+      msg += ` Engineer definitions refreshed ${res.definitions_applied_to_candidates} TC(s).`;
+    }
+    return msg + loopSuffix;
+  }
   let msg = `${who}: updated ${res.candidates_updated || 0} test case(s).`;
   if (res.failures_remaining) msg += ` ${res.failures_remaining} validation issue(s) remain.`;
   if ((res.providers_tried || []).length) msg += ` (after trying ${res.providers_tried.join(", ")})`;
-  return msg;
+  if (res.definitions_applied_to_candidates && !res.apply_preview) {
+    msg += ` Definitions applied to ${res.definitions_applied_to_candidates} TC(s).`;
+  }
+  return msg + loopSuffix;
+}
+
+function formatUnderstandingLoopStatus(loop) {
+  if (!loop || loop.ok === false) return "";
+  const pct = loop.understanding_percent;
+  const gates = loop.gate_counts || {};
+  const ready = gates.ready ?? 0;
+  const llm = gates.needs_llm ?? 0;
+  const eng = gates.needs_engineer ?? 0;
+  let msg = " Understanding refreshed";
+  if (typeof pct === "number") msg += ` (${pct}% spec understood)`;
+  msg += ` — gate: ${ready} ready, ${llm} LLM, ${eng} engineer`;
+  if (loop.unresolved_cleared) msg += `; ${loop.unresolved_cleared} unresolved ref(s) cleared`;
+  if (loop.footnote_materialized) msg += `; ${loop.footnote_materialized} footnote logic attached`;
+  return msg + ".";
 }
 
 function sleepMs(ms) {
@@ -1720,6 +3319,13 @@ function m365ReviewStatusText(st) {
   if (!st) return "Loading…";
   if (st.api_ready || st.connected) {
     const who = st.display_name || st.user_principal || "M365";
+    if (st.copilot_chat_entitled === false) {
+      const reason =
+        st.not_entitled_reason === "msa"
+          ? "personal Microsoft account — Copilot Chat API blocked"
+          : "no Microsoft 365 Copilot license assigned";
+      return `Signed in: ${who} · ${reason}`;
+    }
     return `Signed in: ${who}`;
   }
   if (st.client_id_configured) return "Client ID saved. Click Sign in.";
@@ -1755,10 +3361,12 @@ async function loadM365Status() {
     const st = await api("/api/m365/status");
     state.m365Status = st;
     applyM365TopbarStatus(st);
+    applyM365ExpiredBanner(st);
   } catch {
     const el = $("#stat-m365");
     if (el) el.textContent = "Unavailable";
-    el?.parentElement?.classList.add("err");
+    setTopbarChipState("chip-m365", { err: true });
+    applyM365ExpiredBanner(null);
   }
   refreshReviewM365Tile();
   populateM365SetupForm();
@@ -1780,8 +3388,13 @@ function populateM365SetupForm() {
 
 function renderReviewLoginHub(copilot) {
   const m = state.m365Status || {};
-  return `<section class="card login-hub">
-      <h3>AI sign-in</h3>
+  const open = isAiSigninOpen();
+  return `<details class="card login-hub-details" id="ai-signin-details"${open ? " open" : ""}>
+      <summary class="login-hub-summary">
+        <span class="login-hub-summary__title">AI sign-in</span>
+        <span class="login-hub-summary__hint detail">Optional · click to show Copilot / M365</span>
+      </summary>
+      <div class="login-hub-body">
       <div class="login-hub-grid">
         <article class="login-tile">
           <div class="login-tile-head">
@@ -1804,6 +3417,7 @@ function renderReviewLoginHub(copilot) {
             <span id="m365-auth-badge">${m365AuthBadge(m)}</span>
           </div>
           <p id="review-m365-status" class="detail">${esc(m365ReviewStatusText(m))}</p>
+          ${renderM365EntitlementBanner(m, { compact: true })}
           <label class="detail login-compact-label">Application (client) ID
             <input type="text" id="m365-setup-client-id" class="clarify-box" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
           </label>
@@ -1829,10 +3443,15 @@ function renderReviewLoginHub(copilot) {
           <p id="m365-setup-hint" class="detail err" hidden></p>
         </article>
       </div>
-    </section>`;
+      </div>
+    </details>`;
 }
 
 function bindReviewLoginHub() {
+  const details = $("#ai-signin-details");
+  if (details) {
+    details.addEventListener("toggle", () => setAiSigninOpen(details.open));
+  }
   populateM365SetupForm();
   const m365SaveSetupBtn = $("#btn-m365-save-setup");
   if (m365SaveSetupBtn) {
@@ -2147,29 +3766,23 @@ function renderWorkbookTestcaseBar(rows, scope) {
 }
 
 function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", title = "Test case editor" } = {}) {
-  const row = currentFocusRow(rows, scope);
-  if (!row) return "<p class='detail'>No final workbook rows yet.</p>";
+  const baseRow = currentFocusRow(rows, scope);
+  if (!baseRow) return "<p class='detail'>No final workbook rows yet.</p>";
+  const row = mergeRowWithDraft(baseRow, scope);
   state.workbookFocus[scope] = row.candidate_id;
-  const statusClass =
-    row.review_status === "ready" || row.review_status === "approved"
-      ? "high"
-      : row.review_status === "blocked"
-        ? "error"
-        : "warning";
   return `<div class="card workbook-focus-card" id="${scope}-workbook-anchor">
     <div class="focus-head">
       <div>
         <h4>${esc(title)}</h4>
         <p class="detail"><b>${esc(row.candidate_id || "")}</b> · ${esc(row.test_function || "")} · ${esc(row.event || "")}
-          <span class="tag ${statusClass}" style="margin-left:0.35rem">${esc(row.review_status || "pending")}</span>
           ${renderValidationBadge(row)} ${renderTermRoleHint(row)}</p>
       </div>
     </div>
     <div class="focus-grid focus-grid--workbook">
       <label class="focus-span-2">UseCase<textarea id="${scope}-focus-use_case" class="focus-text focus-text--wide">${esc(row.use_case || "")}</textarea></label>
       <label class="focus-span-2">Operation<textarea id="${scope}-focus-operation" class="focus-text focus-text--wide">${esc(row.operation || "")}</textarea></label>
-      <label>Expected input<textarea id="${scope}-focus-expected_input" class="focus-text focus-text--io">${esc(row.expected_input || "")}</textarea></label>
-      <label>Expected output<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io">${esc(row.expected_output || "")}</textarea></label>
+      <label class="focus-span-2">Expected input<textarea id="${scope}-focus-expected_input" class="focus-text focus-text--io" rows="14">${esc(row.expected_input || "")}</textarea></label>
+      <label class="focus-span-2">Expected output<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out" rows="6">${esc(row.expected_output || "")}</textarea></label>
     </div>
     <div class="focus-meta">
       <label>Status
@@ -2188,6 +3801,7 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
     ${language !== "EN" ? `<label>Open questions<textarea id="${scope}-focus-open_questions" class="focus-text small">${esc(row.open_questions || "")}</textarea></label>` : ""}
     <div class="review-actions workbook-focus-actions">
       <button class="btn" id="${scope}-focus-save">Save row</button>
+      <button type="button" class="btn secondary" id="${scope}-focus-open-testcode">Open in Test Code</button>
       ${
         assistEnabled()
           ? `<button type="button" class="btn secondary" id="${scope}-focus-improve-io">Improve I/O (AI)</button>`
@@ -2388,8 +4002,12 @@ function bindWorkbookTestcaseBar(rows, scope, onReload) {
   if (!select) return;
   select.onchange = () => {
     const id = select.value;
-    if (!id || state.workbookFocus[scope] === id) return;
+    if (!id) return;
     state.workbookFocus[scope] = id;
+    if (scope === "testcode") {
+      switchTestCodeCandidate(id, rows);
+      return;
+    }
     onReload();
   };
 }
@@ -2418,7 +4036,10 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
     const row = currentFocusRow(rows, scope);
     if (!row) return;
     const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
-    if (statusEl) statusEl.textContent = `Saving ${row.candidate_id}…`;
+    if (statusEl) {
+      statusEl.dataset.busy = "1";
+      statusEl.textContent = `Saving ${row.candidate_id}…`;
+    }
     const payload = {
       candidate_id: row.candidate_id,
       language,
@@ -2434,15 +4055,19 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
     }
     try {
       await saveWorkbookRow(payload);
+      clearWorkbookDraft(scope, row.candidate_id);
       await refreshJobSummary();
       if (statusEl) statusEl.textContent = `${row.candidate_id} saved.`;
       onReload();
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
+    } finally {
+      if (statusEl) delete statusEl.dataset.busy;
     }
   };
   const row = currentFocusRow(rows, scope);
   if (!row) return;
+  bindWorkbookDraftAutosave(scope, row.candidate_id, statusElSelector);
   const binding = row.evidence_binding || {};
   document.querySelectorAll("[data-nav-logic]").forEach((btn) => {
     btn.onclick = () => {
@@ -2480,6 +4105,15 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
       showPage("diagram-graph");
     };
   });
+
+  const openTestCodeBtn = document.getElementById(`${scope}-focus-open-testcode`);
+  if (openTestCodeBtn) {
+    openTestCodeBtn.onclick = () => {
+      const focusRow = currentFocusRow(rows, scope);
+      if (!focusRow?.candidate_id) return;
+      openTestCodeForCandidate(focusRow.candidate_id, focusRow.logic_id);
+    };
+  }
 
   const improveIoBtn = document.getElementById(`${scope}-focus-improve-io`);
   if (improveIoBtn) {
@@ -2574,7 +4208,11 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
 }
 
 async function fetchWorkbench(language = state.exportLanguage) {
-  return api(`/api/review/workbench?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(language)}`);
+  return cachedApi(
+    `workbench:${state.jobId}:${language}`,
+    () => api(`/api/review/workbench?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(language)}`),
+    API_CACHE_TTL.workbench
+  );
 }
 
 function semanticEdgeKey(edge, idx) {
@@ -2752,7 +4390,7 @@ function renderDiagramSourceCards(diagrams) {
   }).join("")}</div>`;
 }
 
-function renderDiagramFocus(edge, overlay) {
+function renderDiagramFocus(edge, overlay, logicItems = []) {
   if (!edge) return `<div class="card"><h4>Transition focus</h4><p class="detail">Select a transition edge to inspect its evidence.</p></div>`;
   const conditionChips = (edge.conditions || []).map((text) => {
     const value = String(text || "");
@@ -2762,6 +4400,12 @@ function renderDiagramFocus(edge, overlay) {
       detail: value,
     };
   });
+  const logicOptions = (logicItems || [])
+    .map(
+      (row) =>
+        `<option value="${esc(row.logic_id)}">${esc(row.control_name)} · ${esc(row.parse_status || "")}</option>`
+    )
+    .join("");
   return `<div class="diagram-focus-card">
     <div class="diagram-focus-head">
       <div>
@@ -2775,6 +4419,25 @@ function renderDiagramFocus(edge, overlay) {
       <h5>Source evidence</h5>
       ${renderDiagramEvidenceList(edge.evidence_refs || [], "No source references attached.")}
     </div>
+    ${
+      logicOptions
+        ? `<div class="diagram-overlay-grid">
+            <div>
+              <h5>Link to logic control</h5>
+              <p class="detail">Confirm this diagram edge as structured overlay on a logic group.</p>
+              <label class="detail">Logic group
+                <select id="diagram-link-logic" class="clarify-box">${logicOptions}</select>
+              </label>
+              <button type="button" class="btn secondary" id="btn-diagram-link-confirm" data-edge-key="${esc(edge.__edge_key || "")}">Confirm link</button>
+              <p id="diagram-link-status" class="detail"></p>
+            </div>
+            <div>
+              <h5>OCR snippets</h5>
+              ${renderDiagramSourceCards(overlay?.matchedDiagrams || [])}
+            </div>
+          </div>`
+        : ""
+    }
     <details class="alex-ref-panel">
       <summary>Linked transitions (${(overlay?.rawTransitions || []).length})</summary>
       <div class="alex-ref-body">${renderRawTransitions(overlay?.rawTransitions || [])}</div>
@@ -2879,6 +4542,11 @@ async function setLibraryRoot(path) {
     });
     applyLibraryState(data);
     state.library.rootInputDraft = state.library.root;
+    try {
+      localStorage.setItem("alex.library.lastRoot", path);
+    } catch (_) {
+      /* ignore */
+    }
   } catch (err) {
     state.library.rootError = err.message || String(err);
   }
@@ -3069,16 +4737,112 @@ function renderLibraryPicker() {
 
 function renderLibraryTopbar() {
   const draft = state.library.rootInputDraft ?? state.library.root ?? "";
+  try {
+    if (!draft && !state.library.root) {
+      const saved = localStorage.getItem("alex.library.lastRoot");
+      if (saved) state.library.rootInputDraft = saved;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  const displayPath = state.library.rootInputDraft ?? state.library.root ?? draft;
   return `<div class="library-topbar">
     <div class="library-topbar__root">
-      <span class="detail">Library folder</span>
-      <input class="library-topbar__path" id="library-root-input" placeholder="/abs/path/to/specs" value="${esc(draft)}" />
+      <span class="detail library-topbar__label">Library folder</span>
+      <button type="button" class="btn secondary" id="btn-library-browse-root">Browse folder…</button>
+      <input class="library-topbar__path" id="library-root-input" placeholder="/path/to/specs" value="${esc(displayPath)}" aria-label="Library folder path" />
       <button class="btn" id="btn-library-set-root">${state.library.root ? "Update" : "Set folder"}</button>
       <button class="btn secondary" id="btn-library-refresh" ${state.library.root ? "" : "disabled"}>Refresh</button>
     </div>
-    ${state.library.rootError ? `<p class="detail" style="color:var(--red)">${esc(state.library.rootError)}</p>` : ""}
-    ${!state.library.root ? `<p class="detail">Pick the folder that holds your spec files. Drag-drops on slots are copied into this folder so the references stay local.</p>` : ""}
+    ${state.library.rootError ? `<p class="detail library-topbar__error">${esc(state.library.rootError)}</p>` : ""}
+    ${!state.library.root ? `<p class="detail">Browse for the folder that holds your spec files, or type an absolute path. Drag-drops on slots copy files into this folder.</p>` : ""}
   </div>`;
+}
+
+function renderLibraryRootPicker() {
+  if (!state.library.rootPickerOpen) return "";
+  const listing = state.library.rootPickerListing;
+  const cwd = listing?.cwd || "Quick locations";
+  const dirs = listing?.dirs || [];
+  const specCount = listing?.spec_file_count;
+  const body = state.library.rootPickerLoading
+    ? `<p class="detail">Loading folders…</p>`
+    : state.library.rootPickerError
+      ? `<p class="detail" style="color:var(--status-error)">${esc(state.library.rootPickerError)}</p>`
+      : `<ul class="library-root-picker__list">${dirs
+          .map(
+            (d) =>
+              `<li><button type="button" data-library-root-dir="${esc(d.path)}">${esc(d.label || d.name || d.path)}</button></li>`
+          )
+          .join("")}</ul>`;
+  return `<div class="library-root-picker-backdrop" data-library-root-backdrop>
+    <div class="library-root-picker" role="dialog" aria-modal="true" aria-label="Choose library folder">
+      <header class="library-root-picker__head">
+        <strong>Choose library folder</strong>
+        <button type="button" class="btn ghost btn-xs" data-library-root-close>Close</button>
+      </header>
+      <div class="library-root-picker__body">
+        <div class="library-root-picker__cwd">${esc(cwd)}${specCount != null && listing?.cwd ? ` · ${specCount} spec file(s) here` : ""}</div>
+        ${listing?.parent ? `<button type="button" class="btn secondary btn-xs" data-library-root-up>↑ Up</button>` : ""}
+        ${body}
+      </div>
+      <footer class="library-root-picker__foot">
+        <button type="button" class="btn secondary" data-library-root-close>Cancel</button>
+        <button type="button" class="btn" data-library-root-use ${listing?.cwd ? "" : "disabled"}>Use this folder</button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+async function openLibraryRootPicker(path = "") {
+  state.library.rootPickerOpen = true;
+  state.library.rootPickerLoading = true;
+  state.library.rootPickerError = null;
+  await renderLibrary();
+  try {
+    const q = path ? `?path=${encodeURIComponent(path)}` : "";
+    state.library.rootPickerListing = await api(`/api/library/browse-root${q}`);
+    state.library.rootPickerCwd = state.library.rootPickerListing?.cwd || "";
+  } catch (err) {
+    state.library.rootPickerError = err.message || String(err);
+  } finally {
+    state.library.rootPickerLoading = false;
+    await renderLibrary();
+  }
+}
+
+function bindLibraryRootPicker() {
+  document.querySelector("[data-library-root-backdrop]")?.addEventListener("click", (ev) => {
+    if (ev.target?.matches("[data-library-root-backdrop]")) {
+      state.library.rootPickerOpen = false;
+      renderLibrary();
+    }
+  });
+  document.querySelectorAll("[data-library-root-close]").forEach((btn) => {
+    btn.onclick = () => {
+      state.library.rootPickerOpen = false;
+      renderLibrary();
+    };
+  });
+  document.querySelector("[data-library-root-up]")?.addEventListener("click", () => {
+    const parent = state.library.rootPickerListing?.parent;
+    if (parent) openLibraryRootPicker(parent);
+  });
+  document.querySelectorAll("[data-library-root-dir]").forEach((btn) => {
+    btn.onclick = () => openLibraryRootPicker(btn.dataset.libraryRootDir || "");
+  });
+  document.querySelector("[data-library-root-use]")?.addEventListener("click", () => {
+    const cwd = state.library.rootPickerListing?.cwd;
+    if (!cwd) return;
+    state.library.rootInputDraft = cwd;
+    state.library.rootPickerOpen = false;
+    try {
+      localStorage.setItem("alex.library.lastRoot", cwd);
+    } catch (_) {
+      /* ignore */
+    }
+    setLibraryRoot(cwd);
+  });
 }
 
 async function renderLibrary() {
@@ -3089,6 +4853,7 @@ async function renderLibrary() {
   const canEdit = !!state.library.root && state.library.rootExists;
 
   content().innerHTML = `<header class="page-header library-header"><h2>Library</h2></header>
+    ${renderGuideLibraryHelp()}
     ${renderLibraryTopbar()}
     ${canEdit
       ? `<div class="library-canvas">
@@ -3103,11 +4868,14 @@ async function renderLibrary() {
         </div>`
       : `<p class="detail">Set a library folder above to start building the trace map.</p>`
     }
-    ${renderLibraryPicker()}`;
+    ${renderLibraryPicker()}
+    ${renderLibraryRootPicker()}`;
 
   bindLibraryTopbar();
   bindLibraryCanvas();
   bindLibraryPicker();
+  bindLibraryRootPicker();
+  bindTabHelpLinks();
 }
 
 function bindLibraryTopbar() {
@@ -3139,6 +4907,10 @@ function bindLibraryTopbar() {
       try { await fetchLibrary(); } catch (err) { state.library.rootError = err.message || String(err); }
       renderLibrary();
     };
+  }
+  const browseRoot = $("#btn-library-browse-root");
+  if (browseRoot) {
+    browseRoot.onclick = () => openLibraryRootPicker(state.library.rootInputDraft || state.library.root || "");
   }
 }
 
@@ -3384,12 +5156,27 @@ async function renderDiagramGraph() {
   }
   await refreshJobSummary();
   try {
-    const data = await api(`/api/review/states?job_id=${encodeURIComponent(state.jobId)}`);
+    const data = await cachedApi(
+      `states:${state.jobId}`,
+      () => api(`/api/review/states?job_id=${encodeURIComponent(state.jobId)}`),
+      API_CACHE_TTL.states
+    );
+    const logicData = await cachedApi(
+      `logic-review:${state.jobId}`,
+      () => api(`/api/review/logic-review?job_id=${encodeURIComponent(state.jobId)}`),
+      API_CACHE_TTL.logicReview
+    ).catch(() => ({}));
+    const logicItems = logicData.logic_review_items || [];
     const semantics = data.diagram_semantics || {};
     const rawTransitions = data.transitions || [];
     const diagrams = data.diagrams || [];
     const rawStates = semantics.states?.length ? semantics.states : data.states || [];
-    const states = rawStates.map((row) => (typeof row === "string" ? row : row?.name || "")).filter(Boolean);
+    const states = rawStates
+      .map((row) => {
+        if (typeof row === "string") return row;
+        return row?.state || row?.name || "";
+      })
+      .filter(Boolean);
     const edges = (semantics.edges || []).map((edge, idx) => ({ ...edge, __edge_key: semanticEdgeKey(edge, idx) }));
     const summary = semantics.summary || {};
     const activeState = states.includes(state.diagramFocus.state) ? state.diagramFocus.state : (states[0] || null);
@@ -3407,15 +5194,17 @@ async function renderDiagramGraph() {
         <h2>State machine</h2>
         <p class="lead">Select a state, then a transition. Evidence and conditions appear in the detail panel.</p>
       </header>
+      ${renderGuideDiagramHelp()}
       ${renderMetaStats([
         ["States", states.length],
         ["Edges", edges.length],
         ["Explicit", semanticSummaryValue(summary, "explicit_edges", filteredEdges.filter((e) => e.semantic_type === "explicit_arrow" || e.semantic_type === "explicit_transition").length)],
         ["Inferred", semanticSummaryValue(summary, "rule_inferred_edges", filteredEdges.filter((e) => e.semantic_type === "rule_inferred" || e.semantic_type === "state_rule").length)],
-        ["OCR mentions", semanticSummaryValue(summary, "state_mentions", 0)],
+        ["OCR mentions", semanticSummaryValue(summary, "ocr_state_mentions", semanticSummaryValue(summary, "state_mentions", 0))],
       ], { compact: true })}
       <div class="review-actions" style="margin-bottom:1rem">
         <button class="btn secondary" id="btn-diagram-logic">Logic &amp; definitions</button>
+        <button class="btn secondary" id="btn-diagram-jump-logic" ${activeEdge ? "" : "disabled"}>Jump to linked logic</button>
         <button class="btn secondary" id="btn-diagram-export">Final file</button>
       </div>
       <h3 class="alex-primary-panel__label" style="margin-bottom:0.5rem">States</h3>
@@ -3426,7 +5215,7 @@ async function renderDiagramGraph() {
           ${renderDiagramEdgeList(filteredEdges)}
         </div>
         <div class="card alex-diagram-detail">
-          ${renderDiagramFocus(activeEdge, overlay)}
+          ${renderDiagramFocus(activeEdge, overlay, logicItems)}
         </div>
       </div>
       <details class="alex-flow-panel alex-ref-panel">
@@ -3434,6 +5223,14 @@ async function renderDiagramGraph() {
         <div class="alex-ref-body">${renderDiagramFlow(filteredEdges)}</div>
       </details>`;
     $("#btn-diagram-logic").onclick = () => showPage("logic-review");
+    const jumpLogicBtn = $("#btn-diagram-jump-logic");
+    if (jumpLogicBtn && activeEdge) {
+      jumpLogicBtn.onclick = () => {
+        const linked = (overlay?.logic_blocks || [])[0]?.id || logicItems[0]?.logic_id;
+        if (linked) state.selectedLogicId = linked;
+        showPage("logic-review");
+      };
+    }
     $("#btn-diagram-export").onclick = () => showPage("export");
     content().querySelectorAll("[data-state-pick]").forEach((btn) => {
       btn.onclick = () => {
@@ -3448,20 +5245,62 @@ async function renderDiagramGraph() {
         renderDiagramGraph();
       };
     });
+    const linkBtn = $("#btn-diagram-link-confirm");
+    if (linkBtn && activeEdge) {
+      linkBtn.onclick = async () => {
+        const logicId = $("#diagram-link-logic")?.value;
+        if (!logicId) return;
+        const statusEl = $("#diagram-link-status");
+        if (statusEl) statusEl.textContent = "Linking…";
+        try {
+          const res = await api(`/api/review/diagram-link?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              logic_id: logicId,
+              from_state: activeEdge.from_state,
+              to_state: activeEdge.to_state,
+              event: activeEdge.event || "",
+              conditions: activeEdge.conditions || [],
+              edge_key: activeEdge.__edge_key || "",
+            }),
+          });
+          if (statusEl) {
+            statusEl.textContent =
+              "Linked to logic overlay. Open Logic & Definitions to review." +
+              formatUnderstandingLoopStatus(res.understanding_loop);
+          }
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        }
+      };
+    }
+    bindTabHelpLinks();
   } catch (e) {
     content().innerHTML = `<p class="detail" style="color:var(--red)">${esc(e.message)}</p>`;
   }
 }
 
-async function renderLogicReview() {
+async function renderLogicReview(opts = {}) {
   if (!state.jobId) {
     content().innerHTML = requireJobHtml();
     bindNoJob();
     return;
   }
-  await refreshJobSummary();
+  if (!opts.skipSummary) {
+    await refreshJobSummary(opts.force);
+  }
+  const loading = !document.querySelector(".alex-layout-logic");
+  if (loading) {
+    content().innerHTML = `<p class="detail">Loading logic review…</p>`;
+  }
   try {
-    const data = await api(`/api/review/logic-review?job_id=${state.jobId}`);
+    if (opts.force) invalidateApiCache(`logic-review:${state.jobId}`);
+    const data = await cachedApi(
+      `logic-review:${state.jobId}`,
+      () => api(`/api/review/logic-review?job_id=${state.jobId}`),
+      API_CACHE_TTL.logicReview
+    );
     state.bundle = {
       ...(state.bundle || {}),
       term_roles: data.term_roles || state.bundle?.term_roles || {},
@@ -3473,10 +5312,50 @@ async function renderLogicReview() {
     }
     const sel = state.selectedLogicId || items[0].logic_id;
     const item = items.find((x) => x.logic_id === sel) || items[0];
-    const [inbox, workbench, assistStatus] = await Promise.all([
-      api(`/api/review/definition-inbox?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`),
+    const [inbox, workbench, assistStatus, knowledgeApply, reasoningRes, overviewRes, footnoteMat, pathMatrix] =
+      await Promise.all([
+      cachedApi(
+        `inbox:${state.jobId}:${item.logic_id}`,
+        () =>
+          api(
+            `/api/review/definition-inbox?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
+          ),
+        8000
+      ),
       fetchWorkbench(state.exportLanguage),
-      api("/api/llm/status").catch(() => ({})),
+      cachedApi("llm-status", () => api("/api/llm/status"), 30000).catch(() => ({})),
+      cachedApi(
+        `knowledge:${state.jobId}:${item.logic_id}`,
+        () =>
+          api(
+            `/api/review/knowledge-apply?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
+          ),
+        8000
+      ).catch(() => ({ status: "none", diffs: [] })),
+      cachedApi(
+        `reasoning:${state.jobId}:${item.logic_id}`,
+        () => api(`/api/reasoning/${encodeURIComponent(item.logic_id)}?job_id=${encodeURIComponent(state.jobId)}`),
+        8000
+      ).catch(() => null),
+      cachedApi(`overview:${state.jobId}`, () => api(`/api/review/overview?job_id=${encodeURIComponent(state.jobId)}`), 15000).catch(
+        () => null
+      ),
+      cachedApi(
+        `footnote:${state.jobId}:${item.logic_id}`,
+        () =>
+          api(
+            `/api/review/footnote-materializations?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
+          ),
+        8000
+      ).catch(() => null),
+      cachedApi(
+        `path-matrix:${state.jobId}:${item.logic_id}`,
+        () =>
+          api(
+            `/api/review/path-tc-matrix?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
+          ),
+        8000
+      ).catch(() => null),
     ]);
     state.assistStatus = assistStatus;
     const queueByLogic = Object.fromEntries(((data.ai_queue?.logic_groups) || []).map((row) => [row.logic_id, row]));
@@ -3487,12 +5366,21 @@ async function renderLogicReview() {
     const logicRows = (workbench.rows || []).filter(
       (row) => row.logic_id === item.logic_id || relatedCandidateIds.has(row.candidate_id)
     );
-    const treeHtml = renderTreeLines(item.tree_lines || []);
+    const simResult = state.pathSimResult?.[item.logic_id] || null;
+    const highlightTerms = state.logicTreeFocus?.highlightTerms || [];
+    const highlightRowNos = state.logicTreeFocus?.highlightRowNos || [];
+    const treeHtml = renderInteractiveLogicTree(item, simResult?.active_node_ids || []);
+    const pathSimHtml = renderPathSimulatorPanel(item, simResult);
+    const overviewHtml = renderSpecOverviewPanel(overviewRes?.overview);
+    const formalSpecHtml = renderFormalSpecContextPanel(data, item);
+    const semanticsBadges = renderLogicSemanticsBadges(item);
+    const footnoteAttachHtml = renderFootnoteAttachmentsPanel(footnoteMat);
+    const pathMatrixHtml = renderPathTcMatrixPanel(pathMatrix?.matrix, state.pathRegenProposal?.[item.logic_id]);
     const listHtml = items
       .map(
         (it) =>
           `<option value="${esc(it.logic_id)}" ${it.logic_id === item.logic_id ? "selected" : ""}>${esc(
-            `${it.control_name} · ${queueStatusLabel(queueByLogic[it.logic_id]?.queue_status)}`
+            it.control_name
           )}</option>`
       )
       .join("");
@@ -3503,14 +5391,16 @@ async function renderLogicReview() {
       esc(r.detected_type),
       esc(r.parser_reason || ""),
     ]);
-    const parserNotes = (item.parser_notes || []).map((n) => esc(n.parser_reason || n.message || JSON.stringify(n)));
+    const parserNotes = (item.parser_notes || []).map((n) =>
+      esc(n.parser_reason || n.message || n.type || "parser note")
+    );
     const sourceEvidenceHtml = item.source_evidence
       ? typeof item.source_evidence === "object"
         ? renderEvidenceNotes(
             [
               {
                 kind: "source",
-                label: basename(item.source_evidence.file || item.source_evidence.summary || "source"),
+                label: compactSourceLabel(item.source_evidence) || basename(item.source_evidence.file || "source"),
                 detail: formatSourceReadable(item.source_evidence),
               },
             ],
@@ -3519,6 +5409,9 @@ async function renderLogicReview() {
         : renderEvidenceNotes(parseLegacyEvidenceString(item.source_evidence), { label: "Source file" })
       : "";
     content().innerHTML = `<div class="alex-layout-logic">
+      ${renderGuideLogicHelp()}
+      ${overviewHtml}
+      ${formalSpecHtml}
       <div class="logic-pick-bar logic-pick-bar--compact">
         <label class="detail logic-picker-label">Logic group (${items.length})
           <select id="logic-group-select" class="clarify-box logic-group-select">${listHtml}</select>
@@ -3526,46 +5419,44 @@ async function renderLogicReview() {
       </div>
       <header class="alex-hero">
         <div>
-          <h2 class="alex-hero__title">${esc(item.control_name)}</h2>
-          <p class="alex-hero__sub">Read the logic tree first, then trace terms and fix definitions.</p>
+          <h2 class="alex-hero__title">${esc(item.outcome_label || item.control_name)}</h2>
+          <p class="alex-hero__sub">${item.outcome_label ? esc(item.control_name) + " · " : ""}Read the logic tree first, then trace terms and fix definitions.</p>
+          ${semanticsBadges}
         </div>
-        <div class="alex-hero__badges">
-          <span class="tag ${item.parse_status === "ok" ? "high" : "error"}">parse ${esc(item.parse_status)}</span>
-          ${
-            item.gate_status
-              ? `<span class="tag ${item.gate_status === "ready" ? "high" : item.gate_status === "needs_llm" ? "warn" : "error"}">gate ${esc(item.gate_status)}</span>`
-              : ""
-          }
-          <span class="tag ${queueStatusClass(queueItem.queue_status)}">${esc(queueStatusLabel(queueItem.queue_status))}</span>
-        </div>
+        <span class="tag ${item.parse_status === "ok" ? "high" : item.parse_status === "partial" ? "warning" : "error"}">${esc(item.parse_status || "unknown")}</span>
       </header>
       ${sourceEvidenceHtml}
       ${item.unresolved_refs?.length ? `<p class="detail" style="margin-bottom:1rem"><b>Missing definitions:</b> ${esc(item.unresolved_refs.join(", "))}</p>` : ""}
       <section class="alex-primary-panel">
         <h3 class="alex-primary-panel__label">Logic structure</h3>
-        <p class="detail" style="margin-top:0">Compare the parsed tree with the logic cut from the specification.</p>
-        <div class="logic-compare-grid">
-          <div>
+        <p class="detail" style="margin-top:0">Source table is the reference — click a tree node to highlight the matching row.</p>
+        <div class="logic-compare-grid logic-evidence-workspace">
+          <div class="logic-compare-panel">
             <h4 class="logic-compare__label">Tree logic</h4>
-            <div class="gate-diagram logic-tree-pre">${treeHtml}</div>
+            <div class="logic-compare-panel__body">
+              <div class="gate-diagram logic-tree-interactive-host">${treeHtml}</div>
+              ${pathSimHtml}
+            </div>
           </div>
-          <div>
-            <h4 class="logic-compare__label">Raw expression (from spec)</h4>
-            <pre class="expr-block expr-block--spec">${esc(logicSpecExpression(item))}</pre>
+          <div class="logic-compare-panel">
+            <h4 class="logic-compare__label">Source table (linked)</h4>
+            <div class="logic-compare-panel__body">
+              ${renderVisualSourcePreview(item.visual_source, tableRows, highlightTerms, highlightRowNos)}
+            </div>
           </div>
         </div>
         <details class="alex-ref-panel" style="margin-top:0.75rem">
-          <summary>Show source table / detected context (${tableRows.length} row${tableRows.length === 1 ? "" : "s"})</summary>
-          <div class="alex-ref-body grid-wrap">
-            ${renderVisualSourcePreview(item.visual_source, tableRows)}
-            <p class="detail">State-machine context appears on the Diagram Graph tab when detected. Keep this collapsed unless you need to verify the original source.</p>
+          <summary>Parser notes (${parserNotes.length})</summary>
+          <div class="alex-ref-body">
+            ${parserNotes.length ? `<ul class="detail">${parserNotes.map((n) => `<li>${n}</li>`).join("")}</ul>` : `<p class="detail">No parser notes.</p>`}
           </div>
         </details>
-        ${parserNotes.length ? `<ul class="detail" style="margin-top:0.75rem">${parserNotes.map((n) => `<li>${n}</li>`).join("")}</ul>` : ""}
       </section>
-      <div class="alex-secondary-row alex-secondary-row--full">
-        <section>
-          <h4>Evidence &amp; definitions</h4>
+      ${footnoteAttachHtml}
+      ${pathMatrixHtml}
+      <details class="alex-ref-panel alex-evidence-panel" style="margin-top:1rem">
+        <summary>Evidence &amp; dependency trace</summary>
+        <div class="alex-ref-body">
           <details class="alex-ref-panel" style="margin-bottom:1rem">
             <summary>Excel source rows (${tableRows.length})</summary>
             <div class="alex-ref-body grid-wrap">
@@ -3576,13 +5467,15 @@ async function renderLogicReview() {
           </details>
           <h4>Dependency trace</h4>
           ${renderTraceRows(item.trace_rows || [])}
-          <div class="alex-definitions-block" style="margin-top:1.25rem">
-            <h4>Definitions</h4>
-            ${renderDefinitionInbox(inbox, { engineerNote, attachments, assistStatus })}
-          </div>
           ${(item.issues || []).length ? `<div style="margin-top:1rem"><h4>Linked issues</h4>${renderIssueList(item.issues || [])}</div>` : ""}
-        </section>
-      </div>
+        </div>
+      </details>
+      <section class="alex-definitions-section">
+        <h3 class="alex-section-title">Definitions</h3>
+        ${renderDefinitionInbox(inbox, { engineerNote, attachments, assistStatus, logicId: item.logic_id })}
+      </section>
+      ${renderKnowledgeReconciliationPanel(knowledgeApply)}
+      ${renderHypothesisReviewPanel(reasoningRes?.session)}
       <section class="workbook-workspace workbook-workspace--logic" style="margin-top:1rem">
         <h4>Final workbook rows (this logic group)</h4>
         ${renderWorkbookTestcaseBar(logicRows, "logic")}
@@ -3590,21 +5483,118 @@ async function renderLogicReview() {
         <p id="logic-row-save-status" class="detail"></p>
       </section>
     </div>`;
+    document.querySelectorAll("[data-definition-term]").forEach((btn) => {
+      btn.onclick = () => {
+        state.inboxFocus[item.logic_id] = btn.getAttribute("data-definition-term") || "";
+        renderLogicReview({ skipSummary: true });
+      };
+    });
     const logicSelect = $("#logic-group-select");
     if (logicSelect) {
       logicSelect.onchange = () => {
         state.selectedLogicId = logicSelect.value;
-        renderLogicReview();
+        state.logicTreeFocus = { nodeId: null, highlightTerms: [], highlightRowNos: [] };
+        renderLogicReview({ skipSummary: true });
       };
     }
-    const termSelect = $("#definition-term-select");
-    if (termSelect) {
-      termSelect.onchange = () => {
-        state.inboxFocus[item.logic_id] = termSelect.value;
-        renderLogicReview();
+    bindLogicTreeSourceNavigation(item);
+    const copyBriefBtn = $("#btn-copy-copilot-brief");
+    if (copyBriefBtn) {
+      copyBriefBtn.onclick = () =>
+        copyCopilotBrief(item.logic_id, document.querySelector("[data-definition-query-status]"));
+    }
+    const pasteCopilotBtn = $("#btn-paste-copilot-web");
+    if (pasteCopilotBtn) {
+      pasteCopilotBtn.onclick = () => openCopilotPasteModal(item.logic_id);
+    }
+    const simBtn = $("#btn-logic-sim-run");
+    if (simBtn) {
+      simBtn.onclick = async () => {
+        const assignments = {};
+        content().querySelectorAll(".logic-sim-input").forEach((inp) => {
+          assignments[inp.dataset.simSignal] = inp.value;
+        });
+        state.pathSimAssignments[item.logic_id] = assignments;
+        try {
+          const res = await api(`/api/review/logic-simulate?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ logic_id: item.logic_id, assignments }),
+          });
+          state.pathSimResult[item.logic_id] = res;
+          const host = document.querySelector(".logic-tree-interactive-host");
+          if (host) {
+            host.innerHTML = renderInteractiveLogicTree(item, res.active_node_ids || []);
+            bindLogicTreeSourceNavigation(item);
+            const statusEl = $("#logic-sim-status");
+            if (statusEl) {
+              const st = res.status || "unknown";
+              statusEl.textContent =
+                st === "active" ? "Logic path ACTIVE" : st === "inactive" ? "Logic path INACTIVE" : "Partial / unknown";
+              statusEl.className = `tag ${st === "active" ? "high" : st === "inactive" ? "error" : "warning"}`;
+            }
+          } else {
+            await renderLogicReview({ skipSummary: true });
+          }
+        } catch (e) {
+          alert(e.message);
+        }
       };
     }
-    const applyKnowledge = async (statusMessage = "Saving knowledge…", providerOverride = "") => {
+    const refUpload = $("#reference-file-upload");
+    if (refUpload) {
+      refUpload.onchange = async () => {
+        if (!refUpload.files.length) return;
+        const statusEl = $("#reference-file-status");
+        if (statusEl) statusEl.textContent = "Merging reference file…";
+        const fd = new FormData();
+        for (const f of refUpload.files) fd.append("files", f);
+        try {
+          const res = await fetch(
+            `/api/review/attach-reference-file?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`,
+            { method: "POST", body: fd }
+          );
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          if (statusEl) {
+            statusEl.textContent =
+              `Merged ${(data.saved || []).length} file(s).` + formatUnderstandingLoopStatus(data.understanding_loop);
+          }
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        }
+        refUpload.value = "";
+      };
+    }
+    const pathProposeBtn = $("#btn-path-tc-propose");
+    if (pathProposeBtn) {
+      pathProposeBtn.onclick = async () => {
+        const statusEl = $("#path-tc-propose-status");
+        if (statusEl) statusEl.textContent = "Building proposals…";
+        pathProposeBtn.disabled = true;
+        try {
+          const res = await api(
+            `/api/review/path-tc-propose?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`,
+            { method: "POST" }
+          );
+          state.pathRegenProposal[item.logic_id] = res;
+          if (statusEl) {
+            statusEl.textContent = `Proposed ${res.proposed_count || 0} TC(s) for missing paths — review in Knowledge reconciliation when applied.`;
+          }
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          pathProposeBtn.disabled = false;
+        }
+      };
+    }
+    const applyKnowledge = async (
+      statusMessage = "Saving knowledge…",
+      providerOverride = "",
+      { localOnly = false, forceOllama = false } = {}
+    ) => {
       const note = $("#definition-workbench-note")?.value || "";
       const current = inboxFocusTerm(inbox);
       const provider = providerOverride || $("#knowledge-provider")?.value || getKnowledgeProvider();
@@ -3614,7 +5604,14 @@ async function renderLogicReview() {
       return api(`/api/review/logic-clarification?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logic_id: item.logic_id, note, term: current?.term || "", provider }),
+        body: JSON.stringify({
+          logic_id: item.logic_id,
+          note,
+          term: current?.term || "",
+          provider,
+          local_only: localOnly,
+          force_ollama: forceOllama || provider === "ollama",
+        }),
       });
     };
     const providerSelect = $("#knowledge-provider");
@@ -3634,13 +5631,40 @@ async function renderLogicReview() {
           body: fd,
         });
         if (!res.ok) throw new Error(await res.text());
-        if (attachStatus) attachStatus.textContent = "Attachment(s) saved.";
-        renderLogicReview();
+        const data = await res.json();
+        if (attachStatus) {
+          attachStatus.textContent =
+            "Attachment(s) saved." + formatUnderstandingLoopStatus(data.understanding_loop);
+        }
+        renderLogicReview({ skipSummary: true });
       } catch (e) {
         if (attachStatus) attachStatus.textContent = e.message;
       }
       inp.value = "";
     };
+    const localApplyBtn = $("#btn-definition-local-apply");
+    if (localApplyBtn) {
+      localApplyBtn.onclick = async () => {
+        const note = $("#definition-workbench-note")?.value || "";
+        const statusEl = document.querySelector("[data-definition-query-status]");
+        if (!note.trim()) {
+          if (statusEl) statusEl.textContent = "Enter a basic constraint first (e.g. HUY >= 1, < 5).";
+          return;
+        }
+        if (statusEl) statusEl.textContent = "Applying locally…";
+        localApplyBtn.disabled = true;
+        try {
+          const res = await applyKnowledge("Applying locally…", "", { localOnly: true });
+          clearDefinitionDraft(item.logic_id);
+          if (statusEl) statusEl.textContent = formatLocalApplyStatus(res);
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          localApplyBtn.disabled = false;
+        }
+      };
+    }
     const definitionQueryBtn = $("#btn-definition-query");
     if (definitionQueryBtn) {
       definitionQueryBtn.onclick = async () => {
@@ -3654,7 +5678,10 @@ async function renderLogicReview() {
         if (statusEl) statusEl.textContent = `Resolve with AI (${provider})…`;
         definitionQueryBtn.disabled = true;
         try {
-          const res = await applyKnowledge(`Applying via ${provider}…`, provider);
+          const res = await applyKnowledge(`Applying via ${provider}…`, provider, {
+            forceOllama: provider === "ollama",
+          });
+          clearDefinitionDraft(item.logic_id);
           if (statusEl) statusEl.textContent = formatKnowledgeApplyStatus(res, provider);
           await renderLogicReview();
         } catch (e) {
@@ -3664,7 +5691,114 @@ async function renderLogicReview() {
         }
       };
     }
+    const applySelectedBtn = $("#btn-knowledge-apply-selected");
+    if (applySelectedBtn) {
+      applySelectedBtn.onclick = async () => {
+        const statusEl = $("#knowledge-reconcile-status");
+        const indices = [...document.querySelectorAll(".knowledge-patch-check:checked")].map((el) =>
+          Number(el.dataset.patchIndex)
+        );
+        if (!indices.length) {
+          if (statusEl) statusEl.textContent = "Select at least one patch.";
+          return;
+        }
+        if (statusEl) statusEl.textContent = "Applying selected patches…";
+        applySelectedBtn.disabled = true;
+        try {
+          const res = await api(
+            `/api/review/knowledge-apply/confirm?job_id=${encodeURIComponent(state.jobId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ logic_id: item.logic_id, patch_indices: indices }),
+            }
+          );
+          const firstCid = (knowledgeApply.diffs || []).find((d) => indices.includes(d.patch_index))?.candidate_id;
+          if (firstCid) state.workbookFocus.logic = firstCid;
+          if (statusEl) {
+            statusEl.textContent =
+              `Applied ${res.applied_patch_count || indices.length} patch(es); updated ${res.candidates_updated || 0} TC(s).` +
+              formatUnderstandingLoopStatus(res.understanding_loop);
+          }
+          await renderLogicReview();
+          document.querySelector(".workbook-row.is-focused")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          applySelectedBtn.disabled = false;
+        }
+      };
+    }
+    const rejectAllBtn = $("#btn-knowledge-reject-all");
+    if (rejectAllBtn) {
+      rejectAllBtn.onclick = async () => {
+        const statusEl = $("#knowledge-reconcile-status");
+        if (statusEl) statusEl.textContent = "Rejecting pending patches…";
+        try {
+          await api(`/api/review/knowledge-apply/reject?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ logic_id: item.logic_id, patch_indices: [] }),
+          });
+          if (statusEl) statusEl.textContent = "Pending patches rejected.";
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        }
+      };
+    }
+    const acceptClaimsBtn = $("#btn-hypothesis-accept-claims");
+    if (acceptClaimsBtn) {
+      acceptClaimsBtn.onclick = async () => {
+        const statusEl = $("#hypothesis-review-status");
+        const indices = [...document.querySelectorAll(".hypothesis-claim-check:checked")].map((el) =>
+          Number(el.dataset.claimIndex)
+        );
+        if (!indices.length) {
+          if (statusEl) statusEl.textContent = "Select at least one claim.";
+          return;
+        }
+        if (statusEl) statusEl.textContent = "Applying accepted claims…";
+        try {
+          const res = await api(`/api/reasoning/accept-claims?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ logic_id: item.logic_id, claim_indices: indices }),
+          });
+          if (statusEl) {
+            statusEl.textContent =
+              `Applied ${(res.applied_terms || []).length} term(s); refreshed ${res.definitions_applied || 0} TC(s).` +
+              formatUnderstandingLoopStatus(res.understanding_loop);
+          }
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        }
+      };
+    }
+    const pasteHypothesisBtn = $("#btn-hypothesis-paste-json");
+    if (pasteHypothesisBtn) {
+      pasteHypothesisBtn.onclick = async () => {
+        const raw = window.prompt("Paste hypothesis JSON (claims, open_questions, testcase_patch_plan):");
+        if (!raw?.trim()) return;
+        const statusEl = $("#hypothesis-review-status");
+        try {
+          const hypothesis = JSON.parse(raw);
+          await api(`/api/reasoning/hypothesis?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ logic_id: item.logic_id, hypothesis, provider: "manual" }),
+          });
+          if (statusEl) statusEl.textContent = "Hypothesis saved for review.";
+          await renderLogicReview();
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message || "Invalid JSON.";
+        }
+      };
+    }
     bindWorkbookFocusEditor(logicRows, state.exportLanguage, "logic", renderLogicReview, "#logic-row-save-status");
+    bindDefinitionDraftAutosave(item.logic_id);
+    bindTabHelpLinks();
   } catch (e) {
     content().innerHTML = `<p class="detail" style="color:var(--red)">${esc(e.message)}</p>`;
   }
@@ -3715,6 +5849,7 @@ async function renderExport() {
   const q = encodeURIComponent(state.jobId);
   const rows = preview.rows || [];
   content().innerHTML = `<div class="alex-export-page">
+    ${renderGuideExportHelp()}
     <header class="alex-hero alex-export-hero">
       <div>
         <h2 class="alex-hero__title">Final TestSpec</h2>
@@ -3827,44 +5962,634 @@ async function renderExport() {
   bindWorkbookColumnResize("export-workbook");
   bindWorkbookTableRowFocus(rows, "export", "export-workbook", renderExport);
   bindWorkbookFocusEditor(rows, state.exportLanguage, "export", renderExport, "#export-row-save-status");
+  bindTabHelpLinks();
+}
+
+function openTestCodeForCandidate(candidateId, logicId) {
+  state.testCode.selectedCandidateId = candidateId || null;
+  if (logicId) state.testCode.selectedLogicId = logicId;
+  state.workbookFocus.testcode = candidateId;
+  showPage("test-code");
+}
+
+async function fetchGtestWorkspace(force = false) {
+  const lang = state.exportLanguage || "EN";
+  const key = `gtest-ws:${state.jobId}:${lang}`;
+  if (force) invalidateApiCache(key);
+  const data = await cachedApi(
+    key,
+    () =>
+      api(
+        `/api/review/gtest-workspace?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(lang)}`
+      ),
+    API_CACHE_TTL.gtestWorkspace
+  );
+  state.testCode.workspace = data;
+  state.testCode.variableMapDraft = { ...(data.code_variable_map || {}) };
+  state.testCode.harnessDraft = { ...(data.harness || {}) };
+  return data;
+}
+
+function applyTestCodeDraftToUi(draft, row) {
+  const commentEl = $("#testcode-spec-comments");
+  const codeEl = $("#testcode-code-editor");
+  if (commentEl && draft) commentEl.value = draft.spec_comment_block || "";
+  if (codeEl && draft) codeEl.value = draft.full_snippet || draft.code_body || "";
+  const strip = document.getElementById("testcode-io-strip");
+  if (strip && row) strip.outerHTML = renderTestCodeIoStrip(row);
+  const logicSel = $("#testcode-logic-select");
+  if (logicSel && state.testCode.selectedLogicId) logicSel.value = state.testCode.selectedLogicId;
+  const headName = document.querySelector(".alex-testcode-editor__head > .detail");
+  if (headName && draft) {
+    headName.textContent = draft.test_name || row?.candidate_id || "TEST_F snippet";
+  }
+  document.querySelector(".alex-testcode-editor__head .tag.warning")?.remove();
+  if (draft?.unmapped_signals?.length) {
+    document.querySelector(".alex-testcode-editor__head")?.insertAdjacentHTML(
+      "beforeend",
+      `<span class="tag warning">Unmapped: ${draft.unmapped_signals.map((s) => esc(s)).join(", ")}</span>`
+    );
+  }
+}
+
+async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows || []) {
+  if (!candidateId || state.testCode.switching) return;
+  state.testCode.switching = true;
+  state.testCode.selectedCandidateId = candidateId;
+  state.workbookFocus.testcode = candidateId;
+  const row = rows.find((r) => r.candidate_id === candidateId);
+  if (row?.logic_id) state.testCode.selectedLogicId = row.logic_id;
+  const statusEl = $("#testcode-status");
+  if (statusEl) statusEl.textContent = "Generating…";
+  try {
+    const draftKey = candidateId;
+    const saved = (state.testCode.workspace?.drafts || {})[draftKey];
+    let draft;
+    if (saved?.full_snippet && saved?.engineer_edited) {
+      draft = saved;
+    } else {
+      draft = await regenerateGtestDraft();
+    }
+    state.testCode.draft = draft;
+    state.testCode.lastDraftKey = draftKey;
+    applyTestCodeDraftToUi(draft, row);
+    if (statusEl) {
+      statusEl.textContent = draft?.unmapped_signals?.length
+        ? `${draft.unmapped_signals.length} need custom rename — edit map then Apply.`
+        : "Ready — edit code, then Copy.";
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message;
+  } finally {
+    state.testCode.switching = false;
+  }
+}
+
+function renderTestCodeHelpCard(title, bodyHtml, primaryLabel, primaryAction) {
+  return `<div class="card alex-testcode-empty">
+    <h3>${esc(title)}</h3>
+    ${bodyHtml}
+    <div class="review-actions" style="margin-top:1rem">
+      <button class="btn" type="button" id="${primaryAction}">${esc(primaryLabel)}</button>
+    </div>
+  </div>`;
+}
+
+function bindTestCodeHelp(actionId, fn) {
+  const btn = document.getElementById(actionId);
+  if (btn) btn.onclick = fn;
+}
+
+function explainTestCodeError(message) {
+  const msg = String(message || "");
+  if (msg === "Not Found") {
+    return `<p class="detail">The Test Code API is unavailable. This usually means the ALEX server is running an older build.</p>
+      <ul class="alex-guide-steps">
+        <li>Stop the server and restart: <code>python -m uvicorn web.main:app --host 127.0.0.1 --port 8765</code></li>
+        <li>Hard refresh the browser (Cmd+Shift+R)</li>
+      </ul>`;
+  }
+  if (/job not found|no analysis bundle/i.test(msg)) {
+    return `<p class="detail">This review job no longer exists or analysis has not finished.</p>
+      <ul class="alex-guide-steps">
+        <li>Open <b>Review</b> and run <b>Review specification</b> again</li>
+        <li>Wait until progress completes, then return to Test Code</li>
+      </ul>`;
+  }
+  return `<p class="detail">${esc(msg)}</p>`;
+}
+
+async function regenerateGtestDraft() {
+  const tc = state.testCode;
+  const body = {
+    candidate_id: tc.selectedCandidateId || null,
+    logic_id: tc.selectedLogicId || null,
+    variable_map: tc.variableMapDraft || {},
+  };
+  if (!body.candidate_id && !body.logic_id) return null;
+  const res = await api(`/api/review/gtest-generate?job_id=${encodeURIComponent(state.jobId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  tc.draft = res.draft || null;
+  return tc.draft;
+}
+
+function renderTestCodeVariableMapRows(map) {
+  const entries = Object.entries(map || {}).sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) {
+    return `<tr><td colspan="3" class="detail gtest-map-empty">Empty — defaults use <code>in.SIG</code> / <code>out.SIG</code>. Click <b>Suggest</b> only when spec name ≠ code symbol.</td></tr>`;
+  }
+  return entries
+    .map(
+      ([spec, code], idx) => `<tr data-var-row="${idx}">
+      <td><input class="gtest-input gtest-map-spec" data-var-idx="${idx}" value="${esc(spec)}" placeholder="SPEC_SIG" /></td>
+      <td><input class="gtest-input gtest-map-code" data-var-idx="${idx}" value="${esc(code)}" placeholder="in.SPEC_SIG" /></td>
+      <td class="gtest-map-del"><button type="button" class="btn secondary btn-inline gtest-map-del-btn" data-var-remove="${idx}" title="Remove">×</button></td>
+    </tr>`
+    )
+    .join("");
+}
+
+function pickPreferredTestCodeRow(rows) {
+  if (!rows?.length) return null;
+  return (
+    rows.find((r) => r.review_status === "approved") ||
+    rows.find((r) => r.review_status === "ready") ||
+    rows[0]
+  );
+}
+
+function renderTestCodeIoStrip(row) {
+  if (!row) return "";
+  const clip = (text, max = 160) => {
+    const flat = String(text || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join(" · ");
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+  };
+  return `<div class="gtest-io-strip" id="testcode-io-strip">
+    <div class="gtest-io-strip__col"><span class="gtest-io-strip__label">Before</span><span>${esc(clip(row.expected_input) || "—")}</span></div>
+    <div class="gtest-io-strip__col"><span class="gtest-io-strip__label">After</span><span>${esc(clip(row.expected_output) || "—")}</span></div>
+  </div>`;
+}
+
+function renderTestCodeSpecPreview(draft) {
+  const preview = draft?.spec_preview || {};
+  if (preview.given_when || preview.then) {
+    return `<pre class="gtest-spec-preview">${esc([preview.given_when, preview.then].filter(Boolean).join("\n\n"))}</pre>`;
+  }
+  if (preview.logic_expression) {
+    return `<pre class="gtest-spec-preview">${esc(preview.logic_expression)}</pre>`;
+  }
+  return `<p class="detail">Select a test case or logic group to preview spec text.</p>`;
+}
+
+function bindTestCodeHandlers(rows, logicItems) {
+  const tc = state.testCode;
+  const statusEl = $("#testcode-status");
+
+  const applyDraftToEditor = (draft, row) => applyTestCodeDraftToUi(draft, row);
+
+  const runGenerate = async () => {
+    if (statusEl) statusEl.textContent = "Generating…";
+    try {
+      const draft = await regenerateGtestDraft();
+      const row = rows.find((r) => r.candidate_id === tc.selectedCandidateId);
+      applyDraftToEditor(draft, row);
+      if (statusEl) {
+        statusEl.textContent = draft?.unmapped_signals?.length
+          ? `${draft.unmapped_signals.length} need custom rename — edit map then Apply.`
+          : "Ready — edit code, then Copy.";
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  };
+
+  $("#testcode-logic-select")?.addEventListener("change", async (ev) => {
+    tc.selectedLogicId = ev.target.value || null;
+    if (!tc.selectedCandidateId) await runGenerate();
+  });
+
+  $("#btn-testcode-regenerate")?.addEventListener("click", runGenerate);
+
+  $("#btn-testcode-suggest-map")?.addEventListener("click", async () => {
+    if (!tc.selectedCandidateId) {
+      if (statusEl) statusEl.textContent = "Select a test case first.";
+      return;
+    }
+    if (statusEl) statusEl.textContent = "Suggesting renames for this case…";
+    try {
+      const res = await api(`/api/review/gtest-suggest-map?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: tc.selectedCandidateId,
+          language: state.exportLanguage || "EN",
+        }),
+      });
+      tc.variableMapDraft = { ...(res.code_variable_map || {}) };
+      const tbody = $("#testcode-var-map tbody");
+      if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(tc.variableMapDraft);
+      bindTestCodeHandlers(rows, logicItems);
+      await runGenerate();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  $("#btn-testcode-add-var")?.addEventListener("click", () => {
+    tc.variableMapDraft = { ...(tc.variableMapDraft || {}), "": "" };
+    const tbody = $("#testcode-var-map tbody");
+    if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(tc.variableMapDraft);
+    bindTestCodeHandlers(rows, logicItems);
+  });
+
+  document.querySelectorAll("[data-var-remove]").forEach((btn) => {
+    btn.onclick = () => {
+      const idx = Number(btn.dataset.varRemove);
+      const specs = Object.keys(tc.variableMapDraft || {});
+      const spec = specs[idx];
+      if (spec != null) {
+        const next = { ...tc.variableMapDraft };
+        delete next[spec];
+        tc.variableMapDraft = next;
+        const tbody = $("#testcode-var-map tbody");
+        if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(next);
+        bindTestCodeHandlers(rows, logicItems);
+      }
+    };
+  });
+
+  const collectVariableMap = () => {
+    const map = {};
+    document.querySelectorAll("#testcode-var-map tbody tr").forEach((tr) => {
+      const spec = tr.querySelector(".gtest-map-spec")?.value?.trim();
+      const code = tr.querySelector(".gtest-map-code")?.value?.trim();
+      if (spec) map[spec] = code || "";
+    });
+    tc.variableMapDraft = map;
+    return map;
+  };
+
+  $("#btn-testcode-apply-map")?.addEventListener("click", async () => {
+    const map = collectVariableMap();
+    if (statusEl) statusEl.textContent = "Applying map…";
+    try {
+      await api(`/api/review/code-variable-map?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code_variable_map: map }),
+      });
+      await runGenerate();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  $("#btn-testcode-save-harness")?.addEventListener("click", async () => {
+    const harness = {
+      fixture_class: $("#testcode-fixture")?.value || "PowerModeTest",
+      inputs_member: $("#testcode-inputs-member")?.value || "in",
+      outputs_member: $("#testcode-outputs-member")?.value || "out",
+      state_member: $("#testcode-state-member")?.value || "state",
+      state_enum: $("#testcode-state-enum")?.value || "PowerModeState",
+      evaluate_fn: $("#testcode-evaluate-fn")?.value || "EvaluatePowerMode",
+      helpers: {
+        advance_time: $("#testcode-advance-fn")?.value || "RunForMs",
+      },
+    };
+    tc.harnessDraft = harness;
+    if (statusEl) statusEl.textContent = "Saving harness config…";
+    try {
+      await api(`/api/review/gtest-harness?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harness }),
+      });
+      if (statusEl) statusEl.textContent = "Harness saved.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  $("#btn-testcode-save-draft")?.addEventListener("click", async () => {
+    const key = tc.selectedCandidateId || tc.selectedLogicId;
+    if (!key) return;
+    const codeEl = $("#testcode-code-editor");
+    const full = codeEl?.value || "";
+    const bodyStart = full.indexOf("TEST_F(");
+    const specBlock =
+      bodyStart > 0 ? full.slice(0, bodyStart).trim() : $("#testcode-spec-comments")?.value || "";
+    const codeBody = bodyStart >= 0 ? full.slice(bodyStart).trim() : full;
+    if (statusEl) statusEl.textContent = "Saving…";
+    try {
+      await api(`/api/review/gtest-draft?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          draft_key: key,
+          source_kind: tc.selectedCandidateId ? "candidate" : "logic",
+          test_name: tc.draft?.test_name || key,
+          spec_comment_block: specBlock,
+          code_body: codeBody,
+          full_snippet: full,
+          engineer_edited: true,
+        }),
+      });
+      if (statusEl) statusEl.textContent = "Saved.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  $("#btn-testcode-copy")?.addEventListener("click", async () => {
+    const text = $("#testcode-code-editor")?.value || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      if (statusEl) statusEl.textContent = "Copied.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  $("#btn-testcode-download")?.addEventListener("click", () => {
+    if (!tc.selectedCandidateId) {
+      if (statusEl) statusEl.textContent = "Select a test case first.";
+      return;
+    }
+    window.location.href = `/api/export/gtest-cpp?job_id=${encodeURIComponent(state.jobId)}&candidate_id=${encodeURIComponent(tc.selectedCandidateId)}`;
+  });
+
+  $("#btn-testcode-download-bundle")?.addEventListener("click", () => {
+    window.location.href = `/api/export/gtest-cpp-bundle?job_id=${encodeURIComponent(state.jobId)}`;
+  });
+
+  $("#btn-testcode-save-library")?.addEventListener("click", async () => {
+    collectVariableMap();
+    if (statusEl) statusEl.textContent = "Saving preset to Library…";
+    try {
+      await api(`/api/library/gtest-preset?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset: null }),
+      });
+      if (statusEl) statusEl.textContent = "Preset saved to Library (.alex/gtest_harness_preset.yaml).";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  document.querySelectorAll(".gtest-map-spec, .gtest-map-code").forEach((input) => {
+    input.addEventListener("input", () => {
+      debounceAutosave("testcode-map", () => collectVariableMap());
+    });
+  });
+}
+
+async function renderTestCode(opts = {}) {
+  if (!state.jobId) {
+    content().innerHTML = renderTestCodeHelpCard(
+      "No review job yet",
+      `<p class="detail">Test Code needs generated test cases from a completed review run.</p>`,
+      "Go to Review",
+      "testcode-goto-review"
+    );
+    bindTestCodeHelp("testcode-goto-review", () => showPage("review"));
+    return;
+  }
+  const hasShell = !!document.querySelector(".alex-testcode-page");
+  if (!hasShell) {
+    state.testCode.loading = true;
+    content().innerHTML = `<p class="detail">Loading Test Code workspace…</p>`;
+  }
+  try {
+    const jobReady = await refreshJobSummary();
+    if (!state.jobId) {
+      content().innerHTML = renderTestCodeHelpCard(
+        "Review job expired",
+        `<p class="detail">The saved job id was cleared because its bundle is missing.</p>`,
+        "Run Review again",
+        "testcode-goto-review"
+      );
+      bindTestCodeHelp("testcode-goto-review", () => showPage("review"));
+      return;
+    }
+    if (!jobReady) {
+      content().innerHTML = renderTestCodeHelpCard(
+        "Review not ready",
+        `<p class="detail">Analysis may still be running or the bundle was removed.</p>`,
+        "Open Review",
+        "testcode-goto-review"
+      );
+      bindTestCodeHelp("testcode-goto-review", () => showPage("review"));
+      return;
+    }
+
+    const ws = await fetchGtestWorkspace();
+    const rows = ws.workbench_rows || [];
+    const logicItems = ws.logic_items || [];
+    if (!rows.length && !logicItems.length) {
+      content().innerHTML = renderTestCodeHelpCard(
+        "No test cases yet",
+        `<p class="detail">This job has no workbook rows or logic groups. Run review on spec files that contain logic tables or test references.</p>`,
+        "Open Final File",
+        "testcode-goto-export"
+      );
+      bindTestCodeHelp("testcode-goto-export", () => showPage("export"));
+      return;
+    }
+    const focusId = state.workbookFocus.testcode;
+    if (focusId && rows.some((r) => r.candidate_id === focusId)) {
+      state.testCode.selectedCandidateId = focusId;
+    } else if (rows.length) {
+      const preferred = pickPreferredTestCodeRow(rows);
+      state.testCode.selectedCandidateId = preferred?.candidate_id || rows[0].candidate_id;
+      state.workbookFocus.testcode = state.testCode.selectedCandidateId;
+    }
+    const activeRow = rows.find((r) => r.candidate_id === state.testCode.selectedCandidateId);
+    if (activeRow?.logic_id) state.testCode.selectedLogicId = activeRow.logic_id;
+    else if (!state.testCode.selectedLogicId && logicItems.length) {
+      state.testCode.selectedLogicId = state.selectedLogicId || logicItems[0].logic_id;
+    }
+
+    state.testCode.rows = rows;
+    state.testCode.logicItems = logicItems;
+    state.testCode.mounted = true;
+
+    let draft = null;
+    const draftKey = state.testCode.selectedCandidateId || state.testCode.selectedLogicId;
+    state.testCode.lastDraftKey = draftKey;
+    const saved = (ws.drafts || {})[draftKey];
+    if (saved?.full_snippet && saved?.engineer_edited) {
+      draft = saved;
+      state.testCode.draft = saved;
+    } else {
+      try {
+        draft = await regenerateGtestDraft();
+      } catch (genErr) {
+        draft = {
+          spec_comment_block: "// Could not auto-generate — use Regenerate from spec after fixing the server.",
+          full_snippet: "",
+          unmapped_signals: [],
+        };
+        const statusEl = $("#testcode-status");
+        if (statusEl) {
+          statusEl.textContent = `Generate failed: ${genErr.message}. Workspace loaded — try Regenerate.`;
+        }
+      }
+    }
+
+    const harness = state.testCode.harnessDraft || ws.harness || {};
+    content().innerHTML = `<section class="alex-page alex-testcode-page">
+      ${renderGuideTestCodeHelp()}
+      <div class="alex-testcode-toolbar card">
+        <div class="alex-testcode-toolbar__pickers">
+          ${renderWorkbookTestcaseBar(rows, "testcode")}
+          <label class="gtest-inline-label">Logic
+            <select id="testcode-logic-select" class="gtest-input gtest-select">
+              <option value="">—</option>
+              ${logicItems
+                .map(
+                  (item) =>
+                    `<option value="${esc(item.logic_id)}" ${item.logic_id === state.testCode.selectedLogicId ? "selected" : ""}>${esc(item.control_name || item.logic_id)}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+        </div>
+        <div class="alex-testcode-toolbar__actions">
+          <button type="button" class="btn" id="btn-testcode-regenerate">Regenerate</button>
+          <button type="button" class="btn secondary" id="btn-testcode-copy">Copy</button>
+          <button type="button" class="btn secondary" id="btn-testcode-download">.cpp</button>
+          <button type="button" class="btn secondary" id="btn-testcode-save-draft" title="Save engineer edits">Save</button>
+        </div>
+      </div>
+      ${renderTestCodeIoStrip(activeRow)}
+      <p class="detail alex-testcode-hint" id="testcode-status">Chọn test case → code sinh từ <b>Before/After</b> ở Final File. Chỉ mở Rename map khi tên spec ≠ code.</p>
+      <div class="alex-testcode-workspace">
+        <aside class="alex-testcode-side card">
+          <details class="alex-testcode-panel">
+            <summary>Rename map <span class="detail">(optional)</span></summary>
+            <div class="alex-testcode-panel__body">
+              <div class="gtest-map-toolbar">
+                <button type="button" class="btn secondary btn-inline" id="btn-testcode-suggest-map">Suggest</button>
+                <button type="button" class="btn secondary btn-inline" id="btn-testcode-add-var">+</button>
+                <button type="button" class="btn secondary btn-inline" id="btn-testcode-apply-map">Apply</button>
+              </div>
+              <div class="gtest-var-map-scroll">
+                <table class="data-grid alex-table gtest-var-map" id="testcode-var-map">
+                  <thead><tr><th>Spec</th><th>Code</th><th></th></tr></thead>
+                  <tbody>${renderTestCodeVariableMapRows(state.testCode.variableMapDraft)}</tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+          <details class="alex-testcode-panel">
+            <summary>Harness defaults</summary>
+            <div class="alex-testcode-panel__body gtest-harness-compact">
+              <label>Fixture<input id="testcode-fixture" class="gtest-input" value="${esc(harness.fixture_class || "PowerModeTest")}" /></label>
+              <label class="gtest-harness-row"><span>Members</span><span class="gtest-harness-inout"><input id="testcode-inputs-member" class="gtest-input" value="${esc(harness.inputs_member || "in")}" title="inputs member" /><span>/</span><input id="testcode-outputs-member" class="gtest-input" value="${esc(harness.outputs_member || "out")}" title="outputs member" /></span></label>
+              <label>Evaluate<input id="testcode-evaluate-fn" class="gtest-input" value="${esc(harness.evaluate_fn || "EvaluatePowerMode")}" /></label>
+              <input type="hidden" id="testcode-state-member" value="${esc(harness.state_member || "state")}" />
+              <input type="hidden" id="testcode-state-enum" value="${esc(harness.state_enum || "PowerModeState")}" />
+              <input type="hidden" id="testcode-advance-fn" value="${esc((harness.helpers || {}).advance_time || "RunForMs")}" />
+              <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-harness">Save harness</button>
+              <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-library" title="Library preset">Library</button>
+            </div>
+          </details>
+        </aside>
+        <div class="alex-testcode-editor card">
+          <div class="alex-testcode-editor__head">
+            <span class="detail">${esc(draft?.test_name || activeRow?.candidate_id || "TEST_F snippet")}</span>
+            ${
+              draft?.spec_preview?.given_when || draft?.spec_preview?.then
+                ? `<span class="detail gtest-spec-inline">${esc(
+                    [draft.spec_preview.given_when, draft.spec_preview.then].filter(Boolean).join(" → ").slice(0, 120)
+                  )}${([draft.spec_preview.given_when, draft.spec_preview.then].join(" ").length > 120 ? "…" : "")}</span>`
+                : ""
+            }
+            ${
+              draft?.unmapped_signals?.length
+                ? `<span class="tag warning">Unmapped: ${draft.unmapped_signals.map((s) => esc(s)).join(", ")}</span>`
+                : ""
+            }
+          </div>
+          <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main" spellcheck="false" placeholder="// Spec comments + TEST_F body…">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
+          <input type="hidden" id="testcode-spec-comments" value="${esc(draft?.spec_comment_block || "")}" />
+        </div>
+      </div>
+    </section>`;
+    bindWorkbookTestcaseBar(rows, "testcode", renderTestCode);
+    bindTestCodeHandlers(rows, logicItems);
+    bindTabHelpLinks();
+  } catch (e) {
+    content().innerHTML = `<div class="card">${explainTestCodeError(e.message)}
+      <div class="review-actions" style="margin-top:1rem">
+        <button class="btn" type="button" id="testcode-goto-review">Go to Review</button>
+      </div></div>`;
+    bindTestCodeHelp("testcode-goto-review", () => showPage("review"));
+  } finally {
+    state.testCode.loading = false;
+  }
 }
 
 async function renderGuide() {
+  const openId = state.guideOpenSection;
+  state.guideOpenSection = null;
   content().innerHTML = `<header class="page-header">
-      <h2>How to review with ALEX</h2>
-      <p class="lead">Work in this order — each step builds on traceable evidence from the spec.</p>
+      <h2>Hướng dẫn sử dụng ALEX</h2>
+      <p class="lead">Bấm từng mục (▼) để mở/đóng hướng dẫn theo chức năng. Mỗi tab workflow cũng có hộp <b>?</b> thu gọn ở đầu trang.</p>
     </header>
     ${renderGuideCard()}`;
-}
-
-function initWelcomeSplash() {
-  const splash = document.getElementById("welcome-splash");
-  if (!splash) return;
-  let hidden = false;
-  const hide = () => {
-    if (hidden) return;
-    hidden = true;
-    splash.classList.add("is-hidden");
-    splash.setAttribute("aria-hidden", "true");
-  };
-  splash.addEventListener("animationend", (event) => {
-    if (event.animationName === "welcomeSplashFade") hide();
-  });
-  window.setTimeout(hide, 3000);
+  bindTabHelpLinks();
+  if (openId) {
+    const el = document.getElementById(openId);
+    if (el?.tagName === "DETAILS") {
+      el.open = true;
+      requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
+  }
 }
 
 async function boot() {
-  initWelcomeSplash();
+  initThemeToggle();
+  const m365ExpiredBtn = $("#btn-m365-expired-signin");
+  if (m365ExpiredBtn) {
+    m365ExpiredBtn.onclick = () => {
+      showPage("review");
+      document.getElementById("ai-signin-details")?.setAttribute("open", "open");
+      signInM365().catch(() => {});
+    };
+  }
+  await ensureAuthenticated();
   initNav();
+  initRouting();
+  const signOutBtn = $("#btn-sign-out");
+  if (signOutBtn) signOutBtn.onclick = () => signOut();
   await loadAppConfig();
   startServiceStatusPolling();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshServiceStatusNow();
   });
-  setJobId(null);
+  state.routingBoot = true;
+  const jobFromUrl = readJobIdFromUrl();
+  let savedJob = null;
+  try {
+    savedJob = sessionStorage.getItem("alex.currentJobId");
+  } catch (_) {
+    savedJob = null;
+  }
+  setJobId(jobFromUrl || savedJob || null);
   updateSelectedCount();
   await refreshJobSummary();
-  showPage("review");
+  const initialPage = pageFromPath(window.location.pathname);
+  showPage(initialPage, { replace: true });
+  state.routingBoot = false;
 }
 
 boot();

@@ -9,6 +9,7 @@ from src.engine.indentation_ast_parser import (
     ast_to_expression,
     paths_to_ast,
 )
+from src.engine.logic_atom import enrich_table_ast_with_atoms
 from src.parsers.two_column_table_parser import FOOTNOTE_RE, ParsedTwoColumnTable
 
 LOGIC_OPS = frozenset({"AND", "OR", "NOT"})
@@ -16,9 +17,15 @@ LOGIC_OPS = frozenset({"AND", "OR", "NOT"})
 
 def parse_table_to_logic_block(table: ParsedTwoColumnTable) -> dict[str, Any]:
     paths = [r.condition_cells or [r.condition_raw] for r in table.rows]
+    branch_groups = [str(r.branch_group or "") for r in table.rows]
     source = {**table.source, "control": table.control_name, "table_id": table.table_id}
-    ast, parser_notes = paths_to_ast(paths, source)
+    ast, parser_notes = paths_to_ast(
+        paths,
+        source,
+        branch_groups=branch_groups if any(branch_groups) else None,
+    )
     expr = ast_to_expression(ast)
+    ast = enrich_table_ast_with_atoms(ast)
     issues: list[dict[str, Any]] = []
 
     for note in parser_notes:
@@ -32,6 +39,13 @@ def parse_table_to_logic_block(table: ParsedTwoColumnTable) -> dict[str, Any]:
         )
 
     parse_status = ast.get("parse_status", "ok" if expr else "failed")
+    from src.engine.condition_tree_builder import aggregate_tree_parse_status
+
+    tree_status = aggregate_tree_parse_status(ast)
+    if tree_status == "partial" and parse_status == "ok":
+        parse_status = "partial"
+    elif tree_status == "failed":
+        parse_status = "failed"
     if ast.get("type") == "empty" or not expr:
         parse_status = "failed"
         issues.append(
@@ -52,9 +66,19 @@ def parse_table_to_logic_block(table: ParsedTwoColumnTable) -> dict[str, Any]:
             }
         )
 
+    outcome = table.source.get("outcome_label") or table.source.get("label")
+    block_name = table.control_name
+    if table.source.get("kind") == "transition_outcome" and outcome:
+        block_name = str(outcome)
+
     return {
         "id": f"TC2_{table.table_id}",
-        "name": table.control_name,
+        "name": block_name,
+        "control_name": table.control_name,
+        "outcome_label": outcome or "",
+        "from_state": table.source.get("from_state", ""),
+        "to_state": table.source.get("to_state", ""),
+        "control_kind": table.rows[0].control_kind if table.rows else "logic_control",
         "raw_expression": expr,
         "tree": ast,
         "block_type": "two_column_control",
@@ -112,6 +136,7 @@ def extract_footnote_refs(tables: list[ParsedTwoColumnTable]) -> list[dict[str, 
                         "ref": key,
                         "footnote_num": fn,
                         "condition_name": cond_name,
+                        "logic_id": f"TC2_{tbl.table_id}",
                         "raw_text": row.condition_raw,
                         "control": row.control,
                         "source": row.source,

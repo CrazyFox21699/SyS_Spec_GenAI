@@ -168,12 +168,18 @@ def get_job_record(job_id: str) -> JobRecord | None:
     )
 
 
-def list_jobs(limit: int = 50) -> list[JobRecord]:
+def list_jobs(limit: int = 50, *, created_by: str | None = None) -> list[JobRecord]:
     conn = _require_conn()
     with _DB_LOCK:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if created_by:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE created_by = ? ORDER BY created_at DESC LIMIT ?",
+                (created_by, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
     return [
         JobRecord(
             job_id=r["job_id"],

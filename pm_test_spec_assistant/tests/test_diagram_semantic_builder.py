@@ -63,3 +63,24 @@ def test_build_diagram_semantic_graph_groups_edges_and_states() -> None:
     shut_off_edge = next(row for row in graph["edges"] if row["to_state"] == "SHUT_OFF")
     assert shut_off_edge["semantic_type"] == "explicit_arrow"
     assert len(shut_off_edge["transition_ids"]) == 2
+
+
+def test_infer_transition_endpoints_from_arrow_when_states_missing() -> None:
+    transitions = [
+        {
+            "id": "TR_OFF_ACC",
+            "from_state": "",
+            "to_state": "",
+            "event": "power_on",
+            "raw_condition": "OFF -> ACCESSORY",
+            "derivation": "excel_transition_interpretation",
+            "source": {"file": "spec.xlsx", "kind": "excel_transition_table", "row": 10},
+        }
+    ]
+
+    graph = build_diagram_semantic_graph(transitions=transitions)
+
+    assert graph["summary"]["states_total"] == 2
+    assert graph["summary"]["edges_total"] == 1
+    states = {row["state"] for row in graph["states"]}
+    assert states == {"OFF", "ACCESSORY"}

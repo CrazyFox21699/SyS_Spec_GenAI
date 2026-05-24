@@ -10,6 +10,9 @@ from src.engine.evidence_registry import build_evidence_registry
 from src.engine.spec_understanding_report import build_spec_understanding_report
 from src.engine.use_case_text import sanitize_candidates_use_cases
 from src.engine.document_graph_builder import build_document_graph
+from src.engine.understanding_loop import rebuild_understanding
+from src.engine.logic_bundle_repair import repair_word_logic_blocks
+from src.utils.yaml_utils import load_yaml
 
 
 def _engineer_definitions(bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -63,19 +66,30 @@ def ensure_spec_understanding(bundle: dict[str, Any]) -> dict[str, Any]:
     return bundle
 
 
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
+
+
+def _load_cfg() -> dict[str, Any]:
+    try:
+        return load_yaml(CONFIG_PATH)
+    except Exception:
+        return {}
+
+
 def ensure_logic_review_items(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Rebuild logic_review_items when missing or from an older schema."""
+    """Rebuild logic_review_items when missing, stale, or after logic repair."""
     items = bundle.get("logic_review_items") or []
     has_engineer_defs = bool(((bundle.get("ai_assists") or {}).get("engineer_definitions") or {}))
     has_supp_defs = bool(((bundle.get("ai_assists") or {}).get("supplemental_definitions") or {}))
+    needs_rebuild = not items or not all(
+        "trace_rows" in item and "tree_model" in item and "review_resolved_terms" in item
+        for item in items
+    )
     if (
-        items
-        and all(
-            "trace_rows" in item and "tree_model" in item and "review_resolved_terms" in item
-            for item in items
-        )
+        not needs_rebuild
         and not has_engineer_defs
         and not has_supp_defs
+        and not bundle.get("_logic_repaired")
     ):
         return bundle
     bundle = dict(bundle)
@@ -127,7 +141,17 @@ def ensure_document_graph(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def ensure_enriched_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
-    bundle = ensure_logic_review_items(bundle)
+    cfg = _load_cfg()
+    bundle, repaired = repair_word_logic_blocks(bundle, cfg=cfg)
+    if repaired:
+        bundle["_logic_repaired"] = True
+    ai = bundle.get("ai_assists") or {}
+    eng = ai.get("engineer_definitions") or {}
+    supp = ai.get("supplemental_definitions") or {}
+    if bundle.get("logic_blocks") and (eng or supp) and not bundle.get("understanding_loop"):
+        rebuild_understanding(bundle, trigger="bundle_load_backfill")
+    else:
+        bundle = ensure_logic_review_items(bundle)
     bundle = sanitize_candidates_use_cases(bundle)
     bundle = ensure_spec_understanding(bundle)
     bundle = ensure_evidence_registry(bundle)

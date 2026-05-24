@@ -14,6 +14,88 @@ from web.m365_brief import build_copilot_brief, parse_knowledge_patches_payload
 GRAPH = "https://graph.microsoft.com/beta"
 
 
+def _m365_user_id_from_context() -> str | None:
+    try:
+        from web.security import get_current_user
+        from web.team_auth import TeamUser
+
+        user = get_current_user()
+        return user.username if isinstance(user, TeamUser) else None
+    except ImportError:
+        return None
+
+# Substrings the Microsoft Graph error message uses when the signed-in
+# account cannot reach the Microsoft.CopilotChat service plan. Matched
+# case-insensitively so we catch both English variants.
+_NOT_ENTITLED_HINTS = (
+    "not supported for msa accounts",
+    "no addressurl for microsoft.copilotchat",
+    "copilotchat is not available",
+    "license is required",
+    "tenant is not licensed",
+    "user does not have a m365 copilot",
+    "user is not licensed for copilot",
+)
+
+
+class M365CopilotNotEntitledError(RuntimeError):
+    """Raised when the M365 Copilot Chat Graph API rejects the caller because of MSA / no Copilot license.
+
+    Carries the raw Graph status + body so callers can surface a precise UI
+    hint, and a stable ``reason`` discriminator (``"msa"`` / ``"no_license"``
+    / ``"unknown"``).
+    """
+
+    def __init__(self, *, status_code: int, raw_body: str, reason: str, message: str = "") -> None:
+        self.status_code = status_code
+        self.raw_body = raw_body
+        self.reason = reason
+        msg = message or _default_not_entitled_message(reason)
+        super().__init__(msg)
+
+
+def _default_not_entitled_message(reason: str) -> str:
+    if reason == "msa":
+        return (
+            "Microsoft 365 Copilot Chat API is not available for personal Microsoft accounts. "
+            "Sign in with a work/school account that has the Microsoft 365 Copilot license "
+            "(see docs/M365_COPILOT_ACTIVATION_GUIDE.md)."
+        )
+    if reason == "no_license":
+        return (
+            "This work/school account does not have a Microsoft 365 Copilot license assigned. "
+            "Ask IT to add the SKU `Microsoft_365_Copilot` "
+            "(see docs/M365_COPILOT_ACTIVATION_GUIDE.md)."
+        )
+    return (
+        "Microsoft 365 Copilot Chat API rejected the request. "
+        "See docs/M365_COPILOT_ACTIVATION_GUIDE.md for the activation steps."
+    )
+
+
+def _classify_not_entitled(status_code: int, body_text: str) -> str | None:
+    """Return ``"msa"`` / ``"no_license"`` / ``"unknown"`` when the response is a Copilot entitlement failure, else None."""
+    lower = (body_text or "").lower()
+    matched = any(hint in lower for hint in _NOT_ENTITLED_HINTS)
+    if status_code == 400 and matched:
+        if "msa account" in lower:
+            return "msa"
+        if "no addressurl for microsoft.copilotchat" in lower:
+            # This message also fires for MSA accounts; treat as MSA unless a
+            # license hint appears explicitly.
+            if "license" in lower:
+                return "no_license"
+            return "msa"
+        return "unknown"
+    if status_code in (401, 402, 403) and (
+        "copilot" in lower or "license" in lower or "subscription" in lower
+    ):
+        return "no_license"
+    if status_code == 404 and "copilot" in lower:
+        return "no_license"
+    return None
+
+
 def _timezone(cfg: dict[str, Any]) -> str:
     assist = cfg.get("assist") if isinstance(cfg.get("assist"), dict) else {}
     m = assist.get("m365") if isinstance(assist.get("m365"), dict) else {}
@@ -28,7 +110,13 @@ def _create_conversation(access_token: str) -> str:
         timeout=60,
     )
     if r.status_code not in (200, 201):
-        raise RuntimeError(f"M365 create conversation failed ({r.status_code}): {r.text[:500]}")
+        body = r.text or ""
+        reason = _classify_not_entitled(r.status_code, body)
+        if reason:
+            raise M365CopilotNotEntitledError(
+                status_code=r.status_code, raw_body=body[:500], reason=reason
+            )
+        raise RuntimeError(f"M365 create conversation failed ({r.status_code}): {body[:500]}")
     data = r.json()
     cid = str(data.get("id") or "")
     if not cid:
@@ -60,7 +148,13 @@ def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str
         timeout=180,
     )
     if r.status_code != 200:
-        raise RuntimeError(f"M365 Copilot chat failed ({r.status_code}): {r.text[:500]}")
+        body = r.text or ""
+        reason = _classify_not_entitled(r.status_code, body)
+        if reason:
+            raise M365CopilotNotEntitledError(
+                status_code=r.status_code, raw_body=body[:500], reason=reason
+            )
+        raise RuntimeError(f"M365 Copilot chat failed ({r.status_code}): {body[:500]}")
     return _extract_assistant_text(r.json())
 
 
@@ -117,7 +211,7 @@ def apply_knowledge_via_m365(
     failure_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Single M365 Copilot call with strict JSON procedure."""
-    token = m365_auth.require_api_token(cfg)
+    token = m365_auth.require_api_token(cfg, user_id=_m365_user_id_from_context())
     brief = build_copilot_brief(bundle, logic_id, engineer_note)
     prompt = _strict_procedure_prompt(brief)
     if failure_context:

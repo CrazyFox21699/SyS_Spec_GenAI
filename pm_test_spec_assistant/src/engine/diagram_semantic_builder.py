@@ -8,6 +8,7 @@ from typing import Any
 
 _STATE_SPLIT_RE = re.compile(r"[^A-Z0-9]+")
 _STATE_LINE_RE = re.compile(r"^(?:STATE|MODE)?\s*:?\s*([A-Z][A-Z0-9 _/-]{1,40})$", re.I)
+_ARROW_RE = re.compile(r"([A-Za-z][A-Za-z0-9 _/-]*?)\s*(?:→|->)\s*([A-Za-z][A-Za-z0-9 _/-]*)", re.I)
 
 
 def _normalize_state_name(value: Any) -> str:
@@ -32,6 +33,19 @@ def _source_label(src: dict[str, Any] | None) -> str:
         f"page {src.get('page')}" if src.get("page") else "",
     ]
     return " / ".join(p for p in parts if p)
+
+
+def _infer_transition_endpoints(transition: dict[str, Any]) -> tuple[str, str]:
+    from_state = _normalize_state_name(transition.get("from_state"))
+    to_state = _normalize_state_name(transition.get("to_state"))
+    if from_state or to_state:
+        return from_state, to_state
+    for field in ("raw_condition", "required_logic", "diagram_link", "event"):
+        text = str(transition.get(field) or "")
+        match = _ARROW_RE.search(text)
+        if match:
+            return _normalize_state_name(match.group(1)), _normalize_state_name(match.group(2))
+    return "", ""
 
 
 def _edge_semantic_type(transition: dict[str, Any]) -> str:
@@ -109,8 +123,7 @@ def build_diagram_semantic_graph(
             row["evidence_refs"].add(evidence)
 
     for transition in transitions:
-        from_state = _normalize_state_name(transition.get("from_state"))
-        to_state = _normalize_state_name(transition.get("to_state"))
+        from_state, to_state = _infer_transition_endpoints(transition)
         event = str(transition.get("event") or "").strip() or "transition"
         if not from_state and not to_state:
             continue

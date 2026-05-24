@@ -1,5 +1,8 @@
-/* ALEX design tokens — dark theme */
-:root {
+/* ALEX design tokens */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
   --font-sans: "Times New Roman", Times, serif;
   --font-mono: "Times New Roman", Times, serif;
 
@@ -33,10 +36,10 @@
   --surface-hover: #1f242c;
   --surface-striped: #141920;
 
-  --border-subtle: #30363d;
-  --border-strong: #3d444d;
+  --border-subtle: #3d444d;
+  --border-strong: #545d68;
   --ui-border-width: 1px;
-  --ui-border-width-strong: 1px;
+  --ui-border-width-strong: 2px;
 
   --accent: #388bfd;
   --accent-hover: #58a6ff;
@@ -54,6 +57,9 @@
   --status-cyan: #39c5cf;
   --status-cyan-bg: rgba(57, 197, 207, 0.12);
 
+  --overlay-backdrop: rgba(15, 23, 42, 0.55);
+  --overlay-shadow: rgba(0, 0, 0, 0.45);
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 12px;
@@ -62,7 +68,6 @@
 
   --sidebar-width: 248px;
 
-  /* Legacy aliases */
   --bg: var(--surface-base);
   --panel: var(--surface-raised);
   --panel-soft: var(--surface-muted);
@@ -78,4 +83,64 @@
   --blue: var(--accent);
   --blue-bg: var(--accent-bg);
   --gray: #6e7681;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: #f4f6f8;
+  --bg-elevated: #ffffff;
+
+  --text-primary: #1f2328;
+  --text-secondary: #57606a;
+  --text-muted: #8c959f;
+
+  --surface-base: var(--bg-base);
+  --surface-raised: #ffffff;
+  --surface-sidebar: #ffffff;
+  --surface-muted: #eef1f4;
+  --surface-input: #ffffff;
+  --surface-hover: #e8ebef;
+  --surface-striped: #f6f8fa;
+
+  --border-subtle: #c4cad0;
+  --border-strong: #959da5;
+
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --accent-bg: rgba(9, 105, 218, 0.12);
+  --accent-bg-subtle: rgba(9, 105, 218, 0.06);
+
+  --status-ok: #1a7f37;
+  --status-ok-bg: rgba(26, 127, 55, 0.1);
+  --status-warn: #9a6700;
+  --status-warn-bg: rgba(154, 103, 0, 0.1);
+  --status-error: #cf222e;
+  --status-error-bg: rgba(207, 34, 46, 0.1);
+  --status-info: #0969da;
+  --status-info-bg: rgba(9, 105, 218, 0.1);
+  --status-cyan: #1b7f83;
+  --status-cyan-bg: rgba(27, 127, 131, 0.1);
+
+  --overlay-backdrop: rgba(31, 35, 40, 0.35);
+  --overlay-shadow: rgba(31, 35, 40, 0.14);
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
+  --shadow-md: 0 4px 16px rgba(31, 35, 40, 0.12);
+
+  --bg: var(--surface-base);
+  --panel: var(--surface-raised);
+  --panel-soft: var(--surface-muted);
+  --border: var(--border-subtle);
+  --text: var(--text-primary);
+  --muted: var(--text-muted);
+  --green: var(--status-ok);
+  --green-bg: var(--status-ok-bg);
+  --yellow: var(--status-warn);
+  --yellow-bg: var(--status-warn-bg);
+  --red: var(--status-error);
+  --red-bg: var(--status-error-bg);
+  --blue: var(--accent);
+  --blue-bg: var(--accent-bg);
+  --gray: #8c959f;
 }

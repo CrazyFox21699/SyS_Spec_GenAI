@@ -51,6 +51,29 @@ def test_apply_given_patches_to_bundle() -> None:
     assert by_sig == {"OK_SHUTOFF": "10", "FORCE_SHUTOFF": "6", "CND_FORCE_ALLOWED": "1"}
 
 
+def test_apply_given_patches_merges_partial_patch() -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC1",
+                "traceability": {"logic_block": "LB1"},
+                "operation": {
+                    "given": [
+                        {"signal": "OK_SHUTOFF", "value": "1", "operator": "=="},
+                        {"signal": "FORCE_SHUTOFF", "value": "0", "operator": "=="},
+                    ]
+                },
+            },
+        ],
+    }
+    patches = [{"candidate_id": "TC1", "given": [{"signal": "OK_SHUTOFF", "value": "3"}]}]
+    apply_given_patches_to_bundle(bundle, "LB1", patches, source="constraint_compiler")
+    given = bundle["test_candidates"][0]["operation"]["given"]
+    by_sig = {g["signal"]: g["value"] for g in given}
+    assert by_sig["OK_SHUTOFF"] == "3"
+    assert by_sig["FORCE_SHUTOFF"] == "0"
+
+
 def test_dedupe_logic_block_without_patches() -> None:
     bundle = {
         "test_candidates": [

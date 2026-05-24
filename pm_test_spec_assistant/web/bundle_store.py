@@ -13,6 +13,7 @@ CANDIDATES_NAME = "candidates.json"
 LOGIC_BLOCKS_NAME = "logic_blocks.json"
 RESOLVED_NAME = "resolved_logic_blocks.json"
 OVERLAYS_NAME = "overlays.json"
+GTEST_NAME = "gtest.json"
 
 
 def bundle_dir(job_output: Path) -> Path:
@@ -62,6 +63,16 @@ def save_split_bundle(job_output: Path, bundle: dict[str, Any]) -> int:
     overlay_data["_version"] = version
     overlay_path.write_text(json.dumps(overlay_data, indent=2), encoding="utf-8")
 
+    gtest = (bundle.get("ai_assists") or {}).get("gtest_bundle") or {}
+    if not gtest:
+        gtest = {
+            "harness": (bundle.get("ai_assists") or {}).get("gtest_harness") or {},
+            "code_variable_map": (bundle.get("ai_assists") or {}).get("code_variable_map") or {},
+            "drafts": (bundle.get("ai_assists") or {}).get("gtest_drafts") or {},
+        }
+    if gtest.get("harness") or gtest.get("code_variable_map") or gtest.get("drafts"):
+        (bdir / GTEST_NAME).write_text(json.dumps(gtest, indent=2), encoding="utf-8")
+
     dump_yaml(job_output / "ui_bundle.yaml", bundle)
     return version
 
@@ -83,6 +94,12 @@ def load_split_bundle(job_output: Path) -> dict[str, Any] | None:
             bundle["resolved_logic_blocks"] = json.loads((bdir / RESOLVED_NAME).read_text(encoding="utf-8"))
         ov = json.loads((bdir / OVERLAYS_NAME).read_text(encoding="utf-8"))
         bundle["ai_assists"] = {"candidate_overlays": {k: v for k, v in ov.items() if not k.startswith("_")}}
+        if (bdir / GTEST_NAME).exists():
+            gtest = json.loads((bdir / GTEST_NAME).read_text(encoding="utf-8"))
+            bundle.setdefault("ai_assists", {})
+            bundle["ai_assists"]["gtest_harness"] = gtest.get("harness") or {}
+            bundle["ai_assists"]["code_variable_map"] = gtest.get("code_variable_map") or {}
+            bundle["ai_assists"]["gtest_drafts"] = gtest.get("drafts") or {}
     except (json.JSONDecodeError, OSError):
         return None
     return bundle

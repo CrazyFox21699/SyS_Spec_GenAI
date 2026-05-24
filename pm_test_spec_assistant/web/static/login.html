@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ALEX — Sign in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/login.css?v=6" />
+</head>
+<body>
+  <div id="welcome-splash" class="welcome-splash welcome-splash--hold" role="status" aria-live="polite" aria-label="Loading ALEX">
+    <div class="welcome-splash__content">
+      <img class="welcome-splash__logo" src="/static/img/toyota-logo-red.png" alt="" aria-hidden="true" />
+      <div class="welcome-splash__title">ALEX</div>
+      <div class="welcome-splash__sub">Spec review assistant</div>
+    </div>
+  </div>
+  <main id="login-shell" class="login-page" aria-label="ALEX sign in" hidden>
+    <div class="login-card">
+      <section class="login-form-panel">
+        <div class="login-brand">
+          <img src="/static/img/toyota-logo-red.png" alt="Toyota" class="login-brand__logo" />
+          <span class="login-brand__wordmark">ALEX</span>
+        </div>
+        <div class="login-avatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="8" r="4"></circle>
+            <path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"></path>
+          </svg>
+        </div>
+        <h1 class="login-title">Sign in</h1>
+        <p class="login-subtitle">Use your team account to access ALEX.</p>
+        <form id="login-form" class="login-form" aria-label="Login form" novalidate>
+          <label class="login-field">
+            <span class="login-field__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"></circle><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"></path></svg>
+            </span>
+            <input id="login-username" name="username" type="text" autocomplete="username" placeholder="Username" required />
+          </label>
+          <label class="login-field">
+            <span class="login-field__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 1 1 8 0v3"></path></svg>
+            </span>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" required />
+          </label>
+          <p id="login-error" class="login-error" role="alert" hidden></p>
+          <button type="submit" class="login-submit" id="login-submit">LOGIN</button>
+          <div class="login-footer">
+            <label class="login-remember">
+              <input id="login-remember" type="checkbox" checked />
+              <span>Remember me</span>
+            </label>
+            <a class="login-forgot" href="#" id="login-forgot">Forgot password?</a>
+          </div>
+        </form>
+      </section>
+      <section class="login-hero" aria-hidden="true">
+        <img src="/static/img/login-hero-car.webp" alt="" class="login-hero__image" />
+        <div class="login-hero__overlay"></div>
+        <div class="login-hero__copy">
+          <h2>Welcome.</h2>
+          <p>ALEX — AI-assisted specification review for engineering teams</p>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/static/js/login.js?v=5"></script>
+</body>
+</html>

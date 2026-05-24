@@ -35,6 +35,8 @@ def test_gpt_gen_logic_merged_cell_evidence() -> None:
     root = Path(__file__).resolve().parents[2]
     path = root / "pm_sample_inputs" / "input" / "GPT_GenLogic.xlsx"
     if not path.exists():
+        path = root / "pm_sample_inputs" / "GPT_GenLogic.xlsx"
+    if not path.exists():
         pytest.skip("GPT_GenLogic.xlsx not in sample_inputs")
 
     ex = extract_excel_workbook(path, [r"ADM\d+_[A-Z0-9_]+"])

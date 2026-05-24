@@ -55,6 +55,17 @@ def _leaf_atoms_under(node: dict[str, Any]) -> list[dict[str, Any]]:
             if negated:
                 atom["negated"] = not atom.get("negated", False)
             atoms.append(atom)
+        elif t in ("boolean_predicate", "signal_condition", "timing_condition"):
+            atom = {
+                "signal": n.get("signal") or n.get("name"),
+                "value": n.get("value"),
+                "operator": n.get("operator", "=="),
+                "type": t,
+            }
+            if negated:
+                atom["negated"] = True
+            if atom.get("signal"):
+                atoms.append(atom)
         elif t == "NOT":
             for ch in n.get("children") or []:
                 if isinstance(ch, dict):

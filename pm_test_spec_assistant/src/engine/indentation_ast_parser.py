@@ -1,8 +1,17 @@
-"""Generic indentation / multi-column path → AST (deterministic, no sample-specific names)."""
+"""Generic indentation / multi-column path → AST (deterministic, no sample-specific names).
+
+Algorithm (spec-format agnostic)
+--------------------------------
+1. Each table row becomes a *path* — one token per nested Condition column (depth = column index).
+2. Merged cells repeat the same gate token on every row at that column; that token is a *scope*
+   marker, not a per-row nested gate. We detect scope when column 0 is the same LOGIC_OP on all rows.
+3. After stripping scope, sibling rows are grouped: consecutive rows sharing the same inner gate
+   prefix (e.g. AND) become one branch; a lone leaf row becomes a direct branch.
+4. Single-path remainder uses column-depth parsing (token index = nesting level).
+"""
 
 from __future__ import annotations
 
-import re
 import uuid
 from typing import Any
 
@@ -19,6 +28,10 @@ def _reason(text: str) -> dict[str, str]:
     return {"parser_reason": text}
 
 
+def _is_logic_token(token: str) -> bool:
+    return str(token or "").strip().upper() in LOGIC_OPS
+
+
 def _split_not(token: str) -> tuple[str, str]:
     t = token.strip()
     if t.upper().startswith("NOT "):
@@ -26,12 +39,12 @@ def _split_not(token: str) -> tuple[str, str]:
     return "", t
 
 
-def _make_op(op: str, raw: str, source: dict[str, Any], reason: str) -> dict[str, Any]:
+def _make_op(op: str, source: dict[str, Any], reason: str) -> dict[str, Any]:
     return {
         "id": _new_id("op"),
         "type": op.upper(),
         "children": [],
-        "raw_text": raw,
+        "raw_text": op.upper(),
         "source": source,
         "confidence": "high",
         "review_status": "parsed",
@@ -93,17 +106,21 @@ def _empty(source: dict[str, Any], status: str = "failed", error: str = "") -> d
     }
 
 
+def _clean_paths(paths: list[list[str]]) -> list[list[str]]:
+    return [[p.strip() for p in path if p and p.strip()] for path in paths if path]
+
+
 def normalize_control_paths(
     paths: list[list[str]],
 ) -> tuple[list[list[str]], list[dict[str, Any]]]:
     """Prepend root operator when continuation rows omit it (merged-cell pattern)."""
     notes: list[dict[str, Any]] = []
-    cleaned = [[p.strip() for p in path if p and p.strip()] for path in paths if path]
+    cleaned = _clean_paths(paths)
     if not cleaned:
         return [], notes
 
     root_op: str | None = None
-    if cleaned[0] and cleaned[0][0].upper() in LOGIC_OPS:
+    if cleaned[0] and _is_logic_token(cleaned[0][0]):
         root_op = cleaned[0][0].upper()
 
     out: list[list[str]] = []
@@ -112,7 +129,7 @@ def normalize_control_paths(
             i > 0
             and root_op
             and path
-            and path[0].upper() in LOGIC_OPS
+            and _is_logic_token(path[0])
             and path[0].upper() != root_op
         ):
             out.append([root_op] + path)
@@ -135,108 +152,220 @@ def normalize_control_paths(
     return out, notes
 
 
-def _is_or_and_row(path: list[str]) -> bool:
-    return len(path) >= 3 and path[0].upper() == "OR" and path[1].upper() == "AND"
+def infer_merged_scope_operator(
+    paths: list[list[str]],
+) -> tuple[str | None, list[list[str]], list[dict[str, Any]]]:
+    """
+    When every row shares the same gate at column 0, treat it as a merged-cell scope prefix.
+    Returns (scope_op, relative_paths_without_prefix, notes).
+    """
+    notes: list[dict[str, Any]] = []
+    if not paths or not all(paths):
+        return None, paths, notes
+
+    first_tokens = [path[0].upper() for path in paths if path]
+    if not first_tokens or not all(_is_logic_token(t) for t in first_tokens):
+        return None, paths, notes
+    if len(set(first_tokens)) != 1:
+        return None, paths, notes
+
+    scope_op = first_tokens[0]
+    relative = [path[1:] for path in paths]
+    notes.append(
+        {
+            "type": "merged_scope_inferred",
+            "severity": "info",
+            "message": (
+                f"All rows repeat `{scope_op}` in the first condition column; "
+                "interpreted as merged-cell scope, not per-row nesting."
+            ),
+            "parser_reason": (
+                f"Column 0 is `{scope_op}` on every row — typical Word/Excel merged gate cell."
+            ),
+        }
+    )
+    return scope_op, relative, notes
 
 
-def _path_to_subtree(path: list[str], source: dict[str, Any]) -> dict[str, Any]:
-    """Convert one row path (after optional leading AND stripped) to a subtree."""
-    if not path:
-        return _empty(source)
-    if len(path) == 1:
-        return _make_condition(path[0], source, "Single-token path interpreted as condition reference.")
-    tok = path[0].upper()
-    if tok in LOGIC_OPS:
-        child = _path_to_subtree(path[1:], source)
-        node = _make_op(
-            tok,
-            path[0],
-            source,
-            f"Detected `{tok}` gate from path token at nesting depth.",
-        )
-        if child.get("type") != "empty":
-            node["children"] = [child]
-        return node
-    return _make_condition(path[0], source, "Leaf condition token in row path.")
-
-
-def _build_or_and_pair_rows(paths: list[list[str]], source: dict[str, Any]) -> dict[str, Any]:
-    """Rows shaped OR → AND → leaf: consecutive pairs become AND branches under OR."""
-    and_branches: list[dict[str, Any]] = []
+def _group_sibling_branch_paths(relative_paths: list[list[str]]) -> list[list[list[str]]]:
+    """
+    Partition scope-relative paths into sibling branch groups.
+    Consecutive rows with the same leading inner gate belong to one group.
+    """
+    groups: list[list[list[str]]] = []
     i = 0
-    while i < len(paths):
-        if (
-            _is_or_and_row(paths[i])
-            and i + 1 < len(paths)
-            and _is_or_and_row(paths[i + 1])
-            and paths[i][:2] == paths[i + 1][:2]
-        ):
-            leaves = [paths[i][2], paths[i + 1][2]]
-            and_branches.append(
-                {
-                    "id": _new_id("and"),
-                    "type": "AND",
-                    "children": [
-                        _make_condition(
-                            lv,
-                            source,
-                            "Grouped pair of consecutive OR/AND rows into one AND branch.",
-                        )
-                        for lv in leaves
-                    ],
-                    "source": source,
-                    "confidence": "high",
-                    "review_status": "parsed",
-                    "issue_status": "ok",
-                    **_reason(
-                        "Two consecutive rows share OR/AND prefix; combined leaves under AND."
-                    ),
-                }
-            )
-            i += 2
-        elif _is_or_and_row(paths[i]):
-            and_branches.append(
-                {
-                    "id": _new_id("and"),
-                    "type": "AND",
-                    "children": [
-                        _make_condition(
-                            paths[i][2],
-                            source,
-                            "Single OR/AND row without pair — AND branch with one leaf.",
-                        )
-                    ],
-                    "source": source,
-                    "confidence": "medium",
-                    "review_status": "pending",
-                    "issue_status": "review_required",
-                    **_reason("Incomplete OR/AND row pair — review required."),
-                }
-            )
+    while i < len(relative_paths):
+        path = relative_paths[i]
+        if not path:
             i += 1
+            continue
+        if _is_logic_token(path[0]):
+            inner = path[0].upper()
+            batch: list[list[str]] = []
+            while i < len(relative_paths):
+                candidate = relative_paths[i]
+                if candidate and candidate[0].upper() == inner:
+                    batch.append(candidate)
+                    i += 1
+                else:
+                    break
+            groups.append(batch)
         else:
-            and_branches.append(_path_to_subtree(paths[i], source))
+            groups.append([path])
             i += 1
-    if len(and_branches) == 1:
-        return and_branches[0]
-    return {
-        "id": _new_id("or"),
-        "type": "OR",
-        "children": and_branches,
-        "source": source,
-        "confidence": "high",
-        "review_status": "parsed",
-        "issue_status": "ok",
-        **_reason(
-            "Multiple OR/AND row branches detected; combined as OR of AND groups."
+    return groups
+
+
+def _path_to_ast(path: list[str], source: dict[str, Any]) -> dict[str, Any]:
+    """Parse one path using column index as nesting depth."""
+    cleaned = [p.strip() for p in path if p and p.strip()]
+    if not cleaned:
+        return _empty(source)
+    if len(cleaned) == 1:
+        return _make_condition(cleaned[0], source, "Single-token path interpreted as condition reference.")
+    return _column_path_to_ast(cleaned, source, 0)
+
+
+def _is_single_leaf_inner_row(path: list[str], inner_op: str) -> bool:
+    return len(path) == 2 and path[0].upper() == inner_op and not _is_logic_token(path[1])
+
+
+def _split_inner_batches_by_branch_group(
+    batch: list[list[str]],
+    branch_groups: list[str] | None,
+    batch_start: int = 0,
+) -> list[list[list[str]]]:
+    """Split a consecutive inner-gate batch using merge-derived branch_group keys."""
+    if not batch or not branch_groups:
+        return [batch]
+    groups: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    current_key: str | None = None
+    for i, path in enumerate(batch):
+        key = branch_groups[batch_start + i] if batch_start + i < len(branch_groups) else ""
+        if current and key != current_key:
+            groups.append(current)
+            current = []
+        current.append(path)
+        current_key = key
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _split_inner_batches_for_scope(
+    scope_op: str,
+    inner_op: str,
+    batch: list[list[str]],
+    branch_groups: list[str] | None = None,
+    batch_start: int = 0,
+) -> list[list[list[str]]]:
+    """
+    Under disjunctive (OR) scope, group inner-gate rows by merge branch_group when available;
+    otherwise fall back to pairing consecutive single-leaf AND rows.
+    """
+    if branch_groups:
+        split = _split_inner_batches_by_branch_group(batch, branch_groups, batch_start)
+        if len(split) > 1 or (split and len(split[0]) != len(batch)):
+            return split
+    if scope_op != "OR" or inner_op != "AND":
+        return [batch]
+    if not batch or not all(_is_single_leaf_inner_row(p, inner_op) for p in batch):
+        return [batch]
+    pairs: list[list[list[str]]] = []
+    i = 0
+    while i < len(batch):
+        if i + 1 < len(batch):
+            pairs.append([batch[i], batch[i + 1]])
+            i += 2
+        else:
+            pairs.append([batch[i]])
+            i += 1
+    return pairs
+
+
+def _build_inner_gate_group(
+    inner_op: str,
+    group_paths: list[list[str]],
+    source: dict[str, Any],
+    *,
+    scope_op: str | None = None,
+) -> dict[str, Any]:
+    children: list[dict[str, Any]] = []
+    for path in group_paths:
+        rest = path[1:] if path and path[0].upper() == inner_op else path
+        child = _path_to_ast(rest, source)
+        if child.get("type") != "empty":
+            children.append(child)
+    if not children:
+        return _empty(source, error=f"empty_{inner_op.lower()}_group")
+    if len(children) == 1:
+        return children[0]
+    node = _make_op(
+        inner_op,
+        source,
+        (
+            f"Grouped {len(children)} consecutive rows sharing `{inner_op}` "
+            "after merged-cell scope stripping."
         ),
-    }
+    )
+    node["children"] = children
+    return node
+
+
+def _build_scope_tree(
+    scope_op: str,
+    relative_paths: list[list[str]],
+    source: dict[str, Any],
+    *,
+    branch_groups: list[str] | None = None,
+    scope_stripped: int = 1,
+) -> dict[str, Any]:
+    branch_group_paths = _group_sibling_branch_paths(relative_paths)
+    children: list[dict[str, Any]] = []
+    row_cursor = 0
+    for group in branch_group_paths:
+        if not group:
+            continue
+        group_start = row_cursor
+        row_cursor += len(group)
+        group_branch = branch_groups[group_start:row_cursor] if branch_groups else None
+        if len(group) == 1:
+            children.append(_path_to_ast(group[0], source))
+            continue
+        inner_op = group[0][0].upper()
+        for sub_batch in _split_inner_batches_for_scope(
+            scope_op,
+            inner_op,
+            group,
+            branch_groups=branch_groups,
+            batch_start=group_start,
+        ):
+            if len(sub_batch) == 1 and not _is_logic_token(sub_batch[0][0]):
+                children.append(_path_to_ast(sub_batch[0], source))
+            else:
+                children.append(_build_inner_gate_group(inner_op, sub_batch, source, scope_op=scope_op))
+
+    children = [c for c in children if c.get("type") != "empty"]
+    if not children:
+        return _empty(source, error="empty_scope")
+    if len(children) == 1:
+        return children[0]
+
+    node = _make_op(
+        scope_op,
+        source,
+        (
+            f"Merged-cell `{scope_op}` scope groups {len(children)} sibling branches "
+            "from multi-row condition table."
+        ),
+    )
+    node["children"] = children
+    return node
 
 
 def _column_path_to_ast(cells: list[str], source: dict[str, Any], depth: int = 0) -> dict[str, Any]:
-    """
-    Parse one table row where list index = nesting depth (multi-column Word/Excel layout).
-    """
+    """Parse one table row where list index = nesting depth (multi-column Word/Excel layout)."""
     while depth < len(cells) and not (cells[depth] or "").strip():
         depth += 1
     if depth >= len(cells):
@@ -248,17 +377,15 @@ def _column_path_to_ast(cells: list[str], source: dict[str, Any], depth: int = 0
     if upper in LOGIC_OPS:
         node = _make_op(
             upper,
-            tok,
             source,
             f"Detected `{upper}` gate at column depth {depth} (nesting level {depth}).",
         )
-        # Pattern: OR | condition | AND | …  → OR(condition, AND(…))
         if (
             depth + 1 < len(cells)
             and (cells[depth + 1] or "").strip()
-            and cells[depth + 1].strip().upper() not in LOGIC_OPS
+            and not _is_logic_token(cells[depth + 1])
             and depth + 2 < len(cells)
-            and (cells[depth + 2] or "").strip().upper() in LOGIC_OPS
+            and _is_logic_token(cells[depth + 2])
         ):
             cond = _make_condition(
                 cells[depth + 1].strip(),
@@ -279,88 +406,41 @@ def _column_path_to_ast(cells: list[str], source: dict[str, Any], depth: int = 0
         source,
         f"Condition reference at column depth {depth}.",
     )
-    if depth + 1 < len(cells) and (cells[depth + 1] or "").strip().upper() in LOGIC_OPS:
+    if depth + 1 < len(cells) and _is_logic_token(cells[depth + 1]):
         rest = _column_path_to_ast(cells, source, depth + 1)
-        return {
-            "id": _new_id("and"),
-            "type": "AND",
-            "children": [c for c in [cond, rest] if c.get("type") != "empty"],
-            "source": source,
-            "confidence": "medium",
-            "review_status": "pending",
-            "issue_status": "ok",
-            **_reason(
-                "Condition followed by operator at deeper column; grouped under implicit AND."
-            ),
-        }
+        and_node = _make_op(
+            "AND",
+            source,
+            "Condition followed by operator at deeper column; grouped under implicit AND.",
+        )
+        and_node["children"] = [c for c in [cond, rest] if c.get("type") != "empty"]
+        return and_node
     return cond
 
 
-def paths_to_ast(paths: list[list[str]], source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def paths_to_ast(
+    paths: list[list[str]],
+    source: dict[str, Any],
+    *,
+    branch_groups: list[str] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Build AST from row paths. Fails closed when structure cannot be determined safely."""
     normalized, notes = normalize_control_paths(paths)
     if not normalized:
         return _empty(source, error="no_paths"), notes
 
-    # Mode A: all rows are OR → AND → leaf (pair consecutive rows)
-    if all(_is_or_and_row(p) for p in normalized):
-        ast = _build_or_and_pair_rows(normalized, source)
-        ast["parse_status"] = "ok"
+    scope_op, relative, scope_notes = infer_merged_scope_operator(normalized)
+    notes.extend(scope_notes)
+    rel_branch = branch_groups
+    if scope_op and branch_groups and len(branch_groups) == len(normalized):
+        rel_branch = branch_groups
+    if scope_op:
+        ast = _build_scope_tree(scope_op, relative, source, branch_groups=rel_branch)
+        ast["parse_status"] = "ok" if ast.get("type") != "empty" else "failed"
         return ast, notes
 
-    # Mode B: all rows start with AND — multi-column depth parsing per row
-    if all(p and p[0].upper() == "AND" for p in normalized):
-        children = [
-            _column_path_to_ast(p[1:], source, 0)
-            for p in normalized
-        ]
-        children = [c for c in children if c.get("type") != "empty"]
-        if not children:
-            return _empty(source, error="no_and_children"), notes
-        if len(children) > 1:
-            or_branches = [c for c in children if c.get("type") == "OR"]
-            other = [c for c in children if c.get("type") != "OR"]
-            if len(or_branches) >= 2:
-                merged_children: list[dict[str, Any]] = []
-                for ob in or_branches:
-                    merged_children.extend(ob.get("children") or [ob])
-                children = other + [
-                    {
-                        "id": _new_id("or"),
-                        "type": "OR",
-                        "children": merged_children,
-                        "source": source,
-                        "confidence": "high",
-                        "review_status": "parsed",
-                        "issue_status": "ok",
-                        **_reason(
-                            "Multiple table rows share OR at the same nesting depth; "
-                            "merged into one OR group under AND."
-                        ),
-                    }
-                ]
-
-        if len(children) == 1:
-            ast = children[0]
-        else:
-            ast = {
-                "id": _new_id("and"),
-                "type": "AND",
-                "children": children,
-                "source": source,
-                "confidence": "high",
-                "review_status": "parsed",
-                "issue_status": "ok",
-                **_reason(
-                    "All rows begin with AND; each row parsed by column depth and combined under AND."
-                ),
-            }
-        ast["parse_status"] = "ok"
-        return ast, notes
-
-    # Mode C: single path only
     if len(normalized) == 1:
-        ast = _path_to_subtree(normalized[0], source)
+        ast = _path_to_ast(normalized[0], source)
         ast["parse_status"] = "ok" if ast.get("type") != "empty" else "failed"
         return ast, notes
 
@@ -370,7 +450,7 @@ def paths_to_ast(paths: list[list[str]], source: dict[str, Any]) -> tuple[dict[s
             "severity": "error",
             "message": "Mixed row path shapes — cannot build logic tree without engineer review.",
             "parser_reason": (
-                "Row paths use incompatible nesting patterns (not all OR/AND rows and not all AND-root rows)."
+                "Rows do not share a merged scope operator in column 0 and are not a single path."
             ),
         }
     )

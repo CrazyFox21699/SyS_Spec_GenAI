@@ -1,9 +1,9 @@
 # ALEX Upgrade Plan: M365 Copilot Co-Reasoning for Complex Customer Logic
 
-**Status:** Build in progress (v0.3 → v0.5) · Library (Tab 4) reworked into a Polarion-style focus + spokes canvas 2026-05-20  
+**Status:** Build in progress (v0.3 → v0.5) · Library (Tab 4) reworked into a Polarion-style focus + spokes canvas 2026-05-20 · MSA / no-Copilot-license fallback shipped 2026-05-21 (see `docs/M365_COPILOT_ACTIVATION_GUIDE.md`)  
 **Audience:** Product / engineering owners, automotive test-spec engineers  
 **Language:** English  
-**Last updated:** 2026-05-20
+**Last updated:** 2026-05-21
 
 ---
 
@@ -621,8 +621,9 @@ Extend `docs/COPILOT_PROMPTS.md` with **issue-type templates**:
 | `docs/DESIGN_PLAN_COPILOT_LOOP.md` | Original Copilot-in-loop UX (clipboard era) |
 | `docs/COPILOT_PROMPTS.md` | Prompt pack templates |
 | `docs/TEST_SPEC_IO_FORMAT.md` | Workbook column conventions |
-| `web/m365_auth.py` | Device code login implementation |
-| `web/m365_copilot.py` | Graph Copilot chat + knowledge apply |
+| `docs/M365_COPILOT_ACTIVATION_GUIDE.md` | IT activation steps for the `Microsoft 365 Copilot` SKU + engineer self-check + fallback options while waiting for the license |
+| `web/m365_auth.py` | Device code login + entitlement detection (decodes id_token.tid, probes `/me/licenseDetails`) |
+| `web/m365_copilot.py` | Graph Copilot chat + knowledge apply (raises typed `M365CopilotNotEntitledError`) |
 | `web/knowledge_validation.py` | Post-Copilot validation gate |
 | `README.md` | Current product scope and limitations |
 
@@ -636,3 +637,4 @@ Extend `docs/COPILOT_PROMPTS.md` with **issue-type templates**:
 | 2026-05-19 | No zero-Client-ID M365 login for third-party apps; optimize Tier A/B instead |
 | 2026-05-19 | Copilot never auto-writes final AST; hypotheses + overlays only |
 | 2026-05-19 | Ollama remains translation/experiment path, not complex logic reasoning |
+| 2026-05-21 | MSA / no-Copilot-license accounts are auto-detected at login and dropped from the `auto` provider chain. Resolve flow falls back to GitHub Copilot CLI → Ollama → manual **Paste from Copilot Web** modal. IT activation steps live in `docs/M365_COPILOT_ACTIVATION_GUIDE.md`. |

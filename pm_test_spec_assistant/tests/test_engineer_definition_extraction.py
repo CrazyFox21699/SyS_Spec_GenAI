@@ -28,7 +28,14 @@ def test_all_missing_shorthand() -> None:
     assert "CND_NORMAL_ROUTE" not in rows
 
 
-def test_bulk_remaining_missing_applies_to_other_terms() -> None:
+def test_range_with_focus_term() -> None:
+    rows = _extract_engineer_definitions(">= 1, < 5", "TC2_T1_01", "HUY")
+    assert rows["HUY"]["definition"] == "range inclusive 1–5"
+
+
+def test_equality_with_state_label() -> None:
+    rows = _extract_engineer_definitions("HUY = 3 (RUN)", "TC2_T1_01", "HUY")
+    assert rows["HUY"]["definition"] in ("= 3 (RUN)", "3 (RUN)")
     note = "CND_NORMAL_ROUTE=1, all remaining missing definitions are equal to 100"
     missing = ["CND_BACKUP_ROUTE", "CND_BACKUP_TIMER_OK", "POWER=OFF", "CND_OUTPUT_READY"]
     rows = _extract_engineer_definitions(

@@ -11,7 +11,9 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from src.engine.concrete_test_values import (
+    dedupe_expected_input_text,
     definition_to_given_line,
+    expand_definition_to_given_lines,
     materialize_expected_input,
     materialize_expected_output,
 )
@@ -278,7 +280,9 @@ def _resolved_definition_lines(
             if kind == "engineer" and len(defn) > 48 and " " in defn and not defn.strip().startswith("="):
                 continue
             line = definition_to_given_line(term, defn)
-            if line:
+            if not line and re.search(r"\band\b", defn, re.I):
+                lines.extend(expand_definition_to_given_lines(defn))
+            elif line:
                 lines.append(line)
     return lines
 
@@ -330,13 +334,13 @@ def _candidate_row(
     )
     resolved_lines = _resolved_definition_lines(candidate, binding, definition_lookup)
     if resolved_lines:
-        resolved_block = "\n".join(resolved_lines[:12])
         if expected_input:
             for line in resolved_lines:
                 if line not in expected_input:
                     expected_input = expected_input + "\n" + line
         else:
-            expected_input = resolved_block
+            expected_input = "\n".join(resolved_lines[:12])
+    expected_input = dedupe_expected_input_text(expected_input)
     expected_output = _lang_text(overlay, "expected_output", language) or materialize_expected_output(
         candidate, binding
     )

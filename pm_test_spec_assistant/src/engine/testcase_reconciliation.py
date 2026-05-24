@@ -48,7 +48,7 @@ def build_reconciliation_plan(
         elif cid and cid in by_id:
             action = "update_existing"
             seen.add(cid)
-        elif not cid and given:
+        elif given and (not cid or cid not in by_id):
             action = "add_new"
         else:
             action = "needs_review"

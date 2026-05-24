@@ -29,7 +29,8 @@ from src.engine.logic_review_builder import build_logic_review_items
 from src.engine.evidence_registry import build_evidence_registry
 from src.engine.source_index import build_source_index
 from src.engine.term_role_classifier import build_term_role_index
-from src.utils.feature_flags import feature_enabled
+from src.engine.memory_semantics_parser import enrich_condition_definitions
+from src.engine.timer_qualifier_parser import enrich_logic_blocks
 from src.engine.spec_understanding_report import build_spec_understanding_report
 from src.engine.logic_atom import (
     atom_signal_names,
@@ -45,9 +46,14 @@ from src.parsers.code_parser import extract_code_reference
 from src.parsers.excel_parser import extract_excel_workbook
 from src.parsers.image_parser import extract_image_metadata
 from src.parsers.pdf_parser import extract_pdf_document
+from src.parsers.word_parser import extract_word_document, peek_word_text
 from src.parsers.two_column_table_parser import FOOTNOTE_RE
-from src.parsers.word_parser import extract_word_document, extract_word_signals, peek_word_text
+from src.engine.lifecycle_transition_builder import lifecycle_to_transitions
+from src.engine.transition_logic_linker import infer_transition_logic_links
+from src.engine.diagram_edge_classifier import enrich_transition_with_edge_role
+from src.parsers.signal_table_parser import signal_names_for_definitions
 from src.utils.file_filters import is_ingestible_file, skip_reason
+from src.utils.feature_flags import feature_enabled
 from src.utils.io_utils import backup_output_files
 from src.utils.text_utils import contains_japanese
 from src.utils.yaml_utils import dump_yaml, load_yaml
@@ -176,11 +182,15 @@ def run_analyze(
     footnote_definitions: list[dict[str, Any]] = []
     code_definitions: list[dict[str, Any]] = []
     state_rules: list[dict[str, Any]] = []
+    state_machines: list[dict[str, Any]] = []
     diagram_meta: list[dict[str, Any]] = []
     code_refs: list[dict[str, Any]] = []
     japanese_blocks: list[dict[str, Any]] = []
     ingest_skipped: list[dict[str, Any]] = []
     merged_cell_evidence: list[dict[str, Any]] = []
+    review_annotations: list[dict[str, Any]] = []
+    retention_rules: list[dict[str, Any]] = []
+    spec_profiles: list[dict[str, Any]] = []
 
     for o in classified_objs:
         p = Path(o.file)
@@ -192,7 +202,7 @@ def run_analyze(
             continue
         role = o.role
         if p.suffix.lower() == ".docx":
-            wd = extract_word_document(p)
+            wd = extract_word_document(p, cfg=cfg)
             if wd.get("error"):
                 ingest_skipped.append({"file": str(p), "reason": wd.get("message", "invalid docx")})
                 continue
@@ -206,7 +216,13 @@ def run_analyze(
             footnote_definitions.extend(wd.get("footnote_definitions", []))
             code_definitions.extend(wd.get("code_definitions", []))
             state_rules.extend(wd.get("state_rules", []))
+            state_machines.extend(wd.get("state_machines", []))
             diagram_meta.extend(wd.get("embedded_image_analysis", []))
+            merged_cell_evidence.extend(wd.get("merged_cell_evidence", []))
+            retention_rules.extend(wd.get("retention_rules", []))
+            profile = wd.get("spec_profile")
+            if isinstance(profile, dict) and profile:
+                spec_profiles.append(profile)
         elif role == "system_spec" and p.suffix.lower() == ".pdf":
             blob = extract_pdf_document(p)
             text = "\n".join(pg["text"] for pg in blob.get("pages", []))
@@ -217,13 +233,19 @@ def run_analyze(
             code_definitions.extend(blob.get("code_definitions", []))
             diagram_meta.extend(blob.get("image_analyses", []))
         elif p.suffix.lower() in {".xlsx", ".xlsm"}:
-            ex = extract_excel_workbook(p, state_patterns)
+            ex = extract_excel_workbook(
+                p,
+                state_patterns,
+                include_comments=feature_enabled(cfg, "excel_annotations", default=True),
+            )
             logic_blocks.extend(ex.get("logic_blocks", []))
+            signals.extend(ex.get("signals") or [])
             condition_definitions.extend(ex.get("condition_definitions", []))
             transitions.extend(ex.get("transition_candidates", []))
             state_rules.extend(ex.get("state_rules", []))
             diagram_meta.extend(ex.get("diagram_meta", []))
             merged_cell_evidence.extend(ex.get("merged_cell_evidence", []))
+            review_annotations.extend(ex.get("review_annotations", []))
         elif role == "diagram":
             if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}:
                 img_meta = extract_image_metadata(p)
@@ -246,6 +268,12 @@ def run_analyze(
             code_refs.append(extract_code_reference(p))
 
     signals = _dedupe_signals(signals)
+    condition_definitions.extend(signal_names_for_definitions(signals))
+    lifecycle_trans = lifecycle_to_transitions(state_machines)
+    if lifecycle_trans:
+        transitions.extend(lifecycle_trans)
+    transitions = [enrich_transition_with_edge_role(dict(t)) for t in transitions]
+    transitions = infer_transition_logic_links(transitions, logic_blocks)
     _progress(progress, "Extracting states and transitions", 30)
 
     # Collect Japanese snippets from Word/Excel peeks
@@ -316,6 +344,10 @@ def run_analyze(
 
     _progress(progress, "Reconciling logic tables and formulas", 42)
     logic_blocks, logic_reconcile_issues = reconcile_logic_blocks(logic_blocks)
+    if feature_enabled(cfg, "formal_logic_ir_v2", default=True):
+        enrich_logic_blocks(logic_blocks, condition_definitions)
+    if feature_enabled(cfg, "memory_semantics_parser", default=True):
+        enrich_condition_definitions(condition_definitions)
     dump_yaml(output_dir / "logic_blocks.yaml", {"logic_blocks": logic_blocks})
 
     _progress(progress, "Building condition trees", 45)
@@ -429,6 +461,9 @@ def run_analyze(
     for d in condition_definitions:
         if d.get("name"):
             known_conditions.add(str(d["name"]))
+    for sig in signals:
+        if sig.get("name"):
+            known_conditions.add(str(sig["name"]))
     for cd in code_definitions:
         if cd.get("name"):
             known_conditions.add(str(cd["name"]))
@@ -667,6 +702,10 @@ def run_analyze(
         "source_index": source_index,
         "code_definitions": code_definitions,
         "state_rules": state_rules,
+        "state_machines": state_machines,
+        "retention_rules": retention_rules,
+        "review_annotations": review_annotations,
+        "spec_profiles": spec_profiles,
         "diagram_semantics": diagram_semantics,
         "traceability_matrix": traceability_matrix,
         "logic_ast_rows": logic_ast_rows,
@@ -688,6 +727,20 @@ def run_analyze(
         "review_questions": review_questions_list,
         "summary": {},
     }
+    from src.engine.cross_file_resolver import resolve_footnote_cross_refs
+    from src.engine.footnote_materializer import link_footnotes_to_logic_blocks, materialize_footnote_attachments
+    from src.engine.path_tc_matrix import build_path_tc_matrix, enrich_candidate_coverage
+
+    link_footnotes_to_logic_blocks(ui_bundle)
+    resolve_footnote_cross_refs(ui_bundle)
+    materialize_footnote_attachments(ui_bundle)
+    path_tc_matrices: dict[str, Any] = {}
+    for lb in logic_blocks:
+        lid = str(lb.get("id") or "")
+        if lid:
+            path_tc_matrices[lid] = build_path_tc_matrix(ui_bundle, lid)
+    ui_bundle["path_tc_matrices"] = path_tc_matrices
+    enrich_candidate_coverage(ui_bundle)
     spec_understanding = build_spec_understanding_report(
         classified_files=classified_rows,
         logic_blocks=logic_blocks,

@@ -60,6 +60,14 @@ def test_footnote_registry_and_gate_ready() -> None:
     assert len(resolved[0]["footnote_variants"]) >= 1
 
 
+def test_gate_empty_tree_does_not_raise() -> None:
+    lb = {"id": "E1", "name": "EMPTY", "tree": {"type": "empty", "children": []}, "parse_status": "failed"}
+    resolved = build_resolved_logic_blocks([lb])
+    assert len(resolved) == 1
+    assert resolved[0]["gate_status"] == "needs_engineer"
+    assert resolved[0]["tree"]["type"] == "empty"
+
+
 def test_mcdc_planner_or_branches() -> None:
     rb = {
         "name": "SHUTOFF_DECISION",

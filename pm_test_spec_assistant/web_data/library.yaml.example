@@ -1,0 +1,7 @@
+# Copy to web_data/library.yaml on first run (or let the Library tab create it).
+# This file is safe to commit — no local paths or credentials.
+version: '3'
+root: ''
+focus_id: ''
+items: []
+links: []

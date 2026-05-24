@@ -6,12 +6,13 @@ import json
 import mimetypes
 import re
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -46,6 +47,10 @@ from src.utils.file_filters import is_ingestible_file, skip_reason
 from src.utils.yaml_utils import dump_yaml, load_yaml
 from src.utils.feature_flags import app_config, feature_enabled
 from web.bundle_helpers import bundle_path_for_job, ensure_enriched_bundle
+from src.engine.understanding_loop import rebuild_understanding
+from src.engine.incremental_ingest import extract_reference_file, merge_reference_extract
+from src.engine.path_tc_matrix import build_path_tc_matrix
+from src.engine.selective_tc_regen import build_path_regen_proposals
 from web.candidate_mutations import (
     clone_candidate,
     create_blank_candidate,
@@ -70,6 +75,7 @@ from src.library import (
     load_library,
     save_library,
     scan_folder_listing,
+    browse_for_root,
     set_focus as library_set_focus,
     set_root as library_set_root,
     update_item as library_update_item,
@@ -77,6 +83,28 @@ from src.library import (
     validate_inside_root as library_validate_inside_root,
 )
 from web import m365_auth
+from web.security import TeamAuthMiddleware, get_current_user, parse_if_match_version
+from web.team_auth import (
+    SESSION_COOKIE,
+    TeamUser,
+    admin_set_password,
+    authenticate,
+    change_password,
+    cookie_secure,
+    create_session,
+    create_user,
+    delete_session,
+    get_user_for_session,
+    init_user_db,
+    list_users,
+    remember_session_hours,
+    session_hours,
+    session_remaining_hours,
+    set_user_active,
+    team_auth_enabled,
+    touch_session,
+    user_public_dict,
+)
 from web.ai_provider import (
     apply_knowledge,
     default_provider,
@@ -99,6 +127,36 @@ from web.reasoning_session import append_turn as append_reasoning_turn
 from web.reasoning_session import append_hypothesis as append_reasoning_hypothesis
 from web.reasoning_session import create_session as create_reasoning_session
 from web.reasoning_session import load_session as load_reasoning_session
+from web.knowledge_reconciliation import (
+    confirm_pending_knowledge,
+    get_knowledge_apply_payload,
+    reject_pending_knowledge,
+)
+from web.hypothesis_apply import accept_hypothesis_claims
+from web.gtest_workspace import (
+    build_workspace_payload,
+    export_approved_bundle,
+    export_library_preset,
+    export_single_snippet,
+    generate_draft_for_request,
+    import_library_preset,
+    library_preset_path,
+    load_gtest_state,
+    save_draft,
+    save_gtest_state,
+    suggest_map_for_request,
+    sync_gtest_to_bundle,
+)
+from web.structured_knowledge import (
+    compile_accepted_constraints,
+    overlay_payload,
+    save_constraints,
+)
+from src.engine.boundary_tc_proposals import propose_boundary_testcases
+from src.engine.golden_spec_scoreboard import build_spec_scoreboard, discover_golden_fixtures, evaluate_scoreboard
+from src.engine.issue_prioritizer import build_overview_dashboard, prioritize_issues
+from src.engine.logic_path_simulator import collect_simulation_signals, simulate_logic_path
+from src.engine.structured_overlay import add_diagram_link
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DATA = ROOT / "web_data"
@@ -124,7 +182,10 @@ def _deployment_mode() -> str:
 def _startup() -> None:
     from web.job_store import init_db
 
+    cfg = load_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else {}
     init_db(WEB_DATA, production=_deployment_mode() == "production")
+    if team_auth_enabled(cfg):
+        init_user_db(WEB_DATA)
 
 
 _prod_cfg = load_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else {}
@@ -139,12 +200,16 @@ if _deployment_mode() == "production" or (_prod_cfg.get("security") or {}).get("
         rate_limit_per_minute=int(sec.get("rate_limit_per_minute", 120)),
     )
 
+app.add_middleware(TeamAuthMiddleware, cfg=_prod_cfg)
+
 if STATIC.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 # Session state: file registry + user overrides
 _file_registry: dict[str, dict[str, Any]] = {}
 _review_overrides: dict[str, dict[str, Any]] = {}
+_job_write_locks: dict[str, threading.Lock] = {}
+_job_lock_registry = threading.Lock()
 _ENGINEER_DEF_RE = re.compile(r"^\s*([A-Z][A-Z0-9_=]+)\s*[:=]\s*(.+?)\s*$")
 _ENGINEER_MEAN_RE = re.compile(r"^\s*([A-Z][A-Z0-9_=]+)\s+(?:means?|is)\s+(.+?)\s*$", re.I)
 _ENGINEER_SIG_VAL_RE = re.compile(r"([A-Z][A-Z0-9_=]+)\s*=\s*([^,]+)")
@@ -168,6 +233,31 @@ class AnalyzeRequest(BaseModel):
     strict_mode: bool = False
     generate_candidates: bool = True
     input_dir: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    remember: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "engineer"
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str
+
+
+class AdminUserActiveRequest(BaseModel):
+    active: bool = True
 
 
 class FileSelectRequest(BaseModel):
@@ -198,7 +288,33 @@ class LogicClarificationRequest(BaseModel):
     note: str = ""
     term: str = ""
     force_ollama: bool = False
+    local_only: bool = False
     provider: str = "auto"
+    compile_constraints_first: bool = True
+
+
+class StructuredOverlayRequest(BaseModel):
+    logic_id: str
+    constraints: list[dict[str, Any]] = []
+
+
+class CompileConstraintsRequest(BaseModel):
+    logic_id: str
+
+
+class LogicSimulateRequest(BaseModel):
+    logic_id: str
+    assignments: dict[str, Any] = {}
+
+
+class DiagramLinkRequest(BaseModel):
+    logic_id: str
+    from_state: str = ""
+    to_state: str = ""
+    event: str = ""
+    conditions: list[str] = []
+    edge_key: str = ""
+    note: str = ""
 
 
 class ImportKnowledgeRequest(BaseModel):
@@ -240,6 +356,17 @@ class ReasoningHypothesisRequest(BaseModel):
     logic_id: str
     provider: str = "auto"
     hypothesis: dict[str, Any]
+
+
+class KnowledgeApplyConfirmRequest(BaseModel):
+    logic_id: str
+    patch_indices: list[int] = []
+
+
+class ReasoningAcceptClaimsRequest(BaseModel):
+    logic_id: str
+    claim_indices: list[int] = []
+    hypothesis_index: int = -1
 
 
 class WorkbookReviewUpdateRequest(BaseModel):
@@ -305,6 +432,41 @@ class LibraryLinkUpdateRequest(BaseModel):
     label: Optional[str] = None
 
 
+class GTestGenerateRequest(BaseModel):
+    candidate_id: Optional[str] = None
+    logic_id: Optional[str] = None
+    variable_map: Optional[dict[str, str]] = None
+    language: Optional[str] = "EN"
+
+
+class GTestSuggestMapRequest(BaseModel):
+    candidate_id: Optional[str] = None
+    language: Optional[str] = "EN"
+
+
+class GTestDraftSaveRequest(BaseModel):
+    draft_key: str
+    spec_comment_block: str = ""
+    code_body: str = ""
+    full_snippet: str = ""
+    source_kind: str = "candidate"
+    test_name: str = ""
+    engineer_edited: bool = True
+
+
+class GTestVariableMapRequest(BaseModel):
+    code_variable_map: dict[str, str]
+
+
+class GTestHarnessRequest(BaseModel):
+    harness: dict[str, Any]
+
+
+class GTestLibraryPresetRequest(BaseModel):
+    job_id: Optional[str] = None
+    preset: Optional[dict[str, Any]] = None
+
+
 def _cfg() -> dict[str, Any]:
     return load_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else {}
 
@@ -314,9 +476,126 @@ def _require_feature(name: str) -> None:
         raise HTTPException(403, f"Feature '{name}' is disabled in config.yaml")
 
 
+def _team_auth_on() -> bool:
+    return team_auth_enabled(_cfg())
+
+
+def _current_team_user() -> TeamUser | None:
+    user = get_current_user()
+    return user if isinstance(user, TeamUser) else None
+
+
+def _require_admin() -> TeamUser:
+    user = _current_team_user()
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    if user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    return user
+
+
+def _uploads_dir() -> Path:
+    user = _current_team_user()
+    if _team_auth_on() and user:
+        root = WEB_DATA / "uploads" / user.username
+    else:
+        root = UPLOADS
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _output_root() -> Path:
+    user = _current_team_user()
+    if _team_auth_on() and user:
+        root = WEB_DATA / "output" / user.username
+    else:
+        root = OUTPUT
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _job_output_dir(job_id: str) -> Path:
+    job = get_job(job_id)
+    if job and job.output_dir:
+        return Path(job.output_dir)
+    return _output_root() / job_id
+
+
+def _load_job_gtest_state(job_id: str) -> dict[str, Any]:
+    return load_gtest_state(_job_output_dir(job_id), _cfg())
+
+
+def _persist_job_gtest_state(job_id: str, gtest_state: dict[str, Any]) -> dict[str, Any]:
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
+    bundle = _bundle_for_job(job_id)
+    sync_gtest_to_bundle(bundle, gtest_state)
+    _save_bundle_to_job(job_id, bundle)
+    return gtest_state
+
+
+def _job_owner(job_id: str) -> str | None:
+    if _deployment_mode() == "production":
+        try:
+            from web.job_store import get_job_record
+
+            rec = get_job_record(job_id)
+            if rec:
+                return rec.created_by or "system"
+        except RuntimeError:
+            pass
+    users_root = WEB_DATA / "output"
+    if users_root.is_dir():
+        for user_dir in users_root.iterdir():
+            if user_dir.is_dir() and (user_dir / job_id).is_dir():
+                return user_dir.name
+    if (OUTPUT / job_id).is_dir():
+        return "system"
+    return None
+
+
+def _assert_job_access(job_id: str) -> None:
+    if not _team_auth_on():
+        return
+    user = _current_team_user()
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    if user.role == "admin":
+        return
+    owner = _job_owner(job_id)
+    if owner and owner != user.username:
+        raise HTTPException(403, "Access denied")
+
+
+def _m365_user_id() -> str | None:
+    user = _current_team_user()
+    return user.username if user else None
+
+
+def _job_write_lock(job_id: str) -> threading.Lock:
+    with _job_lock_registry:
+        if job_id not in _job_write_locks:
+            _job_write_locks[job_id] = threading.Lock()
+        return _job_write_locks[job_id]
+
+
+def _get_bundle_version(job_id: str) -> int:
+    job = get_job(job_id)
+    if job and job.bundle_version:
+        return int(job.bundle_version)
+    out_dir = _job_output_dir(job_id)
+    manifest = out_dir / "bundle" / "manifest.json"
+    if manifest.exists():
+        try:
+            return int(json.loads(manifest.read_text(encoding="utf-8")).get("version", 0))
+        except (json.JSONDecodeError, ValueError, OSError):
+            pass
+    return 0
+
+
 def _list_uploaded_files() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for p in sorted(UPLOADS.iterdir()):
+    uploads = _uploads_dir()
+    for p in sorted(uploads.iterdir()):
         if not p.is_file() or not is_ingestible_file(p):
             continue
         key = str(p.resolve())
@@ -346,7 +625,8 @@ def _classify_uploads() -> list[dict[str, Any]]:
     cfg = load_yaml(CONFIG_PATH)
     rows: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for p in UPLOADS.iterdir():
+    uploads = _uploads_dir()
+    for p in uploads.iterdir():
         if not p.is_file():
             continue
         if not is_ingestible_file(p):
@@ -370,36 +650,112 @@ def _classify_uploads() -> list[dict[str, Any]]:
     return rows
 
 
-def _bundle_for_job(job_id: str) -> dict[str, Any]:
+def _persist_repaired_bundle(job_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+    """Write auto-repaired logic blocks back to disk and in-memory job cache."""
+    cleaned = dict(bundle)
+    cleaned.pop("_logic_repaired", None)
+    out_dir = _job_output_dir(job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dump_yaml(out_dir / "ui_bundle.yaml", cleaned)
     job = get_job(job_id)
+    if job:
+        update_job(job_id, bundle=cleaned, output_dir=out_dir)
+    return cleaned
+
+
+def _bundle_for_job(job_id: str) -> dict[str, Any]:
+    _assert_job_access(job_id)
+    job = get_job(job_id)
+
+    def _finalize(bundle: dict[str, Any]) -> dict[str, Any]:
+        enriched = ensure_enriched_bundle(bundle)
+        if enriched.get("_logic_repaired"):
+            enriched = _persist_repaired_bundle(job_id, enriched)
+            enriched = ensure_enriched_bundle(enriched)
+        return enriched
+
     if job and job.bundle:
-        return ensure_enriched_bundle(job.bundle)
+        return _finalize(job.bundle)
     if job and job.output_dir:
         from web.bundle_store import load_split_bundle
 
         split = load_split_bundle(Path(job.output_dir))
         if split:
-            return ensure_enriched_bundle(split)
-    disk = bundle_path_for_job(OUTPUT, job_id)
+            return _finalize(split)
+        path = Path(job.output_dir) / "ui_bundle.yaml"
+        if path.exists():
+            return _finalize(load_yaml(path))
+    if _deployment_mode() == "production":
+        try:
+            from web.job_store import get_job_record
+
+            rec = get_job_record(job_id)
+            if rec and rec.output_dir:
+                rec_dir = Path(rec.output_dir)
+                from web.bundle_store import load_split_bundle
+
+                split = load_split_bundle(rec_dir)
+                if split:
+                    return _finalize(split)
+                rec_yaml = rec_dir / "ui_bundle.yaml"
+                if rec_yaml.exists():
+                    return _finalize(load_yaml(rec_yaml))
+        except RuntimeError:
+            pass
+    disk = bundle_path_for_job(_output_root(), job_id)
+    if not disk:
+        disk = bundle_path_for_job(OUTPUT, job_id)
     if disk:
-        return ensure_enriched_bundle(load_yaml(disk))
+        return _finalize(load_yaml(disk))
     if job and job.output_dir:
         path = Path(job.output_dir) / "ui_bundle.yaml"
         if path.exists():
-            return ensure_enriched_bundle(load_yaml(path))
+            return _finalize(load_yaml(path))
+    out_path = _job_output_dir(job_id) / "ui_bundle.yaml"
+    if out_path.exists():
+        return _finalize(load_yaml(out_path))
     if job:
         raise HTTPException(404, "No analysis bundle yet — wait for review to finish")
     raise HTTPException(404, f"Job not found: {job_id}")
 
 
-def _save_bundle_to_job(job_id: str, bundle: dict[str, Any]) -> None:
-    bundle = ensure_enriched_bundle(bundle)
-    job = get_job(job_id)
-    out_dir = Path(job.output_dir) if job and job.output_dir else OUTPUT / job_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    dump_yaml(out_dir / "ui_bundle.yaml", bundle)
-    if job:
-        update_job(job_id, bundle=bundle)
+def _rebuild_understanding(
+    bundle: dict[str, Any],
+    *,
+    logic_id: str | None = None,
+    trigger: str,
+) -> dict[str, Any]:
+    logic_ids = [logic_id] if logic_id else None
+    return rebuild_understanding(bundle, logic_ids=logic_ids, trigger=trigger)
+
+
+def _save_bundle_to_job(job_id: str, bundle: dict[str, Any], *, expected_version: int | None = None) -> int:
+    if expected_version is None:
+        expected_version = parse_if_match_version()
+    with _job_write_lock(job_id):
+        current = _get_bundle_version(job_id)
+        if expected_version is not None and expected_version != current:
+            raise HTTPException(
+                409,
+                "Someone else saved — refresh the page and try again.",
+            )
+        bundle = ensure_enriched_bundle(bundle)
+        job = get_job(job_id)
+        out_dir = _job_output_dir(job_id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dump_yaml(out_dir / "ui_bundle.yaml", bundle)
+        new_version = current + 1
+        manifest_path = out_dir / "bundle" / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["version"] = new_version
+                manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+        if job:
+            update_job(job_id, bundle=bundle, bundle_version=new_version, output_dir=out_dir)
+        return new_version
 
 
 def _library_root() -> Path | None:
@@ -418,7 +774,7 @@ def _library_root() -> Path | None:
 
 def _safe_file_path(raw_path: str) -> Path:
     path = Path(raw_path).expanduser().resolve()
-    allowed_roots = [ROOT.resolve(), UPLOADS.resolve(), OUTPUT.resolve()]
+    allowed_roots = [ROOT.resolve(), UPLOADS.resolve(), OUTPUT.resolve(), _uploads_dir().resolve(), _output_root().resolve()]
     library_root = _library_root()
     if library_root and library_root.exists():
         allowed_roots.append(library_root)
@@ -473,6 +829,11 @@ def _extract_engineer_definitions(
     text = (note or "").strip()
     if not text:
         return defs
+
+    from src.engine.signal_constraint_parser import extract_signal_constraints_from_text
+
+    for sig, definition in extract_signal_constraints_from_text(text, focus_term=focus).items():
+        add_def(sig, definition)
 
     for line in text.splitlines():
         chunk = line.strip()
@@ -593,7 +954,7 @@ def _extract_supplemental_definitions(path: Path, logic_id: str) -> list[dict[st
 
 
 def _attachment_dir(job_id: str, logic_id: str) -> Path:
-    return OUTPUT / job_id / "logic_attachments" / logic_id
+    return _job_output_dir(job_id) / "logic_attachments" / logic_id
 
 
 def _build_attachment_preview(path: Path) -> tuple[str, str]:
@@ -622,12 +983,168 @@ def _build_attachment_preview(path: Path) -> tuple[str, str]:
     return ("binary", f"Binary attachment stored at {path.name}.")
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
+@app.get("/", response_class=HTMLResponse, response_model=None)
+def index(request: Request):
+    return _serve_spa_shell(request)
+
+
+def _serve_spa_shell(request: Request) -> HTMLResponse:
+    cfg = _cfg()
+    if team_auth_enabled(cfg):
+        session_id = request.cookies.get(SESSION_COOKIE, "")
+        if not get_user_for_session(session_id):
+            return RedirectResponse(url="/login", status_code=302)
     html_path = STATIC / "index.html"
     if not html_path.exists():
         return HTMLResponse("<h1>ALEX</h1><p>static/index.html missing</p>")
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+for _spa_slug in ("review", "logic", "diagram", "library", "export", "test-code", "guide"):
+    app.add_api_route(
+        f"/{_spa_slug}",
+        _serve_spa_shell,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        response_model=None,
+    )
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page() -> HTMLResponse:
+    html_path = STATIC / "login.html"
+    if not html_path.exists():
+        raise HTTPException(404, "login.html missing")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/admin", response_class=HTMLResponse, response_model=None)
+def admin_page(request: Request):
+    """Hidden team admin console — not linked from main UI. IT bookmark only."""
+    if not team_auth_enabled(_cfg()):
+        raise HTTPException(404, "Not found")
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    user = get_user_for_session(session_id) if session_id else None
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    if user.role != "admin":
+        raise HTTPException(404, "Not found")
+    html_path = STATIC / "admin.html"
+    if not html_path.exists():
+        raise HTTPException(404, "admin.html missing")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.post("/api/auth/login")
+def api_auth_login(body: LoginRequest, response: Response) -> dict[str, Any]:
+    cfg = _cfg()
+    if not team_auth_enabled(cfg):
+        raise HTTPException(400, "Team auth is disabled")
+    user = authenticate(body.username, body.password)
+    if not user:
+        raise HTTPException(401, "Invalid username or password")
+    hours = remember_session_hours(cfg) if body.remember else session_hours(cfg)
+    session_id = create_session(user.user_id, hours=hours)
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=session_id,
+        httponly=True,
+        secure=cookie_secure(cfg),
+        samesite="lax",
+        max_age=hours * 3600,
+        path="/",
+    )
+    return {"ok": True, **user_public_dict(user)}
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout(request: Request, response: Response) -> dict[str, Any]:
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    delete_session(session_id)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+def _refresh_session_cookie(request: Request, response: Response, cfg: dict[str, Any]) -> None:
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    if not session_id:
+        return
+    remaining = session_remaining_hours(session_id)
+    if remaining is None:
+        return
+    hours = remember_session_hours(cfg) if remaining > 24 else session_hours(cfg)
+    touch_session(session_id, hours=hours)
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=session_id,
+        httponly=True,
+        secure=cookie_secure(cfg),
+        samesite="lax",
+        max_age=hours * 3600,
+        path="/",
+    )
+
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request, response: Response) -> dict[str, Any]:
+    cfg = _cfg()
+    if not team_auth_enabled(cfg):
+        return {"enabled": False, "username": "system", "role": "admin"}
+    user = _current_team_user()
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    _refresh_session_cookie(request, response, cfg)
+    return {"enabled": True, **user_public_dict(user)}
+
+
+@app.post("/api/auth/change-password")
+def api_auth_change_password(body: ChangePasswordRequest) -> dict[str, Any]:
+    user = _current_team_user()
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        change_password(user.username, body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/api/admin/users")
+def api_admin_list_users() -> dict[str, Any]:
+    _require_admin()
+    return {"ok": True, "users": list_users()}
+
+
+@app.post("/api/admin/users")
+def api_admin_create_user(body: AdminCreateUserRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        user = create_user(body.username, body.password, role=body.role)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **user_public_dict(user)}
+
+
+@app.post("/api/admin/users/{username}/reset-password")
+def api_admin_reset_password(username: str, body: AdminResetPasswordRequest) -> dict[str, Any]:
+    admin = _require_admin()
+    if username.lower() == admin.username.lower() and len(body.new_password or "") < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    try:
+        admin_set_password(username, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "username": username}
+
+
+@app.post("/api/admin/users/{username}/active")
+def api_admin_set_user_active(username: str, body: AdminUserActiveRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        set_user_active(username, active=body.active)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "username": username, "active": body.active}
 
 
 @app.get("/api/projects")
@@ -637,7 +1154,7 @@ def api_projects() -> dict[str, Any]:
     sample = ROOT.parent / "pm_sample_inputs" / "input"
     return {
         "projects": [
-            {"id": "uploads", "label": "Uploaded files", "path": str(UPLOADS)},
+            {"id": "uploads", "label": "Uploaded files", "path": str(_uploads_dir())},
             {"id": "sample", "label": "Sample inputs", "path": str(sample) if sample.is_dir() else None},
         ],
         "default_input": cfg.get("ui", {}).get("default_input_dir"),
@@ -649,9 +1166,10 @@ async def api_upload(files: list[UploadFile] = File(...)) -> dict[str, Any]:
     saved = []
     replaced = []
     rejected = []
+    uploads = _uploads_dir()
     for uf in files:
         name = Path(uf.filename or "upload.bin").name
-        dest = UPLOADS / name
+        dest = uploads / name
         if not is_ingestible_file(dest):
             rejected.append({"file": name, "reason": skip_reason(dest) or "rejected"})
             continue
@@ -666,7 +1184,8 @@ async def api_upload(files: list[UploadFile] = File(...)) -> dict[str, Any]:
 @app.post("/api/classify")
 def api_classify() -> dict[str, Any]:
     skipped_list: list[dict[str, str]] = []
-    for p in UPLOADS.iterdir():
+    uploads = _uploads_dir()
+    for p in uploads.iterdir():
         if p.is_file() and not is_ingestible_file(p):
             skipped_list.append({"file": p.name, "reason": skip_reason(p) or "skipped"})
     return {"files": _classify_uploads(), "skipped": skipped_list}
@@ -688,7 +1207,8 @@ def api_files() -> dict[str, Any]:
 @app.post("/api/files/clear")
 def api_files_clear() -> dict[str, Any]:
     removed = []
-    for p in list(UPLOADS.iterdir()):
+    uploads = _uploads_dir()
+    for p in list(uploads.iterdir()):
         if p.is_file():
             p.unlink(missing_ok=True)
             removed.append(p.name)
@@ -744,23 +1264,27 @@ def api_metrics() -> Any:
 def api_list_jobs() -> dict[str, Any]:
     """List completed analysis jobs (persisted on disk — survives server restart)."""
     jobs: list[dict[str, Any]] = []
+    user = _current_team_user()
+    created_by = None if (user and user.role == "admin") else (user.username if user else None)
     if _deployment_mode() == "production":
         try:
             from web.job_store import list_jobs
 
-            for rec in list_jobs(limit=20):
+            for rec in list_jobs(limit=20, created_by=created_by):
                 jobs.append(
                     {
                         "job_id": rec.job_id,
                         "status": rec.status,
                         "progress": rec.progress,
                         "created": rec.created_at,
+                        "created_by": rec.created_by,
                     }
                 )
         except RuntimeError:
             pass
-    if OUTPUT.is_dir():
-        for d in sorted(OUTPUT.iterdir(), reverse=True):
+    scan_root = _output_root()
+    if scan_root.is_dir():
+        for d in sorted(scan_root.iterdir(), reverse=True):
             if not d.is_dir() or not d.name.startswith("analysis_"):
                 continue
             bundle_path = d / "ui_bundle.yaml"
@@ -785,7 +1309,7 @@ def api_list_jobs() -> dict[str, Any]:
 
 @app.post("/api/analyze")
 def api_analyze(body: AnalyzeRequest) -> dict[str, Any]:
-    input_dir = Path(body.input_dir) if body.input_dir else UPLOADS
+    input_dir = Path(body.input_dir) if body.input_dir else _uploads_dir()
     if not input_dir.is_dir():
         raise HTTPException(400, f"Input directory not found: {input_dir}")
 
@@ -796,8 +1320,10 @@ def api_analyze(body: AnalyzeRequest) -> dict[str, Any]:
             "No ingestible files in uploads. Use Load sample package or upload .docx/.xlsx (not Word lock files ~$).",
         )
 
-    job = create_job()
-    out_dir = OUTPUT / job.job_id
+    user = _current_team_user()
+    created_by = user.username if user else "system"
+    job = create_job(created_by=created_by)
+    out_dir = _job_output_dir(job.job_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     update_job(job.job_id, output_dir=out_dir)
 
@@ -846,6 +1372,7 @@ def _normalize_job_status(status: str) -> str:
 
 @app.get("/api/analysis/status")
 def api_analysis_status(job_id: str) -> dict[str, Any]:
+    _assert_job_access(job_id)
     job = get_job(job_id)
     if job:
         return {
@@ -858,7 +1385,7 @@ def api_analysis_status(job_id: str) -> dict[str, Any]:
             "log": job.log[-30:],
             "error_message": job.error_message,
         }
-    disk = bundle_path_for_job(OUTPUT, job_id)
+    disk = bundle_path_for_job(_output_root(), job_id) or bundle_path_for_job(OUTPUT, job_id)
     if disk:
         b = ensure_enriched_bundle(load_yaml(disk))
         s = b.get("summary", {})
@@ -961,7 +1488,165 @@ def api_logic_review(job_id: str) -> dict[str, Any]:
         "term_roles": b.get("term_roles") or {},
         "ai_assists": b.get("ai_assists", {}),
         "ai_queue": build_ai_queue(b),
+        "state_machines": b.get("state_machines") or [],
+        "retention_rules": b.get("retention_rules") or [],
+        "review_annotations": b.get("review_annotations") or [],
+        "spec_profiles": b.get("spec_profiles") or [],
+        "signals": b.get("signals") or [],
     }
+
+
+@app.post("/api/review/logic-simulate")
+def api_logic_simulate(body: LogicSimulateRequest, job_id: str) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    item = next(
+        (row for row in (b.get("logic_review_items") or []) if row.get("logic_id") == body.logic_id),
+        None,
+    )
+    if not item:
+        raise HTTPException(404, "Logic group not found")
+    tree = item.get("tree_model") or {}
+    result = simulate_logic_path(tree, body.assignments)
+    return {"ok": True, "job_id": job_id, "logic_id": body.logic_id, **result}
+
+
+@app.post("/api/review/rebuild-understanding")
+def api_rebuild_understanding(job_id: str, logic_id: str = "") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    loop_result = _rebuild_understanding(
+        bundle,
+        logic_id=logic_id or None,
+        trigger="manual_rebuild",
+    )
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, "understanding_loop": loop_result}
+
+
+@app.get("/api/review/footnote-materializations")
+def api_footnote_materializations(job_id: str, logic_id: str = "") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    meta = bundle.get("footnote_materializations") or {}
+    attachments = list(meta.get("attachments") or [])
+    if logic_id:
+        attachments = [a for a in attachments if str(a.get("source_logic_id") or "") == logic_id]
+    by_logic: dict[str, list[dict[str, Any]]] = {}
+    for lb in bundle.get("logic_blocks") or []:
+        lid = str(lb.get("id") or "")
+        attached = lb.get("attached_logic") or []
+        if attached:
+            by_logic[lid] = attached
+    if logic_id:
+        by_logic = {logic_id: by_logic.get(logic_id, [])}
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "logic_id": logic_id or None,
+        "count": len(attachments),
+        "attachments": attachments,
+        "by_logic": by_logic,
+        "cross_file_resolution": bundle.get("cross_file_resolution") or {},
+    }
+
+
+@app.post("/api/review/attach-reference-file")
+async def api_attach_reference_file(
+    job_id: str,
+    logic_id: str,
+    files: list[UploadFile] = File(...),
+) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    if not logic_id:
+        raise HTTPException(400, "logic_id is required")
+    attach_dir = _attachment_dir(job_id, logic_id) / "reference_files"
+    attach_dir.mkdir(parents=True, exist_ok=True)
+    merged_total: dict[str, int] = {
+        "merged_definitions": 0,
+        "merged_logic_blocks": 0,
+        "merged_footnotes": 0,
+        "materialized_count": 0,
+    }
+    saved: list[str] = []
+    for uf in files:
+        name = Path(uf.filename or "reference.bin").name
+        dest = attach_dir / name
+        dest.write_bytes(await uf.read())
+        extracted = extract_reference_file(dest)
+        result = merge_reference_extract(bundle, extracted, source_logic_id=logic_id, file_name=name)
+        if not result.get("ok"):
+            raise HTTPException(400, result.get("reason", "Failed to merge reference file"))
+        saved.append(name)
+        for key in merged_total:
+            merged_total[key] += int(result.get(key) or 0)
+    loop_result = _rebuild_understanding(bundle, logic_id=logic_id, trigger="attach_reference_file")
+    _save_bundle_to_job(job_id, bundle)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "logic_id": logic_id,
+        "saved": saved,
+        "merge": merged_total,
+        "understanding_loop": loop_result,
+    }
+
+
+@app.get("/api/review/path-tc-matrix")
+def api_path_tc_matrix(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    if not logic_id:
+        raise HTTPException(400, "logic_id is required")
+    matrix = build_path_tc_matrix(bundle, logic_id)
+    return {"ok": True, "job_id": job_id, "matrix": matrix}
+
+
+@app.post("/api/review/path-tc-propose")
+def api_path_tc_propose(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    if not logic_id:
+        raise HTTPException(400, "logic_id is required")
+    proposal = build_path_regen_proposals(bundle, logic_id)
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, **proposal}
+
+
+@app.get("/api/review/overview")
+def api_review_overview(job_id: str) -> dict[str, Any]:
+    b = _bundle_for_job(job_id)
+    capability = build_capability_summary(b)
+    overview = build_overview_dashboard(b, capability)
+    return {
+        "job_id": job_id,
+        "capability_summary": capability,
+        "overview": overview,
+        "prioritized_issues": prioritize_issues(
+            b.get("issues") or [],
+            logic_items=b.get("logic_review_items") or [],
+            limit=20,
+        ),
+    }
+
+
+@app.post("/api/review/diagram-link")
+def api_diagram_link(body: DiagramLinkRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    if not body.logic_id:
+        raise HTTPException(400, "logic_id is required")
+    link = add_diagram_link(
+        bundle,
+        body.logic_id,
+        {
+            "from_state": body.from_state,
+            "to_state": body.to_state,
+            "event": body.event,
+            "conditions": body.conditions,
+            "edge_key": body.edge_key,
+            "note": body.note,
+            "review_status": "accepted",
+            "source": "diagram_graph",
+        },
+    )
+    loop_result = _rebuild_understanding(bundle, logic_id=body.logic_id, trigger="diagram_link")
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, "link": link, "understanding_loop": loop_result, **overlay_payload(bundle, body.logic_id)}
 
 
 @app.get("/api/review/workbench")
@@ -991,6 +1676,7 @@ def api_review_workbench(
         "pagination": pagination,
         "validation_summary": preview.get("validation_summary"),
         "summary": build_workbench_summary(b, language=language),
+        "bundle_version": _get_bundle_version(job_id),
     }
 
 
@@ -1108,6 +1794,15 @@ def api_library_set_root(req: LibraryRootRequest) -> dict[str, Any]:
         raise HTTPException(400, str(exc))
     save_library(WEB_DATA, state)
     return _library_state_payload(state)
+
+
+@app.get("/api/library/browse-root")
+def api_library_browse_root(path: Optional[str] = None) -> dict[str, Any]:
+    _require_library_feature()
+    try:
+        return browse_for_root(path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/library/browse")
@@ -1293,7 +1988,7 @@ def api_llm_status() -> dict[str, Any]:
 
 @app.get("/api/m365/status")
 def api_m365_status() -> dict[str, Any]:
-    return m365_auth.m365_status(_cfg())
+    return m365_auth.m365_status(_cfg(), user_id=_m365_user_id())
 
 
 @app.post("/api/m365/setup")
@@ -1310,13 +2005,13 @@ def api_m365_setup(body: M365SetupRequest) -> dict[str, Any]:
 
 @app.post("/api/m365/setup/reset")
 def api_m365_setup_reset() -> dict[str, Any]:
-    return m365_auth.clear_local_registration(_cfg())
+    return m365_auth.clear_local_registration(_cfg(), user_id=_m365_user_id())
 
 
 @app.post("/api/m365/login/start")
 def api_m365_login_start() -> dict[str, Any]:
     try:
-        return m365_auth.start_device_login(_cfg())
+        return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id())
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1324,20 +2019,20 @@ def api_m365_login_start() -> dict[str, Any]:
 @app.post("/api/m365/login/poll")
 def api_m365_login_poll() -> dict[str, Any]:
     try:
-        return m365_auth.poll_device_login(_cfg())
+        return m365_auth.poll_device_login(_cfg(), user_id=_m365_user_id())
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/m365/login/cancel")
 def api_m365_login_cancel() -> dict[str, Any]:
-    m365_auth.cancel_device_login()
-    return {"ok": True, **m365_auth.m365_status(_cfg())}
+    m365_auth.cancel_device_login(user_id=_m365_user_id())
+    return {"ok": True, **m365_auth.m365_status(_cfg(), user_id=_m365_user_id())}
 
 
 @app.post("/api/m365/disconnect")
 def api_m365_disconnect() -> dict[str, Any]:
-    return m365_auth.disconnect()
+    return m365_auth.disconnect(user_id=_m365_user_id())
 
 
 class AssistImproveIoRequest(BaseModel):
@@ -1423,7 +2118,140 @@ def api_review_workbench_row(body: WorkbookReviewUpdateRequest, job_id: str) -> 
             cand["review_required"] = str(body.engineer_confirmation_required).lower() in {"yes", "true", "1"}
         break
     _save_bundle_to_job(job_id, bundle)
-    return {"ok": True, "candidate_id": body.candidate_id, "overlay": overlay}
+    return {"ok": True, "candidate_id": body.candidate_id, "overlay": overlay, "bundle_version": _get_bundle_version(job_id)}
+
+
+@app.get("/api/review/gtest-workspace")
+def api_gtest_workspace(job_id: str, language: str = "EN") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    library_root = _library_root()
+    if library_root and not (gtest_state.get("code_variable_map") or {}):
+        preset_path = library_preset_path(library_root)
+        if preset_path.exists():
+            from src.utils.yaml_utils import load_yaml
+
+            try:
+                preset = load_yaml(preset_path)
+                gtest_state = import_library_preset(gtest_state, preset)
+            except (OSError, ValueError, TypeError):
+                pass
+    payload = build_workspace_payload(bundle, gtest_state, language=language)
+    return {"job_id": job_id, **payload, "bundle_version": _get_bundle_version(job_id)}
+
+
+@app.post("/api/review/gtest-generate")
+def api_gtest_generate(job_id: str, body: GTestGenerateRequest) -> dict[str, Any]:
+    if not body.candidate_id and not body.logic_id:
+        raise HTTPException(400, "candidate_id or logic_id required")
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    draft = generate_draft_for_request(
+        bundle,
+        gtest_state,
+        candidate_id=body.candidate_id,
+        logic_id=body.logic_id,
+        variable_map=body.variable_map,
+        language=body.language or "EN",
+    )
+    return {"ok": True, "job_id": job_id, "draft": draft}
+
+
+@app.post("/api/review/gtest-suggest-map")
+def api_gtest_suggest_map(job_id: str, body: GTestSuggestMapRequest) -> dict[str, Any]:
+    if not body.candidate_id:
+        raise HTTPException(400, "candidate_id required")
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    code_map = suggest_map_for_request(
+        bundle,
+        gtest_state,
+        candidate_id=body.candidate_id,
+        language=body.language or "EN",
+    )
+    return {"ok": True, "code_variable_map": code_map}
+
+
+@app.put("/api/review/gtest-draft")
+def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state = save_draft(
+        gtest_state,
+        draft_key=body.draft_key,
+        draft={
+            "source_kind": body.source_kind,
+            "test_name": body.test_name,
+            "spec_comment_block": body.spec_comment_block,
+            "code_body": body.code_body,
+            "full_snippet": body.full_snippet,
+        },
+        engineer_edited=body.engineer_edited,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"ok": True, "job_id": job_id, "draft_key": body.draft_key}
+
+
+@app.put("/api/review/code-variable-map")
+def api_code_variable_map(job_id: str, body: GTestVariableMapRequest) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state["code_variable_map"] = dict(body.code_variable_map)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"ok": True, "code_variable_map": gtest_state["code_variable_map"]}
+
+
+@app.put("/api/review/gtest-harness")
+def api_gtest_harness(job_id: str, body: GTestHarnessRequest) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state["harness"] = {**(gtest_state.get("harness") or {}), **body.harness}
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"ok": True, "harness": gtest_state["harness"]}
+
+
+@app.get("/api/export/gtest-cpp")
+def api_export_gtest_cpp(job_id: str, candidate_id: str) -> Response:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    content = export_single_snippet(bundle, gtest_state, candidate_id)
+    filename = f"{candidate_id}.cpp"
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/gtest-cpp-bundle")
+def api_export_gtest_cpp_bundle(job_id: str) -> Response:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    content = export_approved_bundle(bundle, gtest_state)
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="alex_generated_tests.cpp"'},
+    )
+
+
+@app.get("/api/library/gtest-preset")
+def api_library_gtest_preset_export(job_id: str) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    return {"ok": True, "preset": export_library_preset(gtest_state)}
+
+
+@app.post("/api/library/gtest-preset")
+def api_library_gtest_preset_import(job_id: str, body: GTestLibraryPresetRequest) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    if body.preset:
+        gtest_state = import_library_preset(gtest_state, body.preset)
+    _persist_job_gtest_state(job_id, gtest_state)
+    library_root = _library_root()
+    if library_root:
+        preset_path = library_preset_path(library_root)
+        preset_path.parent.mkdir(parents=True, exist_ok=True)
+        from src.utils.yaml_utils import dump_yaml
+
+        dump_yaml(preset_path, export_library_preset(gtest_state))
+    return {"ok": True, "harness": gtest_state.get("harness"), "code_variable_map": gtest_state.get("code_variable_map")}
 
 
 @app.get("/api/app-config")
@@ -1506,7 +2334,7 @@ def api_review_definition_inbox(job_id: str, logic_id: str) -> dict[str, Any]:
 @app.post("/api/review/definition-query")
 def api_review_definition_query(body: DefinitionQueryRequest, job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
-    out_dir = OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     ai = bundle.setdefault("ai_assists", {})
     notes = dict(ai.get("engineer_notes") or {})
@@ -1581,49 +2409,110 @@ def api_logic_clarification(body: LogicClarificationRequest, job_id: str) -> dic
     notes = ai.setdefault("engineer_notes", {})
     notes[body.logic_id] = body.note.strip()
     engineer_defs = ai.setdefault("engineer_definitions", {})
-    stale = [
-        name
-        for name, meta in engineer_defs.items()
-        if str((meta or {}).get("logic_id") or "") == body.logic_id
-    ]
-    for name in stale:
-        engineer_defs.pop(name, None)
     missing = _missing_definition_terms(bundle, body.logic_id)
     extracted = _extract_engineer_definitions(
         body.note, body.logic_id, body.term, missing_terms=missing
     )
     for name, meta in extracted.items():
         engineer_defs[name] = meta
-    applied = apply_knowledge(
+    from src.engine.definition_apply import apply_engineer_definitions_to_candidates
+
+    defs_applied = apply_engineer_definitions_to_candidates(bundle, body.logic_id)
+    if body.local_only:
+        applied = {
+            "ok": bool(extracted),
+            "provider": "local",
+            "preview": False,
+            "candidates_updated": defs_applied,
+            "failures_remaining": 0,
+        }
+        if not extracted:
+            applied["error"] = (
+                "No basic constraint detected. Use patterns like SIG=1, SIG >= 1, < 5, or SIG 1-5."
+            )
+            applied["ok"] = False
+    else:
+        applied = apply_knowledge(
+            bundle,
+            body.logic_id,
+            body.note,
+            _cfg(),
+            force_ollama=body.force_ollama or body.provider.strip().lower() == "ollama",
+            provider=body.provider,
+            compile_constraints_first=body.compile_constraints_first,
+            preview_only=True,
+        )
+        if extracted:
+            defs_applied += apply_engineer_definitions_to_candidates(bundle, body.logic_id)
+    reasoning_session = create_reasoning_session(
+        _job_output_dir(job_id),
         bundle,
-        body.logic_id,
-        body.note,
-        _cfg(),
-        force_ollama=body.force_ollama,
+        logic_id=body.logic_id,
+        engineer_note=body.note.strip(),
         provider=body.provider,
     )
+    knowledge_apply = get_knowledge_apply_payload(bundle, body.logic_id)
+    loop_result = _rebuild_understanding(bundle, logic_id=body.logic_id, trigger="logic_clarification")
     _save_bundle_to_job(job_id, bundle)
+    overlay = overlay_payload(bundle, body.logic_id)
     return {
         "ok": True,
         "logic_id": body.logic_id,
         "note": notes[body.logic_id],
         "engineer_definitions": extracted,
         "applied_terms": sorted(extracted.keys()),
+        "definitions_applied_to_candidates": defs_applied,
         "candidates_updated": applied.get("candidates_updated", 0),
         "apply_provider": applied.get("provider"),
         "apply_ok": bool(applied.get("ok")),
+        "apply_preview": bool(applied.get("preview")),
+        "pending_patches": applied.get("pending_patches", 0),
+        "reconciliation": applied.get("reconciliation") or knowledge_apply.get("reconciliation"),
+        "knowledge_apply_status": knowledge_apply.get("status"),
         "providers_tried": applied.get("providers_tried"),
         "apply_error": applied.get("error"),
         "apply_hint": applied.get("hint"),
+        "apply_reason": applied.get("reason"),
+        "activation_guide": applied.get("activation_guide"),
         "failures_remaining": applied.get("failures_remaining", 0),
         "retries_used": applied.get("retries_used", 0),
+        "reasoning_session": reasoning_session,
+        "structured_overlay": overlay.get("overlay"),
+        "constraints_accepted": overlay.get("accepted_count", 0),
+        "understanding_loop": loop_result,
     }
+
+
+@app.get("/api/review/structured-overlay")
+def api_get_structured_overlay(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    return {"ok": True, **overlay_payload(bundle, logic_id)}
+
+
+@app.put("/api/review/structured-overlay")
+def api_put_structured_overlay(body: StructuredOverlayRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    try:
+        out = save_constraints(bundle, body.logic_id, body.constraints)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, **out}
+
+
+@app.post("/api/review/compile-constraints")
+def api_compile_constraints(body: CompileConstraintsRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    applied = compile_accepted_constraints(bundle, body.logic_id, _cfg())
+    loop_result = _rebuild_understanding(bundle, logic_id=body.logic_id, trigger="compile_constraints")
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": bool(applied.get("ok")), **applied, "logic_id": body.logic_id, "understanding_loop": loop_result}
 
 
 @app.post("/api/reasoning/start")
 def api_reasoning_start(body: ReasoningSessionRequest, job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
-    out_dir = OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     session = create_reasoning_session(
         out_dir,
         bundle,
@@ -1637,7 +2526,7 @@ def api_reasoning_start(body: ReasoningSessionRequest, job_id: str) -> dict[str,
 
 @app.post("/api/reasoning/continue")
 def api_reasoning_continue(body: ReasoningTurnRequest, job_id: str) -> dict[str, Any]:
-    out_dir = OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     session = append_reasoning_turn(
         out_dir,
         logic_id=body.logic_id,
@@ -1652,7 +2541,7 @@ def api_reasoning_continue(body: ReasoningTurnRequest, job_id: str) -> dict[str,
 @app.post("/api/reasoning/hypothesis")
 def api_reasoning_hypothesis(body: ReasoningHypothesisRequest, job_id: str) -> dict[str, Any]:
     session = append_reasoning_hypothesis(
-        OUTPUT / job_id,
+        _job_output_dir(job_id),
         logic_id=body.logic_id,
         hypothesis=body.hypothesis,
         provider=body.provider,
@@ -1668,23 +2557,170 @@ def api_reasoning_hypothesis(body: ReasoningHypothesisRequest, job_id: str) -> d
 
 @app.get("/api/reasoning/{logic_id}")
 def api_reasoning_get(logic_id: str, job_id: str) -> dict[str, Any]:
-    session = load_reasoning_session(OUTPUT / job_id, logic_id)
+    session = load_reasoning_session(_job_output_dir(job_id), logic_id)
     if not session:
         raise HTTPException(404, "No reasoning session for this logic group.")
     return {"ok": True, "job_id": job_id, "session": session}
 
 
+@app.post("/api/reasoning/accept-claims")
+def api_reasoning_accept_claims(body: ReasoningAcceptClaimsRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    session = load_reasoning_session(_job_output_dir(job_id), body.logic_id)
+    if not session:
+        raise HTTPException(404, "No reasoning session for this logic group.")
+    hypotheses = session.get("hypotheses") or []
+    if not hypotheses:
+        raise HTTPException(400, "No hypotheses in session.")
+    idx = body.hypothesis_index if body.hypothesis_index >= 0 else len(hypotheses) - 1
+    if idx >= len(hypotheses):
+        raise HTTPException(400, "Invalid hypothesis_index.")
+    hypothesis = (hypotheses[idx].get("hypothesis") or {}) if isinstance(hypotheses[idx], dict) else {}
+    result = accept_hypothesis_claims(
+        bundle,
+        body.logic_id,
+        hypothesis,
+        claim_indices=body.claim_indices,
+    )
+    loop_result = _rebuild_understanding(bundle, logic_id=body.logic_id, trigger="hypothesis_accept")
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, "logic_id": body.logic_id, "understanding_loop": loop_result, **result}
+
+
+@app.get("/api/review/knowledge-apply")
+def api_get_knowledge_apply(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    payload = get_knowledge_apply_payload(bundle, logic_id)
+    return {"ok": True, "job_id": job_id, **payload}
+
+
+@app.post("/api/review/knowledge-apply/confirm")
+def api_confirm_knowledge_apply(body: KnowledgeApplyConfirmRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    from src.engine.definition_apply import apply_engineer_definitions_to_candidates
+
+    result = confirm_pending_knowledge(
+        bundle,
+        body.logic_id,
+        body.patch_indices,
+        _cfg(),
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "Failed to apply patches.")
+    defs_applied = apply_engineer_definitions_to_candidates(bundle, body.logic_id)
+    loop_result = _rebuild_understanding(bundle, logic_id=body.logic_id, trigger="knowledge_apply_confirm")
+    _save_bundle_to_job(job_id, bundle)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "logic_id": body.logic_id,
+        "definitions_applied_to_candidates": defs_applied,
+        "understanding_loop": loop_result,
+        **result,
+    }
+
+
+@app.post("/api/review/knowledge-apply/reject")
+def api_reject_knowledge_apply(body: KnowledgeApplyConfirmRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    result = reject_pending_knowledge(bundle, body.logic_id)
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, **result}
+
+
+@app.get("/api/review/boundary-proposals")
+def api_boundary_proposals(job_id: str, logic_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    proposals = propose_boundary_testcases(bundle, logic_id)
+    return {"ok": True, "job_id": job_id, "logic_id": logic_id, "proposals": proposals}
+
+
+@app.get("/api/review/audit-log")
+def api_audit_log(job_id: str, logic_id: str | None = None) -> dict[str, Any]:
+    """Export engineer/AI actions for compliance review."""
+    bundle = _bundle_for_job(job_id)
+    ai = bundle.get("ai_assists") or {}
+    knowledge = ai.get("knowledge_apply") or {}
+    entries = []
+    for lid, row in knowledge.items():
+        if logic_id and lid != logic_id:
+            continue
+        entries.append(
+            {
+                "logic_id": lid,
+                "provider": row.get("provider"),
+                "status": row.get("status"),
+                "source": row.get("source"),
+                "candidates_updated": row.get("candidates_updated", 0),
+                "patch_count": len(row.get("patches") or []),
+                "reconciliation_summary": (row.get("reconciliation") or {}).get("summary"),
+            }
+        )
+    reasoning_sessions = []
+    reasoning_dir = _job_output_dir(job_id) / "reasoning"
+    if reasoning_dir.exists():
+        for path in sorted(reasoning_dir.glob("*/session.json")):
+            if logic_id and logic_id not in path.parts:
+                continue
+            try:
+                import json
+
+                session = json.loads(path.read_text(encoding="utf-8"))
+                reasoning_sessions.append(
+                    {
+                        "logic_id": session.get("logic_id"),
+                        "status": session.get("status"),
+                        "hypothesis_count": len(session.get("hypotheses") or []),
+                        "turn_count": len(session.get("turns") or []),
+                        "updated_at": session.get("updated_at"),
+                    }
+                )
+            except (OSError, json.JSONDecodeError):
+                continue
+    user = _current_team_user()
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "username": user.username if user else "system",
+        "knowledge_apply": entries,
+        "reasoning_sessions": reasoning_sessions,
+        "engineer_notes": ai.get("engineer_notes") or {},
+    }
+
+
 @app.get("/api/review/m365-brief")
 def api_review_m365_brief(job_id: str, logic_id: str) -> dict[str, Any]:
+    from web.brief_readiness import validate_brief_readiness
+
     bundle = _bundle_for_job(job_id)
     ai = bundle.get("ai_assists") or {}
     note = str((ai.get("engineer_notes") or {}).get(logic_id) or "")
     out = export_m365_brief(bundle, logic_id, note)
-    out_dir = OUTPUT / job_id / "m365_brief" / logic_id
+    out_dir = _job_output_dir(job_id) / "m365_brief" / logic_id
     out_dir.mkdir(parents=True, exist_ok=True)
     brief_path = out_dir / "brief.md"
     brief_path.write_text(out["brief"], encoding="utf-8")
-    return {"job_id": job_id, "brief_path": str(brief_path), **out}
+    session = load_reasoning_session(_job_output_dir(job_id), logic_id)
+    if not session:
+        session = create_reasoning_session(_job_output_dir(job_id), bundle, logic_id=logic_id, engineer_note=note)
+    brief_hash = str(session.get("brief_hash") or "")
+    evidence_hash = str(session.get("evidence_hash") or "")
+    brief_with_header = (
+        f"<!-- ALEX job={job_id} logic={logic_id} brief_id={brief_hash[:12]} -->\n\n{out['brief']}"
+    )
+    readiness = validate_brief_readiness(bundle, logic_id, note, brief_text=brief_with_header)
+    return {
+        "job_id": job_id,
+        "brief_path": str(brief_path),
+        "brief_hash": brief_hash,
+        "brief_hash_short": brief_hash[:12],
+        "evidence_hash": evidence_hash,
+        "evidence_hash_short": evidence_hash[:12],
+        "brief_with_header": brief_with_header,
+        "readiness": readiness,
+        **out,
+        "brief": brief_with_header,
+    }
 
 
 @app.post("/api/review/import-knowledge-patches")
@@ -1692,10 +2728,11 @@ def api_import_knowledge_patches(body: ImportKnowledgeRequest, job_id: str) -> d
     bundle = _bundle_for_job(job_id)
     cfg = _cfg()
     try:
-        result = import_knowledge_patches(bundle, body.logic_id, body.payload, cfg)
+        result = import_knowledge_patches(bundle, body.logic_id, body.payload, cfg, preview_only=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    _save_bundle_to_job(job_id, bundle)
+    if result.get("ok"):
+        _save_bundle_to_job(job_id, bundle)
     return {"job_id": job_id, "logic_id": body.logic_id, **result}
 
 
@@ -1735,6 +2772,7 @@ async def api_logic_attachments(
         saved.append(name)
     by_logic[logic_id] = rows
     defs_by_logic[logic_id] = defs
+    loop_result = _rebuild_understanding(bundle, logic_id=logic_id, trigger="logic_attachment")
     _save_bundle_to_job(job_id, bundle)
     return {
         "ok": True,
@@ -1742,6 +2780,7 @@ async def api_logic_attachments(
         "saved": saved,
         "attachments": rows,
         "supplemental_definitions": defs,
+        "understanding_loop": loop_result,
     }
 
 
@@ -1816,7 +2855,7 @@ def api_review_update(body: ReviewUpdateRequest) -> dict[str, Any]:
 def api_candidate_edit(body: CandidateEditRequest, job_id: str) -> dict[str, Any]:
     job = get_job(job_id)
     bundle = _bundle_for_job(job_id)
-    out_dir = (job.output_dir if job else None) or OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     for c in bundle.get("test_candidates", []):
         if c.get("id") == body.candidate_id:
             c.update(body.fields)
@@ -1873,7 +2912,7 @@ def api_copilot_verify(deep: bool = Query(False)) -> dict[str, Any]:
 @app.post("/api/copilot/assist")
 def api_copilot_assist(body: CopilotAssistRequest, job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
-    out_dir = OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     ai = bundle.setdefault("ai_assists", {})
     notes = dict(ai.get("engineer_notes") or {})
@@ -1919,7 +2958,7 @@ def api_copilot_assist(body: CopilotAssistRequest, job_id: str) -> dict[str, Any
 @app.post("/api/export")
 def api_export(job_id: str, mode: str = "approved") -> FileResponse:
     job = get_job(job_id)
-    out_dir = (job.output_dir if job else None) or OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     if not out_dir.exists():
         raise HTTPException(404, "Job output not found")
     b = _bundle_for_job(job_id)
@@ -1940,7 +2979,7 @@ def api_export(job_id: str, mode: str = "approved") -> FileResponse:
 
 def _xlsx_for_job(job_id: str, filename: str) -> FileResponse:
     job = get_job(job_id)
-    out_dir = (job.output_dir if job else None) or OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     path = out_dir / filename
     if not path.exists():
         raise HTTPException(404, f"{filename} not found — run analysis first")
@@ -1979,7 +3018,7 @@ def api_export_issues_xlsx(job_id: str) -> FileResponse:
 @app.post("/api/export/customer-testspec-xlsx")
 def api_export_customer_testspec_xlsx(job_id: str, language: str = "EN") -> FileResponse:
     job = get_job(job_id)
-    out_dir = Path(job.output_dir) if job and job.output_dir else OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     if not out_dir.exists():
         raise HTTPException(404, "Job output not found")
     bundle = _bundle_for_job(job_id)
@@ -2016,7 +3055,7 @@ def api_export_issue_list_xlsx_alias(job_id: str) -> FileResponse:
 @app.get("/api/export/ui-bundle")
 def api_export_ui_bundle(job_id: str) -> FileResponse:
     job = get_job(job_id)
-    out_dir = (job.output_dir if job else None) or OUTPUT / job_id
+    out_dir = _job_output_dir(job_id)
     path = out_dir / "ui_bundle.yaml"
     if not path.exists():
         raise HTTPException(404, "ui_bundle.yaml not found — run analysis first")
@@ -2027,7 +3066,7 @@ def api_export_ui_bundle(job_id: str) -> FileResponse:
 def api_export_review_md(job_id: str) -> FileResponse:
     """Download review markdown zip folder as single file — first file for quick access."""
     job = get_job(job_id)
-    out = Path(job.output_dir) if job and job.output_dir else OUTPUT / job_id
+    out = _job_output_dir(job_id)
     review_dir = out / "review"
     if not review_dir.is_dir():
         raise HTTPException(404, "Review package not found — run analysis first")
@@ -2055,6 +3094,7 @@ def api_job_summary(job_id: str) -> dict[str, Any]:
         "strict_mode": b.get("strict_mode"),
         "module_name": derive_module_name(b),
         "has_bundle": True,
+        "bundle_version": _get_bundle_version(job_id),
     }
 
 
@@ -2069,6 +3109,8 @@ def api_review_dashboard(job_id: str) -> dict[str, Any]:
     evidence = build_evidence_graph(b)
     ai_queue = build_ai_queue(b, language="EN")
     capability = build_capability_summary(b)
+    overview = build_overview_dashboard(b, capability)
+    prioritized = prioritize_issues(issues, logic_items=b.get("logic_review_items") or [], limit=20)
     return {
         "job_id": job_id,
         "summary": {
@@ -2077,7 +3119,9 @@ def api_review_dashboard(job_id: str) -> dict[str, Any]:
         },
         "module_name": derive_module_name(b),
         "spec_understanding": rep,
-        "top_issues": errors[:8] + [i for i in issues if i.get("severity") != "error"][:4],
+        "top_issues": prioritized[:8],
+        "prioritized_issues": prioritized,
+        "overview": overview,
         "logic_review_count": len(b.get("logic_review_items") or []),
         "extracted": rep.get("extracted", {}),
         "copilot_overlay_count": len((b.get("ai_assists") or {}).get("candidate_overlays") or {}),
@@ -2101,7 +3145,7 @@ def api_load_sample() -> dict[str, Any]:
             continue
         for p in sample.iterdir():
             if p.is_file() and is_ingestible_file(p):
-                shutil.copy2(p, UPLOADS / p.name)
+                shutil.copy2(p, _uploads_dir() / p.name)
                 copied.append(p.name)
     return {
         "files": _classify_uploads(),

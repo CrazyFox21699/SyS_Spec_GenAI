@@ -7,6 +7,7 @@ import pytest
 from src.library import (
     add_item,
     add_link,
+    browse_for_root,
     delete_item,
     delete_link,
     import_dropped_file,
@@ -62,6 +63,18 @@ def test_scan_folder_listing_returns_files_under_root(tmp_path: Path) -> None:
     assert "Power_Mode.docx" in names
     assert "Test_Power_State.xlsx" in names
     assert [d["name"] for d in listing["dirs"]] == ["diagrams"]
+
+
+def test_browse_for_root_lists_quick_locations_and_subdirs(tmp_path: Path) -> None:
+    root = _seed_root(tmp_path)
+    seeds = browse_for_root()
+    assert seeds["mode"] == "pick_root"
+    assert seeds["dirs"]
+
+    picked = browse_for_root(str(root))
+    assert picked["cwd"] == str(root.resolve())
+    assert picked["spec_file_count"] == 2
+    assert any(d["name"] == "diagrams" for d in picked["dirs"])
 
 
 def test_validate_inside_root_blocks_outsiders(tmp_path: Path) -> None:

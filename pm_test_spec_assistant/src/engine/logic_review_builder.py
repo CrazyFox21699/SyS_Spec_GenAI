@@ -216,6 +216,32 @@ def _trace_row(
     }
 
 
+def _honest_parse_status(
+    lb: dict[str, Any],
+    tree: dict[str, Any],
+    *,
+    unresolved_terms: list[str] | set[str],
+    parser_notes: list[Any],
+) -> str:
+    """Surface partial/failed parse honestly instead of always showing ok."""
+    raw = str(lb.get("parse_status") or "unknown").strip().lower()
+    if tree.get("type") == "empty" or tree.get("parse_status") == "failed":
+        return "failed"
+    if raw == "failed":
+        return "failed"
+    from src.engine.condition_tree_builder import tree_has_opaque
+
+    if tree_has_opaque(tree):
+        return "partial"
+    if unresolved_terms or parser_notes:
+        return "partial"
+    if raw == "ok" and tree.get("type") not in ("empty", None):
+        return "ok"
+    if raw in ("ok", "partial", "failed", "unparsed"):
+        return raw
+    return "unknown"
+
+
 def build_logic_review_items(
     logic_blocks: list[dict[str, Any]],
     two_column_tables: list[dict[str, Any]],
@@ -349,13 +375,25 @@ def build_logic_review_items(
 
         rb = resolved_by_id.get(tid) or resolved_by_name.get(name) or {}
         gate_status = rb.get("gate_status") or lb.get("gate_status", "")
+        parser_notes = lb.get("parser_notes") or []
+        parse_status = _honest_parse_status(
+            lb,
+            tree,
+            unresolved_terms=unresolved_terms,
+            parser_notes=parser_notes,
+        )
         items.append(
             {
                 "logic_id": tid,
                 "control_name": name,
+                "outcome_label": lb.get("outcome_label") or "",
+                "from_state": lb.get("from_state") or "",
+                "to_state": lb.get("to_state") or "",
+                "control_kind": lb.get("control_kind") or "logic_control",
                 "gate_status": gate_status,
                 "understanding_gaps": rb.get("gaps") or lb.get("understanding_gaps") or [],
-                "parse_status": lb.get("parse_status", "unknown"),
+                "parse_status": parse_status,
+                "parse_status_raw": lb.get("parse_status", "unknown"),
                 "can_generate_candidates": lb.get(
                     "can_generate_candidates", rb.get("can_generate_candidates", False)
                 ),
@@ -369,8 +407,12 @@ def build_logic_review_items(
                     "table": (lb.get("source") or {}).get("table", ""),
                     "table_id": (lb.get("source") or {}).get("table_id", ""),
                     "control": (lb.get("source") or {}).get("control", ""),
+                    "section_zone": (lb.get("source") or {}).get("section_zone", ""),
                     "summary": _format_source(lb.get("source")),
                 },
+                "section_zone": (lb.get("source") or {}).get("section_zone", ""),
+                "decision_mode": lb.get("decision_mode", "boolean"),
+                "timer_qualifiers": lb.get("timer_qualifiers") or [],
                 "visual_source": lb.get("visual_source")
                 or {
                     "kind": "logic_table_rows",
@@ -400,11 +442,11 @@ def build_logic_review_items(
                     }
                 ),
                 "trace_rows": trace_rows,
-                "parser_notes": lb.get("parser_notes") or [],
+                "parser_notes": parser_notes,
                 "issues": normalized_issues,
                 "table_rows": table_rows,
                 "candidates": related_candidates,
-                "review_required": lb.get("parse_status") != "ok" or lb.get("review_required", True),
+                "review_required": parse_status != "ok" or lb.get("review_required", True),
             }
         )
     return items

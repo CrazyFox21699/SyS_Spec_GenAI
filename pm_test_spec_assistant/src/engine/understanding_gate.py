@@ -32,6 +32,8 @@ def evaluate_logic_block_gate(
             "gaps": [{"kind": "parse_failed", "message": "Logic tree empty or failed"}],
             "atoms": [],
             "footnote_variants": [],
+            "tree": tree or {"type": "empty", "children": []},
+            "atom_signals": [],
         }
 
     enriched = enrich_tree_with_atoms(dict(tree))
@@ -120,6 +122,7 @@ def build_resolved_logic_blocks(
     footnote_definitions: list[dict[str, Any]] | None = None,
     condition_definitions: list[dict[str, Any]] | None = None,
     alias_map: list[dict[str, Any]] | None = None,
+    known_by_block_id: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     known: set[str] = set()
     for d in condition_definitions or []:
@@ -130,10 +133,15 @@ def build_resolved_logic_blocks(
 
     resolved: list[dict[str, Any]] = []
     for lb in logic_blocks:
+        lid = str(lb.get("id") or lb.get("name") or "")
+        block_known = set(known)
+        if known_by_block_id:
+            block_known |= known_by_block_id.get(lid, set())
+            block_known |= known_by_block_id.get(str(lb.get("name") or ""), set())
         ev = evaluate_logic_block_gate(
             lb,
             footnote_definitions=footnote_definitions,
-            known_definitions=known,
+            known_definitions=block_known,
             alias_targets=targets | aliases,
         )
         resolved.append(
@@ -145,7 +153,7 @@ def build_resolved_logic_blocks(
                 "gaps": ev["gaps"],
                 "atoms": ev["atoms"],
                 "footnote_variants": ev["footnote_variants"],
-                "tree": ev["tree"],
+                "tree": ev.get("tree") or lb.get("tree") or {"type": "empty", "children": []},
                 "parse_status": lb.get("parse_status"),
                 "can_generate_candidates": ev["gate_status"] == "ready",
                 "source": lb.get("source"),

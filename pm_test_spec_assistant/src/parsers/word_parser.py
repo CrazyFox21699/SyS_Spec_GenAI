@@ -24,7 +24,22 @@ from src.parsers.table_logic_parser import (
     rows_from_grid,
     transitions_from_logic_blocks,
 )
+from src.classifiers.logic_spec_classifier import classify_logic_spec
+from src.engine.memory_semantics_parser import parse_retention_rules
+from src.engine.state_grammar_parser import (
+    parse_state_blocks_from_paragraphs,
+    parse_state_blocks_from_tables,
+)
+from src.models.spec_profile import LogicZone, build_spec_profile
+from src.utils.feature_flags import feature_enabled
 from src.parsers.two_column_table_parser import parse_control_condition_grid, tables_to_dicts
+from src.parsers.signal_table_parser import parse_signal_grid
+from src.parsers.word_merge_reader import build_row_branch_groups, collect_word_merged_cell_evidence
+from src.parsers.word_section_router import (
+    annotate_source_with_zone,
+    build_word_section_map,
+    zone_for_table,
+)
 
 
 def peek_word_text(path: Path, max_chars: int = 8000) -> str:
@@ -48,7 +63,7 @@ def _table_to_grid(table) -> list[list[str]]:
     return [[c.text.strip() for c in row.cells] for row in table.rows]
 
 
-def extract_word_document(path: Path) -> dict[str, Any]:
+def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Full Word extraction: signals, condition definitions, logic blocks (merged tables),
     paragraph formulas, state transitions, embedded test reference rows.
@@ -69,7 +84,24 @@ def extract_word_document(path: Path) -> dict[str, Any]:
             "footnote_definitions": [],
         }
 
+    cfg = cfg or {}
+    use_section_router = feature_enabled(cfg, "word_section_router", default=True)
+    use_merge_geometry = feature_enabled(cfg, "word_merge_geometry", default=True)
+    use_state_grammar = feature_enabled(cfg, "state_grammar_parser", default=True)
+    use_memory_semantics = feature_enabled(cfg, "memory_semantics_parser", default=True)
+
     src_base = {"file": path.name, "document": path.name}
+    section_map = build_word_section_map(doc) if use_section_router else {}
+    table_grids: list[list[list[str]]] = []
+    merged_cell_evidence: list[dict[str, Any]] = []
+
+    def _source_tbl(table_index: int) -> dict[str, Any]:
+        base = {**src_base, "table": f"table_{table_index + 1}"}
+        if not use_section_router:
+            return base
+        zone = zone_for_table(table_index, section_map)
+        return annotate_source_with_zone(base, zone)
+
     signals: list[dict[str, Any]] = []
     logic_blocks: list[LogicBlock] = []
     two_column_logic_dicts: list[dict[str, Any]] = []
@@ -78,20 +110,52 @@ def extract_word_document(path: Path) -> dict[str, Any]:
     condition_definitions: list[dict[str, Any]] = []
     test_reference_rows: list[dict[str, Any]] = []
     full_text_parts: list[str] = []
+    state_table_payloads: list[dict[str, Any]] = []
 
     header_keywords = ("signal", "name", "interface", "direction", "sender", "receiver", "initial", "fail")
 
     for ti, table in enumerate(doc.tables):
         grid = _table_to_grid(table)
+        if use_merge_geometry:
+            try:
+                merged_cell_evidence.extend(
+                    collect_word_merged_cell_evidence(
+                        table,
+                        path.name,
+                        table_id=f"table_{ti + 1}",
+                    )
+                )
+            except Exception:
+                pass
         if not grid:
             continue
         header = [c.lower() for c in grid[0]]
-        source_tbl = {**src_base, "table": f"table_{ti + 1}"}
+        table_grids.append(grid)
+        source_tbl = _source_tbl(ti)
 
         # Two-column Control | Condition (gates embedded in condition column(s))
         hdr_joined = " ".join(header)
         if "control" in hdr_joined and "condition" in hdr_joined and "logic" not in header:
-            tc_parsed = parse_control_condition_grid(grid, source_tbl, table_id=f"T{ti+1}")
+            state_table_payloads.append({"grid": grid, "source": source_tbl})
+            merge_branch_by_row: dict[int, dict[str, Any]] = {}
+            if use_merge_geometry:
+                try:
+                    cond_indices = [
+                        i
+                        for i, h in enumerate(header)
+                        if "condition" in h or h == "cond" or i > 0
+                    ]
+                    merge_branch_by_row = build_row_branch_groups(
+                        table, ctrl_idx=0, cond_indices=cond_indices[1:] if len(cond_indices) > 1 else cond_indices
+                    )
+                except Exception:
+                    merge_branch_by_row = {}
+            tc_parsed = parse_control_condition_grid(
+                grid,
+                source_tbl,
+                table_id=f"T{ti+1}",
+                merge_branch_by_row=merge_branch_by_row or None,
+            )
             parsed_tc_tables.extend(tc_parsed)
             for pt in tc_parsed:
                 if pt.table_kind == "logic":
@@ -202,12 +266,32 @@ def extract_word_document(path: Path) -> dict[str, Any]:
     )
     diagram_transitions = extract_diagram_transitions(paragraph_lines, path.name)
     embedded_image_analysis = analyze_docx_embedded_images(path)
+    code_definitions: list[dict[str, Any]] = list(para_data.get("code_definitions", []))
+    state_rules: list[dict[str, Any]] = list(para_data.get("state_rules", []))
     for analysis in embedded_image_analysis:
         condition_definitions.extend(analysis.get("condition_definitions", []))
         transitions.extend(analysis.get("transitions", []))
         code_definitions.extend(analysis.get("code_definitions", []))
         state_rules.extend(analysis.get("state_rules", []))
     transitions.extend(diagram_transitions)
+
+    classifier = classify_logic_spec(body_text, table_samples=table_grids)
+    spec_profile = build_spec_profile(
+        file_name=path.name,
+        is_logic_spec=bool(classifier.get("is_logic_spec")),
+        classifier_score=float(classifier.get("score") or 0.0),
+        classifier_signals=list(classifier.get("signals") or []),
+        section_zones=list(section_map.get("sections") or []) if use_section_router else [],
+    )
+
+    state_machines: list[dict[str, Any]] = []
+    if use_state_grammar:
+        state_machines.extend(parse_state_blocks_from_paragraphs(paragraph_lines, src_base))
+        state_machines.extend(parse_state_blocks_from_tables(state_table_payloads))
+
+    retention_rules: list[dict[str, Any]] = []
+    if use_memory_semantics:
+        retention_rules = parse_retention_rules(paragraph_lines, src_base)
 
     return {
         "signals": signals,
@@ -218,11 +302,16 @@ def extract_word_document(path: Path) -> dict[str, Any]:
         "two_column_tables": tables_to_dicts(parsed_tc_tables),
         "alias_map": alias_map,
         "footnote_definitions": footnotes,
-        "code_definitions": para_data.get("code_definitions", []),
-        "state_rules": para_data.get("state_rules", []),
+        "code_definitions": code_definitions,
+        "state_rules": state_rules,
         "diagram_transitions": diagram_transitions,
         "embedded_image_analysis": embedded_image_analysis,
         "full_text_sample": body_text[:4000],
+        "spec_profile": spec_profile,
+        "word_section_map": section_map if use_section_router else {},
+        "merged_cell_evidence": merged_cell_evidence,
+        "state_machines": state_machines,
+        "retention_rules": retention_rules,
     }
 
 
@@ -244,40 +333,7 @@ def _block_to_dict(b: LogicBlock) -> dict[str, Any]:
 
 
 def _extract_signal_rows_from_grid(grid: list[list[str]], source: dict[str, Any]) -> list[dict[str, Any]]:
-    signals: list[dict[str, Any]] = []
-    if not grid:
-        return signals
-    header = [c.lower() for c in grid[0]]
-
-    def col(*keys: str) -> int | None:
-        for i, h in enumerate(header):
-            if any(k in h for k in keys):
-                return i
-        return None
-
-    i_name = col("signal", "name", "sig")
-    if i_name is None:
-        i_name = 0
-    i_desc = col("description", "desc")
-    for ri, cells in enumerate(grid[1:101], start=2):
-        if not any(cells):
-            continue
-        name = cells[i_name] if i_name < len(cells) else ""
-        if not name or len(name) > 80:
-            continue
-        desc = cells[i_desc] if i_desc is not None and i_desc < len(cells) else ""
-        signals.append(
-            {
-                "name": name,
-                "description": desc,
-                "direction": "unknown",
-                "values": [],
-                "source": {**source, "row": str(ri)},
-                "confidence": "medium",
-                "review_required": True,
-            }
-        )
-    return signals
+    return parse_signal_grid(grid, source)
 
 
 def extract_word_signals(path: Path) -> list[dict[str, Any]]:

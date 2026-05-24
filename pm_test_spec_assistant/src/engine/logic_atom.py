@@ -5,10 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from src.engine.logic_keywords import parse_edge_event
+from src.engine.memory_semantics_parser import classify_value_domain
 from src.parsers.two_column_table_parser import FOOTNOTE_RE
 
 _COMPARATOR_RE = re.compile(
-    r"^(?P<neg>NOT\s+)?(?P<sig>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<op>=|==|>=|<=|>|<)\s*(?P<val>.+)$",
+    r"^(?P<neg>NOT\s+)?(?P<sig>.+?)\s*(?P<op>=|==|>=|<=|>|<)\s*(?P<val>.+)$",
     re.I,
 )
 _SIGNAL_ONLY_RE = re.compile(r"^(?P<neg>NOT\s+)?(?P<sig>[A-Za-z_][A-Za-z0-9_]*)\s*$", re.I)
@@ -42,6 +44,7 @@ def parse_token_to_atom(token: str, *, source: dict[str, Any] | None = None) -> 
             raw_text=raw,
             source=source,
             resolution="resolved" if val and not footnote_refs else ("needs_llm" if footnote_refs else "resolved"),
+            value_domain=classify_value_domain(val) if val else "literal",
         )
 
     m2 = _SIGNAL_ONLY_RE.match(clean)
@@ -82,8 +85,9 @@ def _atom(
     raw_text: str,
     source: dict[str, Any] | None,
     resolution: str,
+    value_domain: str = "literal",
 ) -> dict[str, Any]:
-    return {
+    out = {
         "signal": signal,
         "operator": operator,
         "value": value,
@@ -93,6 +97,9 @@ def _atom(
         "source": source or {},
         "resolution": resolution,
     }
+    if value_domain != "literal":
+        out["value_domain"] = value_domain
+    return out
 
 
 def _normalize_footnote_ref(ref: str) -> str:
@@ -124,6 +131,25 @@ def _attach_atom_to_condition(node: dict[str, Any], *, negate: bool = False) -> 
     if node.get("atom"):
         return
     token = str(node.get("name") or node.get("raw_text") or "")
+    edge = parse_edge_event(token)
+    if edge:
+        node["type"] = "edge_event"
+        node["atom_kind"] = "edge_event"
+        node["from_state"] = edge.get("from_state", "")
+        node["to_state"] = edge.get("to_state", "")
+        node["raw_text"] = token
+        node["atom"] = {
+            "signal": edge.get("from_state") or token[:32],
+            "operator": "edge",
+            "value": edge.get("to_state"),
+            "negated": negate,
+            "footnote_refs": [],
+            "raw_text": token,
+            "source": node.get("source") or {},
+            "resolution": "resolved",
+            "atom_kind": "edge_event",
+        }
+        return
     atom = parse_token_to_atom(token, source=node.get("source"))
     _merge_node_footnotes(atom, node)
     if negate:
@@ -135,10 +161,21 @@ def _attach_atom_to_condition(node: dict[str, Any], *, negate: bool = False) -> 
 
 
 def enrich_tree_with_atoms(tree: dict[str, Any]) -> dict[str, Any]:
-    """Walk AST and attach `atom` on each condition node."""
+    """Walk AST and attach typed atoms on condition / edge_event nodes."""
+    return _enrich_tree_with_atoms_impl(tree)
+
+
+def enrich_table_ast_with_atoms(tree: dict[str, Any]) -> dict[str, Any]:
+    """Post-pass for table-derived AST leaves (edge events, signal conditions)."""
+    return enrich_tree_with_atoms(tree)
+
+
+def _enrich_tree_with_atoms_impl(tree: dict[str, Any]) -> dict[str, Any]:
 
     def walk(node: dict[str, Any]) -> None:
         if node.get("type") == "condition":
+            _attach_atom_to_condition(node)
+        elif node.get("type") == "edge_event" and not node.get("atom"):
             _attach_atom_to_condition(node)
         elif node.get("type") == "NOT":
             for ch in node.get("children") or []:
@@ -156,7 +193,7 @@ def collect_atoms_from_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     def walk(node: dict[str, Any]) -> None:
-        if node.get("type") == "condition" and node.get("atom"):
+        if (node.get("type") in ("condition", "edge_event")) and node.get("atom"):
             out.append(node["atom"])
         for ch in node.get("children") or []:
             if isinstance(ch, dict):

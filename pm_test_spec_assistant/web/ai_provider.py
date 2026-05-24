@@ -6,6 +6,8 @@ from typing import Any
 
 from src.engine.testcase_reconciliation import build_reconciliation_plan
 from web import m365_auth
+from web.knowledge_patch_validation import validate_knowledge_patches
+from web.knowledge_reconciliation import store_pending_knowledge_apply
 from web.knowledge_validation import apply_patches_with_validation, dedupe_only
 from web.copilot_bridge import apply_knowledge_via_copilot, probe_copilot_cli
 from web.llm_assist import (
@@ -20,7 +22,7 @@ from web.llm_assist import (
     candidates_for_knowledge_apply,
 )
 from web.m365_brief import build_copilot_brief, parse_knowledge_patches_payload
-from web.m365_copilot import apply_knowledge_via_m365
+from web.m365_copilot import M365CopilotNotEntitledError, apply_knowledge_via_m365
 
 
 def _assist_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -28,7 +30,7 @@ def _assist_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def default_provider(cfg: dict[str, Any]) -> str:
-    return str(_assist_cfg(cfg).get("default_provider") or "m365")
+    return str(_assist_cfg(cfg).get("default_provider") or "ollama")
 
 
 def require_m365_login(cfg: dict[str, Any]) -> bool:
@@ -65,36 +67,47 @@ def normalize_provider_name(name: str) -> str:
     return "auto"
 
 
+def _m365_usable(cfg: dict[str, Any]) -> bool:
+    """True only when the M365 session is ready AND the account can call the Copilot Chat API.
+
+    Personal (MSA) accounts and work accounts without a Microsoft 365 Copilot
+    license are signed in fine but the Graph endpoint returns 400/403, so we
+    skip the provider from the auto chain to avoid wasting a request.
+    """
+    if not m365_auth.is_api_ready(cfg):
+        return False
+    return m365_auth.is_copilot_chat_entitled()
+
+
+def _ollama_usable(cfg: dict[str, Any]) -> bool:
+    return bool(llm_enabled_for_assist(cfg) and ollama_status(cfg).get("reachable"))
+
+
 def resolve_knowledge_provider_chain(cfg: dict[str, Any], requested: str = "auto") -> list[str]:
-    """Return ordered provider ids to try for knowledge apply."""
+    """Return ordered provider ids to try for knowledge apply.
+
+    Auto order: **Ollama → M365 Copilot → GitHub Copilot CLI**.
+    """
     req = normalize_provider_name(requested)
     if req != "auto":
         return [req]
 
     chain: list[str] = []
-    default = default_provider(cfg)
-    if default == "m365" and m365_auth.is_api_ready(cfg):
-        chain.append("m365")
-    elif default == "copilot" and copilot_cli_ready(cfg):
-        chain.append("copilot")
-    elif default == "ollama" and llm_enabled_for_assist(cfg) and ollama_status(cfg).get("reachable"):
+    if _ollama_usable(cfg):
         chain.append("ollama")
-
-    if m365_auth.is_api_ready(cfg) and "m365" not in chain:
+    if _m365_usable(cfg):
         chain.append("m365")
-    if copilot_cli_ready(cfg) and "copilot" not in chain:
+    if copilot_cli_ready(cfg):
         chain.append("copilot")
-    if (
-        allow_ollama_fallback(cfg)
-        and llm_enabled_for_assist(cfg)
-        and ollama_status(cfg).get("reachable")
-        and "ollama" not in chain
-    ):
-        chain.append("ollama")
 
     if not chain:
-        if require_m365_login(cfg):
+        default = default_provider(cfg)
+        if default == "ollama" and _ollama_usable(cfg):
+            chain.append("ollama")
+        elif default == "m365" and _m365_usable(cfg):
             chain.append("m365")
+        elif default == "copilot" and copilot_cli_ready(cfg):
+            chain.append("copilot")
         elif default in ("m365", "copilot", "ollama"):
             chain.append(default)
     return chain
@@ -106,6 +119,7 @@ def apply_knowledge_copilot(
     *,
     logic_id: str,
     engineer_note: str,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
     """Apply knowledge via GitHub Copilot CLI."""
 
@@ -131,31 +145,19 @@ def apply_knowledge_copilot(
         retry = run_apply(failures)
         return retry.get("patches") or [] if retry.get("ok") else []
 
-    result = apply_patches_with_validation(
+    result = _finalize_knowledge_patches(
         bundle,
         logic_id,
         patches,
+        provider="copilot",
+        cfg=cfg,
         source="copilot_cli_knowledge",
-        validation_retries=validation_retries(cfg),
+        preview_only=preview_only,
+        definition_updates=out.get("definition_updates") or [],
         retry_infer=retry_copilot if validation_retries(cfg) > 0 else None,
     )
-    ai = bundle.setdefault("ai_assists", {})
-    reconciliation = build_reconciliation_plan(bundle, logic_id, patches, provider="copilot")
-    ai.setdefault("knowledge_apply", {})[logic_id] = {
-        "provider": "copilot",
-        "patches": patches[:40],
-        "definition_updates": out.get("definition_updates") or [],
-        "reconciliation": reconciliation,
-        **result,
-    }
-    return {
-        "ok": True,
-        "provider": "copilot",
-        "candidates_updated": result.get("candidates_updated", 0),
-        "failures_remaining": result.get("failures_remaining", 0),
-        "retries_used": result.get("retries_used", 0),
-        "definition_updates": len(out.get("definition_updates") or []),
-    }
+    result["definition_updates"] = len(out.get("definition_updates") or [])
+    return result
 
 
 def _apply_knowledge_with_provider(
@@ -165,13 +167,20 @@ def _apply_knowledge_with_provider(
     logic_id: str,
     engineer_note: str,
     provider: str,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
     if provider == "m365":
-        return apply_knowledge_m365(bundle, cfg, logic_id=logic_id, engineer_note=engineer_note)
+        return apply_knowledge_m365(
+            bundle, cfg, logic_id=logic_id, engineer_note=engineer_note, preview_only=preview_only
+        )
     if provider == "copilot":
-        return apply_knowledge_copilot(bundle, cfg, logic_id=logic_id, engineer_note=engineer_note)
+        return apply_knowledge_copilot(
+            bundle, cfg, logic_id=logic_id, engineer_note=engineer_note, preview_only=preview_only
+        )
     if provider == "ollama":
-        return apply_knowledge_ollama_batched(bundle, cfg, logic_id=logic_id, engineer_note=engineer_note)
+        return apply_knowledge_ollama_batched(
+            bundle, cfg, logic_id=logic_id, engineer_note=engineer_note, preview_only=preview_only
+        )
     return {"ok": False, "provider": provider, "error": f"Unknown provider: {provider}", "candidates_updated": 0}
 
 
@@ -186,6 +195,80 @@ def _logic_expression(bundle: dict[str, Any], logic_id: str) -> str:
         if lb.get("id") == logic_id:
             return str(lb.get("raw_expression") or lb.get("expression") or "")
     return ""
+
+
+def _finalize_knowledge_patches(
+    bundle: dict[str, Any],
+    logic_id: str,
+    patches: list[dict[str, Any]],
+    *,
+    provider: str,
+    cfg: dict[str, Any],
+    source: str,
+    preview_only: bool = True,
+    definition_updates: list[dict[str, Any]] | None = None,
+    retry_infer=None,
+    extra_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Store pending preview or apply patches immediately after validation."""
+    schema = validate_knowledge_patches(patches, bundle, logic_id, cfg)
+    if preview_only:
+        if not schema.get("ok"):
+            return {
+                "ok": False,
+                "preview": False,
+                "provider": provider,
+                "schema_errors": schema.get("errors") or [],
+                "schema_warnings": schema.get("warnings") or [],
+                "error": "; ".join(schema.get("errors") or []) or "Patch validation failed.",
+                "candidates_updated": 0,
+            }
+        out = store_pending_knowledge_apply(
+            bundle,
+            logic_id,
+            patches,
+            provider=provider,
+            source=source,
+            definition_updates=definition_updates,
+            cfg=cfg,
+            schema_validation=schema,
+        )
+        if extra_meta:
+            entry = (bundle.get("ai_assists") or {}).get("knowledge_apply", {}).get(logic_id) or {}
+            entry.update(extra_meta)
+        return out
+
+    result = apply_patches_with_validation(
+        bundle,
+        logic_id,
+        patches,
+        source=source,
+        validation_retries=validation_retries(cfg),
+        retry_infer=retry_infer if validation_retries(cfg) > 0 else None,
+    )
+    ai = bundle.setdefault("ai_assists", {})
+    reconciliation = build_reconciliation_plan(bundle, logic_id, patches, provider=provider)
+    entry = {
+        "provider": provider,
+        "source": source,
+        "status": "applied",
+        "patches": patches[:80],
+        "reconciliation": reconciliation,
+        "definition_updates": definition_updates or [],
+        **result,
+    }
+    if extra_meta:
+        entry.update(extra_meta)
+    ai.setdefault("knowledge_apply", {})[logic_id] = entry
+    return {
+        "ok": True,
+        "preview": False,
+        "provider": provider,
+        "candidates_updated": result.get("candidates_updated", 0),
+        "failures_remaining": result.get("failures_remaining", 0),
+        "retries_used": result.get("retries_used", 0),
+        "reconciliation": reconciliation,
+    }
 
 
 def infer_knowledge_patches_ollama(
@@ -227,6 +310,7 @@ def apply_knowledge_ollama_batched(
     *,
     logic_id: str,
     engineer_note: str,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
     """Deterministic orchestrator: batch Ollama calls, then validation loop with one retry."""
     all_candidates = candidates_for_knowledge_apply(bundle, logic_id, limit=200)
@@ -266,32 +350,19 @@ def apply_knowledge_ollama_batched(
         )
         return out.get("patches") or [] if out.get("ok") else []
 
-    result = apply_patches_with_validation(
+    result = _finalize_knowledge_patches(
         bundle,
         logic_id,
         all_patches,
+        provider="ollama",
+        cfg=cfg,
         source="ollama_knowledge",
-        validation_retries=validation_retries(cfg),
+        preview_only=preview_only,
         retry_infer=retry_infer if validation_retries(cfg) > 0 else None,
+        extra_meta={"model": model, "batches": len(batches)},
     )
-    ai = bundle.setdefault("ai_assists", {})
-    reconciliation = build_reconciliation_plan(bundle, logic_id, all_patches, provider="ollama")
-    ai.setdefault("knowledge_apply", {})[logic_id] = {
-        "provider": "ollama",
-        "model": model,
-        "patches": all_patches[:40],
-        "reconciliation": reconciliation,
-        "batches": len(batches),
-        **result,
-    }
-    return {
-        "ok": True,
-        "provider": "ollama",
-        "model": model,
-        "candidates_updated": result.get("candidates_updated", 0),
-        "failures_remaining": result.get("failures_remaining", 0),
-        "retries_used": result.get("retries_used", 0),
-    }
+    result["model"] = model
+    return result
 
 
 def apply_knowledge_m365(
@@ -300,6 +371,7 @@ def apply_knowledge_m365(
     *,
     logic_id: str,
     engineer_note: str,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
     """Apply knowledge strictly via signed-in M365 Copilot Chat API."""
     if not m365_auth.is_api_ready(cfg):
@@ -307,17 +379,47 @@ def apply_knowledge_m365(
             "ok": False,
             "provider": "m365",
             "error": "Sign in to Microsoft 365 Copilot first (Sign in M365 button).",
+            "reason": "not_signed_in",
+            "candidates_updated": 0,
+        }
+    if not m365_auth.is_copilot_chat_entitled():
+        # Account is signed in but cannot reach Microsoft.CopilotChat (MSA or
+        # missing Microsoft 365 Copilot license). Return a structured error
+        # so the auto chain continues with the next provider and the UI shows
+        # the activation guide hint instead of a stack trace.
+        return {
+            "ok": False,
+            "provider": "m365",
+            "error": (
+                "Microsoft 365 Copilot Chat API is not available for this account. "
+                "See docs/M365_COPILOT_ACTIVATION_GUIDE.md."
+            ),
+            "reason": "not_entitled",
+            "activation_guide": "docs/M365_COPILOT_ACTIVATION_GUIDE.md",
             "candidates_updated": 0,
         }
 
     def run_apply(failures: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        return apply_knowledge_via_m365(
-            bundle,
-            cfg,
-            logic_id=logic_id,
-            engineer_note=engineer_note,
-            failure_context=failures,
-        )
+        try:
+            return apply_knowledge_via_m365(
+                bundle,
+                cfg,
+                logic_id=logic_id,
+                engineer_note=engineer_note,
+                failure_context=failures,
+            )
+        except M365CopilotNotEntitledError as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "reason": "not_entitled",
+                "not_entitled_kind": exc.reason,
+                "graph_status": exc.status_code,
+                "graph_body": exc.raw_body,
+                "activation_guide": "docs/M365_COPILOT_ACTIVATION_GUIDE.md",
+            }
+        except (RuntimeError, ValueError, PermissionError) as exc:
+            return {"ok": False, "error": str(exc) or "M365 Copilot request failed"}
 
     out = run_apply()
     if not out.get("ok"):
@@ -325,6 +427,9 @@ def apply_knowledge_m365(
             "ok": False,
             "provider": "m365",
             "error": out.get("error") or "M365 Copilot request failed",
+            "reason": out.get("reason"),
+            "not_entitled_kind": out.get("not_entitled_kind"),
+            "activation_guide": out.get("activation_guide"),
             "candidates_updated": 0,
         }
     patches = out.get("patches") or []
@@ -333,31 +438,19 @@ def apply_knowledge_m365(
         retry = run_apply(failures)
         return retry.get("patches") or [] if retry.get("ok") else []
 
-    result = apply_patches_with_validation(
+    result = _finalize_knowledge_patches(
         bundle,
         logic_id,
         patches,
+        provider="m365",
+        cfg=cfg,
         source="m365_copilot",
-        validation_retries=validation_retries(cfg),
+        preview_only=preview_only,
+        definition_updates=out.get("definition_updates") or [],
         retry_infer=retry_m365 if validation_retries(cfg) > 0 else None,
     )
-    ai = bundle.setdefault("ai_assists", {})
-    reconciliation = build_reconciliation_plan(bundle, logic_id, patches, provider="m365")
-    ai.setdefault("knowledge_apply", {})[logic_id] = {
-        "provider": "m365",
-        "patches": patches[:40],
-        "definition_updates": out.get("definition_updates") or [],
-        "reconciliation": reconciliation,
-        **result,
-    }
-    return {
-        "ok": True,
-        "provider": "m365",
-        "candidates_updated": result.get("candidates_updated", 0),
-        "failures_remaining": result.get("failures_remaining", 0),
-        "retries_used": result.get("retries_used", 0),
-        "definition_updates": len(out.get("definition_updates") or []),
-    }
+    result["definition_updates"] = len(out.get("definition_updates") or [])
+    return result
 
 
 def apply_knowledge(
@@ -368,9 +461,30 @@ def apply_knowledge(
     *,
     force_ollama: bool = False,
     provider: str = "auto",
+    compile_constraints_first: bool = True,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
-    """Apply engineer knowledge via selected provider (auto tries M365 → Copilot → Ollama)."""
+    """Apply engineer knowledge: compile accepted constraints, then AI chain (Ollama → M365 → GitHub)."""
     engineer_note = (note or "").strip()
+    if not engineer_note and not compile_constraints_first:
+        deduped = dedupe_only(bundle, logic_id)
+        return {
+            "provider": "none",
+            "candidates_updated": deduped.get("candidates_updated", 0),
+            "failures_remaining": deduped.get("failures_remaining", 0),
+        }
+
+    if compile_constraints_first:
+        from src.engine.structured_overlay import accepted_constraints, get_overlay
+        from web.structured_knowledge import compile_accepted_constraints
+
+        overlay = get_overlay(bundle, logic_id)
+        if accepted_constraints(overlay):
+            compiled = compile_accepted_constraints(bundle, logic_id, cfg)
+            if compiled.get("ok"):
+                compiled["providers_tried"] = ["constraint_compiler"]
+                return compiled
+
     if not engineer_note:
         deduped = dedupe_only(bundle, logic_id)
         return {
@@ -381,7 +495,9 @@ def apply_knowledge(
 
     if force_ollama and allow_ollama_fallback(cfg) and llm_enabled_for_assist(cfg):
         if ollama_status(cfg).get("reachable"):
-            return apply_knowledge_ollama_batched(bundle, cfg, logic_id=logic_id, engineer_note=engineer_note)
+            return apply_knowledge_ollama_batched(
+                bundle, cfg, logic_id=logic_id, engineer_note=engineer_note, preview_only=preview_only
+            )
         return {
             "ok": False,
             "provider": "ollama",
@@ -394,18 +510,42 @@ def apply_knowledge(
     last_out: dict[str, Any] = {}
     for prov in chain:
         last_out = _apply_knowledge_with_provider(
-            bundle, cfg, logic_id=logic_id, engineer_note=engineer_note, provider=prov
+            bundle,
+            cfg,
+            logic_id=logic_id,
+            engineer_note=engineer_note,
+            provider=prov,
+            preview_only=preview_only,
         )
         if last_out.get("ok"):
             if len(chain) > 1 or provider == "auto":
                 last_out["providers_tried"] = [a["provider"] for a in attempts] + [prov]
             return last_out
-        attempts.append({"provider": prov, "error": last_out.get("error")})
+        attempts.append(
+            {
+                "provider": prov,
+                "error": last_out.get("error"),
+                "reason": last_out.get("reason"),
+            }
+        )
 
     deduped = dedupe_only(bundle, logic_id)
     err = last_out.get("error") if last_out else "No AI provider available."
     if attempts and provider == "auto":
         err = "; ".join(f"{a['provider']}: {a['error']}" for a in attempts if a.get("error")) or err
+    activation_guide = ""
+    for entry in attempts:
+        if entry.get("provider") == "m365" and entry.get("reason") == "not_entitled":
+            activation_guide = "docs/M365_COPILOT_ACTIVATION_GUIDE.md"
+            break
+    if not activation_guide and last_out.get("activation_guide"):
+        activation_guide = last_out["activation_guide"]
+    hint = ""
+    if activation_guide:
+        hint = (
+            "M365 Copilot Chat API is not entitled for this account. "
+            "See docs/M365_COPILOT_ACTIVATION_GUIDE.md, or use the 'Paste from Copilot Web' button."
+        )
     return {
         "ok": False,
         "provider": last_out.get("provider") or (chain[0] if chain else "none"),
@@ -413,6 +553,8 @@ def apply_knowledge(
         "failures_remaining": deduped.get("failures_remaining", 0),
         "error": err,
         "providers_tried": [a["provider"] for a in attempts],
+        "activation_guide": activation_guide,
+        "hint": hint,
     }
 
 
@@ -421,17 +563,30 @@ def import_knowledge_patches(
     logic_id: str,
     raw_json: str,
     cfg: dict[str, Any],
+    *,
+    preview_only: bool = True,
 ) -> dict[str, Any]:
     """Apply pasted M365 Copilot JSON with validation loop."""
     patches = parse_knowledge_patches_payload(raw_json)
 
     def retry_infer(failures: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if m365_auth.is_api_ready(cfg):
+        note = str((bundle.get("ai_assists") or {}).get("engineer_notes", {}).get(logic_id) or "")
+        if _ollama_usable(cfg):
+            out = infer_knowledge_patches_ollama(
+                bundle,
+                cfg,
+                logic_id=logic_id,
+                engineer_note=note,
+                failure_context=failures,
+            )
+            if out.get("ok"):
+                return out.get("patches") or []
+        if m365_auth.is_api_ready(cfg) and m365_auth.is_copilot_chat_entitled():
             retry = apply_knowledge_via_m365(
                 bundle,
                 cfg,
                 logic_id=logic_id,
-                engineer_note=str((bundle.get("ai_assists") or {}).get("engineer_notes", {}).get(logic_id) or ""),
+                engineer_note=note,
                 failure_context=failures,
             )
             if retry.get("ok"):
@@ -440,46 +595,28 @@ def import_knowledge_patches(
             retry = apply_knowledge_via_copilot(
                 bundle,
                 logic_id=logic_id,
-                engineer_note=str((bundle.get("ai_assists") or {}).get("engineer_notes", {}).get(logic_id) or ""),
+                engineer_note=note,
                 failure_context=failures,
             )
             if retry.get("ok"):
                 return retry.get("patches") or []
-        if allow_ollama_fallback(cfg) and llm_enabled_for_assist(cfg):
-            out = infer_knowledge_patches_ollama(
-                bundle,
-                cfg,
-                logic_id=logic_id,
-                engineer_note=str((bundle.get("ai_assists") or {}).get("engineer_notes", {}).get(logic_id) or ""),
-                failure_context=failures,
-            )
-            return out.get("patches") or [] if out.get("ok") else []
         return []
 
-    result = apply_patches_with_validation(
+    result = _finalize_knowledge_patches(
         bundle,
         logic_id,
         patches,
-        source="m365_copilot",
-        validation_retries=validation_retries(cfg),
+        provider="m365_manual",
+        cfg=cfg,
+        source="m365_manual",
+        preview_only=preview_only,
         retry_infer=retry_infer if validation_retries(cfg) > 0 else None,
     )
-    ai = bundle.setdefault("ai_assists", {})
-    reconciliation = build_reconciliation_plan(bundle, logic_id, patches, provider="m365_manual")
-    ai.setdefault("knowledge_apply", {})[logic_id] = {
-        "provider": "m365_manual",
-        "patches": patches[:40],
-        "reconciliation": reconciliation,
-        **result,
-    }
-    return {
-        "ok": True,
-        "provider": "m365_manual",
-        "candidates_updated": result.get("candidates_updated", 0),
-        "failures_remaining": result.get("failures_remaining", 0),
-        "retries_used": result.get("retries_used", 0),
-        "patches_received": len(patches),
-    }
+    result["patches_received"] = len(patches)
+    if schema := result.get("schema_validation"):
+        result["schema_errors"] = schema.get("errors") or []
+        result["schema_warnings"] = schema.get("warnings") or []
+    return result
 
 
 def export_m365_brief(bundle: dict[str, Any], logic_id: str, note: str) -> dict[str, Any]:

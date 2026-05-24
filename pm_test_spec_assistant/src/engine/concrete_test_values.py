@@ -5,6 +5,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from src.engine.coverage_intent import path_coverage_intent
+from src.engine.given_value_resolver import (
+    definition_to_concrete_value,
+    is_discrete_guard_signal,
+    normalize_discrete_value,
+    sanitize_given_item,
+)
+
 _COMPARISON_RE = re.compile(
     r"(?P<lhs>[A-Za-z_][A-Za-z0-9_.]*)\s*(?P<op>>=|<=|!=|==|=|>|<)\s*(?P<rhs>[^\n;]+)",
     re.I,
@@ -27,6 +35,44 @@ _STATE_REACH_RE = re.compile(r"reach state.*?consistent with\s+([A-Za-z0-9_]+)",
 def _clip_line(line: str) -> str:
     text = str(line or "").strip()
     return text
+
+
+def _is_spurious_boundary_value(value: str) -> bool:
+    val = str(value or "").strip()
+    m = re.match(r"^(\d+)\.(\d+)(?:\s|$)", val)
+    if not m:
+        return False
+    return m.group(2) in ("01", "001") or (len(m.group(2)) == 2 and m.group(2).startswith("0"))
+
+
+def dedupe_expected_input_lines(lines: list[str]) -> list[str]:
+    """One Given line per signal; preserve Precondition/When order first."""
+    by_signal: dict[str, str] = {}
+    other: list[str] = []
+    for line in lines:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        m = re.match(r"^Given:\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", text, re.I)
+        if m:
+            sig = m.group(1).upper()
+            prev = by_signal.get(sig)
+            new_val = m.group(2).strip()
+            if prev and is_discrete_guard_signal(sig):
+                prev_val = re.sub(r"^Given:\s*[^=]+=\s*", "", prev, flags=re.I).strip()
+                if _is_spurious_boundary_value(new_val) and not _is_spurious_boundary_value(prev_val):
+                    continue
+                if _is_spurious_boundary_value(prev_val) and not _is_spurious_boundary_value(new_val):
+                    by_signal[sig] = text
+                    continue
+            by_signal[sig] = text
+        else:
+            other.append(text)
+    return other + [by_signal[k] for k in by_signal]
+
+
+def dedupe_expected_input_text(text: str) -> str:
+    return "\n".join(dedupe_expected_input_lines(text.split("\n")))
 
 
 def infer_boundary_value(operator: str, rhs: str) -> str:
@@ -69,10 +115,25 @@ def _is_prose_definition(definition: str) -> bool:
     return len(d) > 40 and " " in d and _PROSE_HINT.search(d)
 
 
+def expand_definition_to_given_lines(definition: str) -> list[str]:
+    """Split composite engineer definitions into concrete Given lines."""
+    lines: list[str] = []
+    for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^,\n]+?)(?=\s+and\s+|\s*,\s*|$)", definition, re.I):
+        sub_term = m.group(1).strip()
+        sub_def = m.group(2).strip()
+        line = definition_to_given_line(sub_term, sub_def)
+        if line:
+            lines.append(line)
+    return lines
+
+
 def definition_to_given_line(term: str, definition: str) -> str | None:
     definition = definition.strip()
     if not definition or _GENERIC_TEXT.search(definition):
         return None
+    concrete = definition_to_concrete_value(term, definition, path_intent="satisfy")
+    if concrete is not None:
+        return f"Given: {term}={concrete}"
     if definition.startswith("="):
         val = definition.lstrip("= ").strip()
         if val and not _is_prose_definition(val):
@@ -86,31 +147,19 @@ def definition_to_given_line(term: str, definition: str) -> str | None:
         ):
             return f"Given: {term}=1"
         return None
-    m = _COMPARISON_RE.search(definition)
-    if m:
-        lhs = m.group("lhs").strip()
-        op = m.group("op")
-        if op == "=":
-            op = "=="
-        rhs = m.group("rhs").strip()
-        val = infer_boundary_value(op, rhs) if op in (">", ">=", "<", "<=", "!=") else rhs.strip()
-        return f"Given: {lhs}={val}"
-    eq = re.match(r"^(.+?)\s*==\s*(.+)$", definition)
-    if eq:
-        return f"Given: {eq.group(1).strip()}={eq.group(2).strip()}"
     if re.fullmatch(r"(TRUE|FALSE|ON|OFF|PASS|0|1)", definition, re.I):
-        return f"Given: {term}={definition.upper()}"
-    if re.match(r"^[-+]?\d", definition):
-        return f"Given: {term}={definition}"
+        return f"Given: {term}={normalize_discrete_value(definition)}"
     if len(definition) <= 48 and " " not in definition.strip():
         return f"Given: {term}={definition}"
     return None
 
 
-def _format_signal_given(item: dict[str, Any]) -> str | None:
+def _format_signal_given(item: dict[str, Any], *, path_intent: str = "satisfy") -> str | None:
+    if not isinstance(item, dict):
+        return None
+    item = sanitize_given_item(item, path_intent=path_intent)
     sig = item.get("signal")
     val = item.get("value")
-    op = item.get("operator")
     if sig is not None and val is not None:
         sig_str = str(sig).strip()
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", sig_str)
@@ -119,8 +168,12 @@ def _format_signal_given(item: dict[str, Any]) -> str | None:
             if not str(val).strip() or str(val).strip() == "1":
                 val = m.group(2).strip()
         rendered = str(val).strip()
-        if op in (">", ">=", "<", "<=") and rendered:
-            rendered = infer_boundary_value(str(op), str(val))
+        if (
+            not is_discrete_guard_signal(sig_str)
+            and str(item.get("operator") or "==") in (">", ">=", "<", "<=")
+            and path_intent == "violate"
+        ):
+            rendered = infer_boundary_value(str(item.get("operator")), str(val))
         return f"Given: {sig_str}={rendered}"
     note = str(item.get("note") or "").strip()
     if note and not _GENERIC_TEXT.search(note):
@@ -237,6 +290,7 @@ def materialize_expected_input(
                     )
     operation = candidate.get("operation") or {}
     control_out = str((candidate.get("traceability") or {}).get("control_name") or "")
+    path_intent = path_coverage_intent(candidate) if logic_block else "satisfy"
     for item in operation.get("given") or []:
         if isinstance(item, dict):
             note = str(item.get("note") or "").strip()
@@ -249,7 +303,7 @@ def materialize_expected_input(
             sig = str(item.get("signal") or "")
             if control_out and sig.upper() == control_out.upper():
                 continue
-            line = _format_signal_given(item)
+            line = _format_signal_given(item, path_intent=path_intent)
             if line:
                 lines.append(line)
     if not logic_block:
@@ -260,18 +314,7 @@ def materialize_expected_input(
     if definition_lookup and not logic_block:
         ignore = {t.split("=")[0].replace("Given:", "").strip() for t in lines if t.startswith("Given:")}
         lines.extend(_lookup_definition_lines(candidate, definition_lookup, ignore_terms=ignore))
-    # De-duplicate by signal (last wins); avoids OK_SHUTOFF=1 and OK_SHUTOFF=10 both showing
-    by_signal: dict[str, str] = {}
-    other: list[str] = []
-    for line in lines:
-        text = line.strip()
-        m = re.match(r"^Given:\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", text, re.I)
-        if m:
-            by_signal[m.group(1).upper()] = text
-        else:
-            other.append(text)
-    unique = other + [by_signal[k] for k in by_signal]
-    return "\n".join(unique)
+    return dedupe_expected_input_text("\n".join(lines))
 
 
 def materialize_expected_output(

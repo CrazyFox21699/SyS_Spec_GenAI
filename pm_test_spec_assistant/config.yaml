@@ -16,21 +16,33 @@ features:
   understanding_gate: true
   document_map: true
   library_map: true
+  word_section_router: true
+  word_merge_geometry: true
+  state_grammar_parser: true
+  formal_logic_ir_v2: true
+  memory_semantics_parser: true
+  excel_annotations: true
 test_generation:
   mode: legacy
   coverage: mcdc
   max_expansion_factor: 32
 deployment:
   mode: local
+  host: 127.0.0.1
+  port: 8765
+team_auth:
+  enabled: true
+  session_hours: 12
+  cookie_secure: false
 security:
-  enabled: false
+  enabled: true
   require_token: false
   max_upload_mb: 50
   rate_limit_per_minute: 120
 export:
   strict: false
 assist:
-  default_provider: m365
+  default_provider: ollama
   require_m365_login: false
   allow_ollama_fallback: true
   validation_retries: 1
@@ -103,3 +115,14 @@ output:
 ui:
   strict_mode: true
   default_input_dir: ../pm_sample_inputs/input
+gtest:
+  fixture_class: PowerModeTest
+  inputs_member: in
+  outputs_member: out
+  state_member: state
+  state_enum: PowerModeState
+  evaluate_fn: EvaluatePowerMode
+  include_header: "#include <gtest/gtest.h>"
+  helpers:
+    set_signal: SetSignal
+    advance_time: RunForMs

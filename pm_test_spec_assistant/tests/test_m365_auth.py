@@ -1,10 +1,18 @@
 """M365 auth configuration resolution."""
 
+import base64
 import json
 import time
 from unittest.mock import MagicMock
 
 from web import m365_auth
+
+
+def _fake_jwt(claims: dict) -> str:
+    """Return a JWT-like string whose payload base64url-decodes to ``claims``."""
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).decode().rstrip("=")
+    return f"{header}.{body}.sig"
 
 
 def test_client_id_from_local_config(tmp_path, monkeypatch) -> None:
@@ -120,3 +128,151 @@ def test_poll_expired_pending(tmp_path, monkeypatch) -> None:
     assert out["status"] == "failed"
     assert "expired" in out["error"].lower()
     assert not pending.exists()
+
+
+def test_decode_jwt_claims_extracts_tid() -> None:
+    token = _fake_jwt({"tid": "abc123", "upn": "user@contoso.com"})
+    claims = m365_auth._decode_jwt_claims(token)
+    assert claims["tid"] == "abc123"
+    assert claims["upn"] == "user@contoso.com"
+
+
+def test_decode_jwt_claims_handles_bad_token() -> None:
+    assert m365_auth._decode_jwt_claims("") == {}
+    assert m365_auth._decode_jwt_claims("not-a-jwt") == {}
+    assert m365_auth._decode_jwt_claims("a.b.c") == {}
+
+
+def test_persist_entitlement_metadata_msa(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
+    monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
+    sess: dict = {"access_token": "work-token"}
+
+    def boom(*a, **k):  # /me/licenseDetails must not be called for MSA tokens
+        raise AssertionError("licenseDetails should not be probed for MSA")
+
+    monkeypatch.setattr(m365_auth.requests, "get", boom)
+    token_payload = {"id_token": _fake_jwt({"tid": m365_auth.MSA_TENANT_ID})}
+    out = m365_auth._persist_entitlement_metadata(sess, token_payload)
+    assert out["is_msa"] is True
+    assert out["has_copilot_license"] is False
+    assert out["copilot_license_checked"] is True
+    assert m365_auth.is_copilot_chat_entitled(out) is False
+
+
+def test_persist_entitlement_metadata_work_with_copilot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
+    monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
+    sess: dict = {"access_token": "work-token"}
+
+    def fake_get(url, headers=None, timeout=15):
+        assert "licenseDetails" in url
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "value": [
+                {"skuPartNumber": "SPB", "servicePlans": []},
+                {"skuPartNumber": "Microsoft_365_Copilot", "servicePlans": []},
+            ]
+        }
+        return resp
+
+    monkeypatch.setattr(m365_auth.requests, "get", fake_get)
+    token_payload = {"id_token": _fake_jwt({"tid": "22222222-2222-2222-2222-222222222222"})}
+    out = m365_auth._persist_entitlement_metadata(sess, token_payload)
+    assert out["is_msa"] is False
+    assert out["has_copilot_license"] is True
+    assert m365_auth.is_copilot_chat_entitled(out) is True
+
+
+def test_persist_entitlement_metadata_work_without_copilot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
+    monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
+    sess: dict = {"access_token": "work-token"}
+
+    def fake_get(url, headers=None, timeout=15):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "value": [
+                {"skuPartNumber": "SPB", "servicePlans": [
+                    {"servicePlanName": "M365_COPILOT_CHAT", "provisioningStatus": "Success"}
+                ]},
+            ]
+        }
+        return resp
+
+    monkeypatch.setattr(m365_auth.requests, "get", fake_get)
+    token_payload = {"id_token": _fake_jwt({"tid": "33333333-3333-3333-3333-333333333333"})}
+    out = m365_auth._persist_entitlement_metadata(sess, token_payload)
+    assert out["is_msa"] is False
+    assert out["has_copilot_license"] is False
+    assert m365_auth.is_copilot_chat_entitled(out) is False
+
+
+def test_status_payload_includes_entitlement_flags(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
+    monkeypatch.setattr(m365_auth, "LOCAL_CONFIG_FILE", tmp_path / "local_config.json")
+    monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(m365_auth, "PENDING_LOGIN_FILE", tmp_path / "pending.json")
+    cfg = {"assist": {"m365": {"client_id": "11111111-1111-1111-1111-111111111111"}}}
+    (tmp_path / "session.json").write_text(
+        json.dumps(
+            {
+                "mode": "api",
+                "access_token": "tok",
+                "expires_at": time.time() + 600,
+                "is_msa": True,
+                "has_copilot_license": False,
+                "copilot_license_checked": True,
+                "tenant_id_from_token": m365_auth.MSA_TENANT_ID,
+                "copilot_license_skus": [],
+                "copilot_license_error": "MSA",
+                "copilot_license_checked_at": m365_auth._now_iso(),
+            }
+        )
+    )
+    st = m365_auth.m365_status(cfg)
+    assert st["api_ready"] is True
+    assert st["is_msa"] is True
+    assert st["copilot_chat_entitled"] is False
+    assert st["not_entitled_reason"] == "msa"
+    assert "Copilot Chat API" in st["entitlement_note"]
+    assert st["activation_guide_url"].endswith("M365_COPILOT_ACTIVATION_GUIDE.md")
+
+
+def test_m365_copilot_not_entitled_classifier() -> None:
+    from web import m365_copilot
+
+    assert (
+        m365_copilot._classify_not_entitled(
+            400,
+            '{"error":{"code":"BadRequest","message":"This API is not supported for MSA accounts ..."}}',
+        )
+        == "msa"
+    )
+    assert (
+        m365_copilot._classify_not_entitled(
+            400,
+            '{"error":{"message":"no addressUrl for Microsoft.CopilotChat,False"}}',
+        )
+        == "msa"
+    )
+    assert (
+        m365_copilot._classify_not_entitled(
+            403,
+            '{"error":{"message":"User is not licensed for Copilot."}}',
+        )
+        == "no_license"
+    )
+    assert m365_copilot._classify_not_entitled(500, "boom") is None
+
+
+def test_m365_session_path_per_user(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "WEB_DATA_ROOT", tmp_path)
+    m365_auth._write_session({"mode": "api", "access_token": "alice-token"}, user_id="alice")
+    session_file = tmp_path / "users" / "alice" / "m365" / "session.json"
+    assert session_file.exists()
+    assert m365_auth._read_session("alice")["access_token"] == "alice-token"
+    assert m365_auth._read_session("bob") == {}
+    assert m365_auth.m365_status(user_id="alice")["mode"] in ("api", "none")

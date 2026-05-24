@@ -182,6 +182,61 @@ def scan_folder_listing(state: dict[str, Any], sub_path: str | None = None) -> d
     }
 
 
+def browse_for_root(path: str | None = None) -> dict[str, Any]:
+    """Browse directories on the server to pick a library root (before root is set)."""
+    if not path:
+        home = Path.home()
+        seeds: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in (Path.cwd(), home, home / "Documents", home / "Desktop"):
+            try:
+                resolved = candidate.expanduser().resolve()
+            except OSError:
+                continue
+            key = str(resolved)
+            if key in seen or not resolved.is_dir():
+                continue
+            if not os.access(resolved, os.R_OK):
+                continue
+            seen.add(key)
+            seeds.append({"name": resolved.name or key, "path": key, "label": key})
+        return {"mode": "pick_root", "cwd": "", "parent": None, "dirs": seeds, "files": []}
+
+    target = _normalize_abs(path)
+    if not target.exists() or not target.is_dir():
+        raise ValueError(f"Folder does not exist: {target}")
+    if not os.access(target, os.R_OK):
+        raise ValueError(f"Folder is not readable: {target}")
+
+    dirs: list[dict[str, Any]] = []
+    file_count = 0
+    for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        if entry.name.startswith("."):
+            continue
+        if entry.is_dir():
+            if os.access(entry, os.R_OK):
+                dirs.append({"name": entry.name, "path": str(entry.resolve())})
+            continue
+        if is_ingestible_file(entry):
+            file_count += 1
+
+    parent = None
+    try:
+        if target != target.parent:
+            parent = str(target.parent)
+    except (ValueError, OSError):
+        parent = None
+
+    return {
+        "mode": "pick_root",
+        "cwd": str(target),
+        "parent": parent,
+        "dirs": dirs,
+        "files": [],
+        "spec_file_count": file_count,
+    }
+
+
 def validate_inside_root(state: dict[str, Any], file_path: str) -> Path:
     root = state.get("root") or ""
     if not root:

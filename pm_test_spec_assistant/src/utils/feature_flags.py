@@ -28,6 +28,12 @@ def app_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "atom_model": bool(features.get("atom_model", False)),
             "understanding_gate": bool(features.get("understanding_gate", False)),
             "evidence_registry": bool(features.get("evidence_registry", True)),
+            "word_section_router": bool(features.get("word_section_router", True)),
+            "word_merge_geometry": bool(features.get("word_merge_geometry", True)),
+            "state_grammar_parser": bool(features.get("state_grammar_parser", True)),
+            "formal_logic_ir_v2": bool(features.get("formal_logic_ir_v2", True)),
+            "excel_annotations": bool(features.get("excel_annotations", True)),
+            "memory_semantics_parser": bool(features.get("memory_semantics_parser", True)),
         },
         "deployment": {
             "mode": str((cfg.get("deployment") or {}).get("mode", "local")),

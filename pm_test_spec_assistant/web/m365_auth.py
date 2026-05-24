@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -12,11 +14,34 @@ from typing import Any
 
 import requests
 
+# Microsoft uses this well-known tenant id for personal Microsoft accounts
+# (outlook.com / hotmail.com / live.com / msn.com / xbox.com / etc.). Any
+# id_token whose ``tid`` claim equals this guid is an MSA — Microsoft 365
+# Copilot Chat Graph API is not available for those accounts.
+MSA_TENANT_ID = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+# License SKUs / service plans that unlock the Microsoft.CopilotChat Graph
+# endpoint we hit from web/m365_copilot.py. The full add-on SKU is
+# ``Microsoft_365_Copilot``; service plan names contain ``M365_COPILOT`` but
+# we explicitly exclude the free ``M365_COPILOT_CHAT`` plan that ships with
+# Business Premium and does NOT expose /copilot/conversations.
+COPILOT_SKU_PARTS = ("Microsoft_365_Copilot", "M365_COPILOT_ENTERPRISE")
+COPILOT_SERVICE_PLAN_PREFIXES = ("M365_COPILOT",)
+COPILOT_FREE_PLAN_NAMES = ("M365_COPILOT_CHAT",)
+
 WEB_DATA_ROOT = Path(__file__).resolve().parent.parent / "web_data"
 M365_DIR = WEB_DATA_ROOT / "m365"
 SESSION_FILE = M365_DIR / "session.json"
 PENDING_LOGIN_FILE = M365_DIR / "pending_login.json"
 LOCAL_CONFIG_FILE = M365_DIR / "local_config.json"
+
+
+def _m365_paths(user_id: str | None = None) -> tuple[Path, Path, Path]:
+    """Return (base_dir, session_file, pending_login_file) for a user or legacy global."""
+    if user_id:
+        base = WEB_DATA_ROOT / "users" / user_id / "m365"
+        return base, base / "session.json", base / "pending_login.json"
+    return M365_DIR, SESSION_FILE, PENDING_LOGIN_FILE
 
 DEFAULT_TENANT = "common"
 GUID_RE = re.compile(
@@ -187,15 +212,16 @@ def save_local_registration(cfg: dict[str, Any], *, client_id: str, tenant_id: s
     return m365_status(cfg)
 
 
-def clear_local_registration(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+def clear_local_registration(cfg: dict[str, Any] | None = None, *, user_id: str | None = None) -> dict[str, Any]:
     """Remove saved client ID / session (fix wrong tenant or wrong app)."""
     if LOCAL_CONFIG_FILE.exists():
         LOCAL_CONFIG_FILE.unlink(missing_ok=True)
-    if SESSION_FILE.exists():
-        SESSION_FILE.unlink(missing_ok=True)
-    if PENDING_LOGIN_FILE.exists():
-        PENDING_LOGIN_FILE.unlink(missing_ok=True)
-    return m365_status(cfg)
+    _, session_file, pending_file = _m365_paths(user_id)
+    if session_file.exists():
+        session_file.unlink(missing_ok=True)
+    if pending_file.exists():
+        pending_file.unlink(missing_ok=True)
+    return m365_status(cfg, user_id=user_id)
 
 
 def _is_explicit_tenant(tenant: str) -> bool:
@@ -223,19 +249,21 @@ def _scopes(cfg: dict[str, Any], *, for_device_login: bool = False) -> str:
     return " ".join(_scope_list(cfg, for_device_login=for_device_login))
 
 
-def _read_session() -> dict[str, Any]:
-    if not SESSION_FILE.exists():
+def _read_session(user_id: str | None = None) -> dict[str, Any]:
+    _, session_file, _ = _m365_paths(user_id)
+    if not session_file.exists():
         return {}
     try:
-        data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+        data = json.loads(session_file.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
 
-def _write_session(data: dict[str, Any]) -> None:
-    M365_DIR.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+def _write_session(data: dict[str, Any], *, user_id: str | None = None) -> None:
+    base, session_file, _ = _m365_paths(user_id)
+    base.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _token_expired(sess: dict[str, Any]) -> bool:
@@ -248,7 +276,12 @@ def _token_expired(sess: dict[str, Any]) -> bool:
         return True
 
 
-def _save_tokens(token_payload: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+def _save_tokens(
+    token_payload: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
     sess = dict(existing or {})
     sess.update(
         {
@@ -259,7 +292,7 @@ def _save_tokens(token_payload: dict[str, Any], *, existing: dict[str, Any] | No
             "connected_at": _now_iso(),
         }
     )
-    _write_session(sess)
+    _write_session(sess, user_id=user_id)
     return sess
 
 
@@ -277,8 +310,193 @@ def _fetch_profile(access_token: str) -> dict[str, Any]:
     return {}
 
 
-def refresh_access_token(cfg: dict[str, Any]) -> dict[str, Any]:
-    sess = _read_session()
+def _decode_jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT payload without verifying the signature.
+
+    We only need a few non-secret claims (``tid``, ``upn``, ``unique_name``)
+    to flag MSA accounts and tenant lookups — Microsoft already validated
+    the token on its end. Returns ``{}`` on any decoding failure.
+    """
+    raw = (token or "").strip()
+    if not raw or raw.count(".") < 2:
+        return {}
+    try:
+        payload = raw.split(".", 2)[1]
+        # JWT uses base64url and may omit padding.
+        padding = "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload + padding).decode("utf-8")
+        claims = json.loads(decoded)
+        return claims if isinstance(claims, dict) else {}
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        return {}
+
+
+def _tenant_id_from_token(payload: dict[str, Any]) -> str:
+    """Pull ``tid`` (tenant id) out of either the id_token or access_token."""
+    for key in ("id_token", "access_token"):
+        token = str(payload.get(key) or "").strip()
+        if not token:
+            continue
+        claims = _decode_jwt_claims(token)
+        tid = str(claims.get("tid") or "").strip()
+        if tid:
+            return tid
+    return ""
+
+
+def _probe_copilot_license(access_token: str) -> dict[str, Any]:
+    """Best-effort probe of /me/licenseDetails for the Microsoft 365 Copilot SKU.
+
+    Returns ``{"checked": bool, "has_license": bool, "skus": [...], "error": str}``
+    so callers can surface a sensible UI hint even when the probe fails.
+    """
+    result: dict[str, Any] = {"checked": False, "has_license": False, "skus": [], "error": ""}
+    if not access_token:
+        result["error"] = "Missing access token"
+        return result
+    try:
+        r = requests.get(
+            "https://graph.microsoft.com/v1.0/me/licenseDetails",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        result["error"] = f"licenseDetails request failed: {exc}"
+        return result
+    if r.status_code == 403:
+        # MSA accounts hit 403 here — they have no organizational license at all.
+        result["checked"] = True
+        result["error"] = "licenseDetails returned 403 (no organizational licenses)."
+        return result
+    if r.status_code != 200:
+        result["error"] = f"licenseDetails HTTP {r.status_code}: {r.text[:200]}"
+        return result
+    try:
+        payload = r.json()
+    except ValueError as exc:
+        result["error"] = f"licenseDetails JSON decode failed: {exc}"
+        return result
+    items = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        result["checked"] = True
+        return result
+    result["checked"] = True
+    skus: list[str] = []
+    has_copilot = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        part = str(item.get("skuPartNumber") or "").strip()
+        if part:
+            skus.append(part)
+        if any(part.lower().startswith(p.lower()) for p in COPILOT_SKU_PARTS):
+            has_copilot = True
+            continue
+        plans = item.get("servicePlans") if isinstance(item.get("servicePlans"), list) else []
+        for plan in plans:
+            if not isinstance(plan, dict):
+                continue
+            name = str(plan.get("servicePlanName") or "").strip().upper()
+            if not name:
+                continue
+            if name in COPILOT_FREE_PLAN_NAMES:
+                continue
+            if any(name.startswith(prefix) for prefix in COPILOT_SERVICE_PLAN_PREFIXES):
+                provisioning = str(plan.get("provisioningStatus") or "").strip().lower()
+                if provisioning in ("", "success", "pendingactivation"):
+                    has_copilot = True
+                    break
+    result["skus"] = skus
+    result["has_license"] = has_copilot
+    return result
+
+
+def _persist_entitlement_metadata(
+    sess: dict[str, Any],
+    token_payload: dict[str, Any],
+    *,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """Decode tenant id, classify MSA, probe Copilot license, write back to session."""
+    access_token = str(sess.get("access_token") or "").strip()
+    tid = _tenant_id_from_token(token_payload) or _tenant_id_from_token(sess)
+    is_msa = tid == MSA_TENANT_ID if tid else False
+    if tid:
+        sess["tenant_id_from_token"] = tid
+    sess["is_msa"] = bool(is_msa)
+    if is_msa:
+        # MSA accounts cannot have an organizational Copilot license; skip the
+        # probe entirely so we do not spend an HTTP round-trip on a guaranteed 403.
+        sess["has_copilot_license"] = False
+        sess["copilot_license_checked"] = True
+        sess["copilot_license_skus"] = []
+        sess["copilot_license_error"] = "MSA account — Copilot Chat API not entitled."
+        sess["copilot_license_checked_at"] = _now_iso()
+        _write_session(sess, user_id=user_id)
+        return sess
+    probe = _probe_copilot_license(access_token)
+    sess["has_copilot_license"] = bool(probe.get("has_license"))
+    sess["copilot_license_checked"] = bool(probe.get("checked"))
+    sess["copilot_license_skus"] = probe.get("skus") or []
+    sess["copilot_license_error"] = probe.get("error") or ""
+    sess["copilot_license_checked_at"] = _now_iso()
+    _write_session(sess, user_id=user_id)
+    return sess
+
+
+def _entitlement_note(sess: dict[str, Any]) -> str:
+    if sess.get("is_msa"):
+        return (
+            "Signed in with a personal Microsoft account. "
+            "Microsoft 365 Copilot Chat API requires a work/school account "
+            "with the Microsoft 365 Copilot add-on license. "
+            "Use GitHub Copilot CLI / Ollama, or open copilot.microsoft.com and paste the reply."
+        )
+    if sess.get("copilot_license_checked") and not sess.get("has_copilot_license"):
+        return (
+            "Work/school account detected, but no Microsoft 365 Copilot license is assigned. "
+            "Ask IT to add the SKU `Microsoft_365_Copilot` (see docs/M365_COPILOT_ACTIVATION_GUIDE.md). "
+            "Falling back to GitHub Copilot CLI / Ollama for now."
+        )
+    if not sess.get("copilot_license_checked"):
+        return (
+            "Could not verify Copilot license (licenseDetails probe unavailable). "
+            "If Resolve with Copilot keeps failing, see docs/M365_COPILOT_ACTIVATION_GUIDE.md."
+        )
+    return ""
+
+
+def _entitlement_check_stale(sess: dict[str, Any], *, max_age_seconds: int = 12 * 3600) -> bool:
+    raw = sess.get("copilot_license_checked_at")
+    if not raw:
+        return True
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    age = (datetime.now(timezone.utc) - when).total_seconds()
+    return age > max_age_seconds
+
+
+def is_copilot_chat_entitled(sess: dict[str, Any] | None = None) -> bool:
+    """True only when the signed-in account is a work/school account WITH the Copilot SKU.
+
+    When the probe could not run (e.g. transient Graph error), we assume the
+    user is entitled so the provider chain still attempts the call. The typed
+    error in m365_copilot.py handles the failure path gracefully.
+    """
+    sess = sess if sess is not None else _read_session()
+    if not sess:
+        return False
+    if sess.get("is_msa"):
+        return False
+    if sess.get("copilot_license_checked") and not sess.get("has_copilot_license"):
+        return False
+    return True
+
+
+def refresh_access_token(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+    sess = _read_session(user_id)
     refresh = str(sess.get("refresh_token") or "").strip()
     if not refresh:
         raise PermissionError("M365 session expired. Sign in again.")
@@ -297,21 +515,26 @@ def refresh_access_token(cfg: dict[str, Any]) -> dict[str, Any]:
     if r.status_code != 200:
         raise PermissionError(f"M365 token refresh failed: {r.text[:300]}")
     payload = r.json()
-    sess = _save_tokens(payload, existing=sess)
+    sess = _save_tokens(payload, existing=sess, user_id=user_id)
     if not sess.get("display_name"):
         prof = _fetch_profile(str(sess.get("access_token") or ""))
         sess["display_name"] = prof.get("displayName") or prof.get("userPrincipalName") or "M365 user"
         sess["user_principal"] = prof.get("userPrincipalName", "")
-        _write_session(sess)
+        _write_session(sess, user_id=user_id)
+    # Re-classify entitlements if we never managed to before; subsequent
+    # refreshes inside the same day reuse cached values to avoid extra Graph
+    # calls.
+    if not sess.get("copilot_license_checked") or _entitlement_check_stale(sess):
+        sess = _persist_entitlement_metadata(sess, payload, user_id=user_id)
     return sess
 
 
-def get_valid_access_token(cfg: dict[str, Any]) -> str:
-    sess = _read_session()
+def get_valid_access_token(cfg: dict[str, Any], *, user_id: str | None = None) -> str:
+    sess = _read_session(user_id)
     if sess.get("mode") != "api" or not sess.get("access_token"):
         raise PermissionError("Sign in to Microsoft 365 Copilot first.")
     if _token_expired(sess):
-        sess = refresh_access_token(cfg)
+        sess = refresh_access_token(cfg, user_id=user_id)
     token = str(sess.get("access_token") or "").strip()
     if not token:
         raise PermissionError("M365 access token missing. Sign in again.")
@@ -326,13 +549,14 @@ def _device_code_request(tenant: str, client_id: str, scope: str) -> requests.Re
     )
 
 
-def cancel_device_login() -> None:
-    if PENDING_LOGIN_FILE.exists():
-        PENDING_LOGIN_FILE.unlink(missing_ok=True)
+def cancel_device_login(*, user_id: str | None = None) -> None:
+    _, _, pending_file = _m365_paths(user_id)
+    if pending_file.exists():
+        pending_file.unlink(missing_ok=True)
 
 
-def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
-    cancel_device_login()
+def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+    cancel_device_login(user_id=user_id)
     client_id = _client_id(cfg)
     scope = _scopes(cfg, for_device_login=True)
     tenant = _tenant_id(cfg)
@@ -362,8 +586,9 @@ def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
         "tenant_used": tenant,
         "scope_used": scope,
     }
-    M365_DIR.mkdir(parents=True, exist_ok=True)
-    PENDING_LOGIN_FILE.write_text(json.dumps(pending, indent=2), encoding="utf-8")
+    base, _, pending_file = _m365_paths(user_id)
+    base.mkdir(parents=True, exist_ok=True)
+    pending_file.write_text(json.dumps(pending, indent=2), encoding="utf-8")
     return {
         "ok": True,
         "user_code": pending.get("user_code"),
@@ -375,17 +600,18 @@ def start_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def poll_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
-    if not PENDING_LOGIN_FILE.exists():
-        sess = _read_session()
+def poll_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+    _, _, pending_file = _m365_paths(user_id)
+    if not pending_file.exists():
+        sess = _read_session(user_id)
         if sess.get("mode") == "api" and sess.get("access_token") and not _token_expired(sess):
-            return {"ok": True, "status": "completed", **m365_status(cfg)}
+            return {"ok": True, "status": "completed", **m365_status(cfg, user_id=user_id)}
         return {"ok": False, "status": "no_pending_login", "error": "Call login/start first."}
-    pending = json.loads(PENDING_LOGIN_FILE.read_text(encoding="utf-8"))
+    pending = json.loads(pending_file.read_text(encoding="utf-8"))
     expires_at = pending.get("expires_at")
     try:
         if expires_at and float(expires_at) < time.time():
-            cancel_device_login()
+            cancel_device_login(user_id=user_id)
             return {
                 "ok": False,
                 "status": "failed",
@@ -423,34 +649,53 @@ def poll_device_login(cfg: dict[str, Any]) -> dict[str, Any]:
     if err == "slow_down":
         return {"ok": False, "status": "pending", "interval": int(body.get("interval", 5))}
     if err in ("expired_token", "authorization_declined", "bad_verification_code"):
-        cancel_device_login()
+        cancel_device_login(user_id=user_id)
     if r.status_code != 200:
         raw_err = str(body.get("error_description") or body.get("error") or r.text[:300])
         return {"ok": False, "status": "failed", "error": _friendly_auth_error(raw_err), "error_raw": raw_err[:500]}
-    PENDING_LOGIN_FILE.unlink(missing_ok=True)
-    sess = _save_tokens(body)
+    pending_file.unlink(missing_ok=True)
+    sess = _save_tokens(body, user_id=user_id)
     prof = _fetch_profile(str(sess.get("access_token") or ""))
     sess["display_name"] = prof.get("displayName") or prof.get("userPrincipalName") or "M365 user"
     sess["user_principal"] = prof.get("userPrincipalName", "")
-    _write_session(sess)
-    return {"ok": True, "status": "completed", **m365_status(cfg)}
+    _write_session(sess, user_id=user_id)
+    sess = _persist_entitlement_metadata(sess, body, user_id=user_id)
+    return {"ok": True, "status": "completed", **m365_status(cfg, user_id=user_id)}
 
 
-def m365_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    sess = _read_session()
+def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    sess = _read_session(user_id)
     mode = str(sess.get("mode") or "")
     api_ready = mode == "api" and bool(sess.get("access_token")) and not _token_expired(sess)
-    if mode == "api" and sess.get("access_token") and _token_expired(sess) and cfg:
+    session_refresh_failed = False
+    session_expired = bool(mode == "api" and sess.get("access_token") and _token_expired(sess))
+    if session_expired and cfg:
         try:
-            refresh_access_token(cfg)
-            sess = _read_session()
+            refresh_access_token(cfg, user_id=user_id)
+            sess = _read_session(user_id)
             api_ready = True
+            session_expired = False
         except (PermissionError, requests.RequestException, ValueError):
             api_ready = False
+            session_refresh_failed = True
     configured = client_id_configured(cfg) if cfg else bool(sess.get("access_token"))
-    pending = PENDING_LOGIN_FILE.exists()
+    _, _, pending_file = _m365_paths(user_id)
+    pending = pending_file.exists()
     local = _read_local_config() if cfg else {}
     resolved_cid = _resolved_client_id(cfg) if cfg else ""
+    is_msa = bool(sess.get("is_msa"))
+    license_checked = bool(sess.get("copilot_license_checked"))
+    has_license = bool(sess.get("has_copilot_license"))
+    copilot_chat_entitled = api_ready and is_copilot_chat_entitled(sess)
+    not_entitled_reason = ""
+    if api_ready and not copilot_chat_entitled:
+        if is_msa:
+            not_entitled_reason = "msa"
+        elif license_checked and not has_license:
+            not_entitled_reason = "no_copilot_license"
+        else:
+            not_entitled_reason = "unknown"
+    entitlement_note = _entitlement_note(sess) if api_ready else ""
     return {
         "connected": api_ready,
         "mode": "api" if api_ready else (mode or "none"),
@@ -458,19 +703,33 @@ def m365_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "display_name": sess.get("display_name"),
         "user_principal": sess.get("user_principal"),
         "api_ready": api_ready,
+        "session_expired": session_expired and not api_ready,
+        "session_refresh_failed": session_refresh_failed,
         "client_id_configured": configured,
         "setup_required": not configured,
         "login_pending": pending,
         "setup_message": SETUP_MESSAGE,
         "tenant_id": _resolved_tenant_id(cfg) if cfg else DEFAULT_TENANT,
+        "tenant_id_from_token": str(sess.get("tenant_id_from_token") or ""),
+        "is_msa": is_msa,
+        "msa_tenant_id": MSA_TENANT_ID,
+        "has_copilot_license": has_license,
+        "copilot_license_checked": license_checked,
+        "copilot_license_skus": list(sess.get("copilot_license_skus") or []),
+        "copilot_license_error": str(sess.get("copilot_license_error") or ""),
+        "copilot_chat_entitled": copilot_chat_entitled,
+        "not_entitled_reason": not_entitled_reason,
+        "entitlement_note": entitlement_note,
         "client_id_preview": f"{resolved_cid[:8]}…" if len(resolved_cid) > 8 else "",
         "local_client_id": str(local.get("client_id") or ""),
         "local_tenant_id": str(local.get("tenant_id") or DEFAULT_TENANT),
         "has_local_config": bool(local.get("client_id")),
         "device_login_url": "https://login.microsoft.com/device",
         "azure_portal_url": "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/applicationsListBlade",
+        "activation_guide_url": "docs/M365_COPILOT_ACTIVATION_GUIDE.md",
         "note": (
-            "Signed in to Microsoft 365 Copilot (Graph API)."
+            entitlement_note
+            or "Signed in to Microsoft 365 Copilot (Graph API)."
             if api_ready
             else SETUP_MESSAGE
             if not configured
@@ -479,20 +738,21 @@ def m365_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
-def disconnect() -> dict[str, Any]:
-    if SESSION_FILE.exists():
-        SESSION_FILE.unlink(missing_ok=True)
-    cancel_device_login()
-    return m365_status()
+def disconnect(*, user_id: str | None = None) -> dict[str, Any]:
+    _, session_file, _ = _m365_paths(user_id)
+    if session_file.exists():
+        session_file.unlink(missing_ok=True)
+    cancel_device_login(user_id=user_id)
+    return m365_status(user_id=user_id)
 
 
-def is_api_ready(cfg: dict[str, Any]) -> bool:
+def is_api_ready(cfg: dict[str, Any], *, user_id: str | None = None) -> bool:
     try:
-        get_valid_access_token(cfg)
+        get_valid_access_token(cfg, user_id=user_id)
         return True
     except (PermissionError, ValueError, requests.RequestException):
         return False
 
 
-def require_api_token(cfg: dict[str, Any]) -> str:
-    return get_valid_access_token(cfg)
+def require_api_token(cfg: dict[str, Any], *, user_id: str | None = None) -> str:
+    return get_valid_access_token(cfg, user_id=user_id)

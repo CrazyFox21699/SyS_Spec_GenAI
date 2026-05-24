@@ -54,11 +54,6 @@ def reconcile_logic_blocks(blocks: list[dict[str, Any]]) -> tuple[list[dict[str,
         if src.get("kind") == "paragraph_formula":
             formulas[b.get("name", "")] = b
 
-    alias = {
-        "SHUT_OFF": "SHUT_OFF_PERMISSION",
-        "SHUTOFF": "SHUT_OFF_PERMISSION",
-    }
-
     for b in blocks:
         rows = b.get("rows") or []
         tw = _table_row_warnings(rows)
@@ -81,11 +76,16 @@ def reconcile_logic_blocks(blocks: list[dict[str, Any]]) -> tuple[list[dict[str,
             continue
 
         name = str(b.get("name", ""))
-        canon_name = alias.get(name.upper(), name)
-        canon = formulas.get(canon_name)
+        canon = formulas.get(name) or formulas.get(name.upper())
+        if not canon:
+            for key, candidate in formulas.items():
+                if str(key).upper() == name.upper():
+                    canon = candidate
+                    break
         if not canon:
             continue
 
+        canon_name = str(canon.get("name") or name)
         b["canonical_ref"] = canon.get("id")
         b_expr = _norm_expr(b.get("raw_expression", ""))
         c_expr = _norm_expr(canon.get("raw_expression", ""))

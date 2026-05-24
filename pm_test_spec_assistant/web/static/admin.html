@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ALEX — Team administration</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=55" />
+  <link rel="stylesheet" href="/static/css/login.css?v=3" />
+</head>
+<body class="admin-console-body">
+  <main class="admin-console" aria-label="Team administration">
+    <header class="admin-console__head">
+      <div>
+        <h1>Team administration</h1>
+        <p class="detail">Manage engineer accounts for this ALEX server. This page is not linked from the main app.</p>
+      </div>
+      <div class="admin-console__actions">
+        <a class="btn secondary" href="/">Back to ALEX</a>
+        <button type="button" class="btn secondary" id="btn-admin-sign-out">Sign out</button>
+      </div>
+    </header>
+    <div id="admin-root">
+      <p class="detail">Loading…</p>
+    </div>
+  </main>
+  <script src="/static/js/admin.js?v=1"></script>
+</body>
+</html>

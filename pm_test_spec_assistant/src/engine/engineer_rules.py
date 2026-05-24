@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.engine.given_value_resolver import sanitize_given_item
+
 
 def dedupe_given_by_signal(given: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep one entry per signal; later items win. Preserve note-only rows."""
@@ -37,10 +39,19 @@ def given_rows_from_patch(rows: list[dict[str, Any]], *, source: str = "ollama_k
         val = row.get("value")
         if val is None:
             continue
-        out.append(
+        clean = sanitize_given_item(
             {
                 "signal": sig,
                 "value": str(val).strip(),
+                "operator": row.get("operator") or "==",
+                "negated": row.get("negated"),
+            },
+            path_intent="satisfy",
+        )
+        out.append(
+            {
+                "signal": sig,
+                "value": clean.get("value"),
                 "operator": "==",
                 "negated": False,
                 "source": source,
@@ -72,7 +83,10 @@ def apply_given_patches_to_bundle(
         patch = by_id.get(cid)
         if patch:
             rows = patch.get("given") if isinstance(patch.get("given"), list) else []
-            op["given"] = given_rows_from_patch(rows, source=source)
+            patch_given = given_rows_from_patch(rows, source=source)
+            existing = list(op.get("given") or [])
+            # Patch rows override matching signals; keep unrelated Given entries.
+            op["given"] = dedupe_given_by_signal(existing + patch_given)
             cand["operation"] = op
             updated += 1
         else:
