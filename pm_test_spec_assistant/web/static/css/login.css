@@ -100,6 +100,16 @@ body {
   font-size: 0.9rem;
 }
 
+.login-server-url {
+  margin: -0.75rem 0 1rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: rgba(30, 136, 229, 0.1);
+  color: var(--jp-navy, #1a237e);
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .login-setup-note {
   margin: 0 0 1rem;
   padding: 0.65rem 0.75rem;

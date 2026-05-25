@@ -18,6 +18,14 @@ def app_config(cfg: dict[str, Any]) -> dict[str, Any]:
     assist = cfg.get("assist") if isinstance(cfg.get("assist"), dict) else {}
     test_gen = cfg.get("test_generation") if isinstance(cfg.get("test_generation"), dict) else {}
     export_cfg = cfg.get("export") if isinstance(cfg.get("export"), dict) else {}
+    dep = cfg.get("deployment") if isinstance(cfg.get("deployment"), dict) else {}
+    team = cfg.get("team_auth") if isinstance(cfg.get("team_auth"), dict) else {}
+    lan_ipv4 = str(dep.get("lan_ipv4") or "").strip()
+    port = int(dep.get("port", 8765))
+    mode = str(dep.get("mode", "local"))
+    public_url = str(dep.get("public_url") or "").strip()
+    if not public_url and lan_ipv4:
+        public_url = f"http://{lan_ipv4}:{port}"
     return {
         "features": {
             "validator": bool(features.get("validator", False)),
@@ -36,7 +44,15 @@ def app_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "memory_semantics_parser": bool(features.get("memory_semantics_parser", True)),
         },
         "deployment": {
-            "mode": str((cfg.get("deployment") or {}).get("mode", "local")),
+            "mode": mode,
+            "host": str(dep.get("host", "127.0.0.1")),
+            "port": port,
+            "lan_ipv4": lan_ipv4,
+            "public_url": public_url,
+            "team_server": mode == "production" and bool(team.get("enabled", False)),
+        },
+        "team_auth": {
+            "enabled": bool(team.get("enabled", False)),
         },
         "llm": {
             "enabled": bool((cfg.get("llm") or {}).get("enabled", False)),

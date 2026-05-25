@@ -1,0 +1,16 @@
+[Unit]
+Description=ALEX web UI (LAN team server)
+After=network.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/opt/alex/SyS_Spec_GenAI/pm_test_spec_assistant
+Environment=PATH=/opt/alex/SyS_Spec_GenAI/pm_test_spec_assistant/.venv/bin:/usr/bin
+ExecStart=/opt/alex/SyS_Spec_GenAI/pm_test_spec_assistant/.venv/bin/python run_web.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

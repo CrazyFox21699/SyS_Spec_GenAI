@@ -1,7 +1,11 @@
+# ALEX — Ubuntu LAN server (copy to config.yaml on the Ubuntu host)
+# Engineer URL: http://10.88.152.11:8765/login
+# Windows clients: Chrome/Edge only — no install on each PC.
+
 product:
   name: ALEX
   display_name: ALEX
-  version: "0.2"
+  version: "0.3"
 project:
   name: alex
   legacy_folder: pm_test_spec_assistant
@@ -27,19 +31,22 @@ test_generation:
   coverage: mcdc
   max_expansion_factor: 32
 deployment:
-  mode: local
-  host: 127.0.0.1
+  mode: production
+  host: 0.0.0.0
   port: 8765
-  # Ubuntu LAN server: copy config.ubuntu.yaml → config.yaml (see scripts/use_ubuntu_config.sh)
+  # Documented LAN address (bind is still 0.0.0.0 on all interfaces)
+  lan_ipv4: 10.88.152.11
+  public_url: http://10.88.152.11:8765
 team_auth:
   enabled: true
   session_hours: 12
+  remember_days: 30
   cookie_secure: false
 security:
   enabled: true
   require_token: false
   max_upload_mb: 50
-  rate_limit_per_minute: 120
+  rate_limit_per_minute: 600
 export:
   strict: false
 assist:
@@ -50,18 +57,16 @@ assist:
   knowledge_batch_size: 15
   orchestrator: deterministic
   ollama:
-    base_url: http://localhost:11434
+    base_url: http://127.0.0.1:11434
     model: qwen2.5:latest
     role: fallback_inference
   m365:
     enabled: true
-    # Azure app registration (Mobile/desktop, public client). IT must grant Graph delegated permissions.
     client_id: ""
     tenant_id: common
     timezone: Asia/Tokyo
   copilot:
-    enabled: true
-    require_preview: true
+    enabled: false
 classification:
   state_name_patterns:
   - ADM\d+_[A-Z0-9_]+
@@ -108,7 +113,7 @@ timing:
 llm:
   enabled: true
   provider: ollama
-  base_url: http://localhost:11434
+  base_url: http://127.0.0.1:11434
   model: qwen2.5:latest
   timeout_seconds: 120
 output:

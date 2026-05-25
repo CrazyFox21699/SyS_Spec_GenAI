@@ -33,12 +33,20 @@ def main() -> int:
     data_root = ROOT / "web_data"
     init_user_db(data_root)
     try:
-        user = create_user(username, password, role=role)
+        from web.team_auth import admin_set_password, get_user_by_username
+
+        existing = get_user_by_username(username)
+        if existing:
+            admin_set_password(username, password)
+            user = existing
+            print(f"Reset password for user '{user.username}' (role '{user.role}').")
+        else:
+            user = create_user(username, password, role=role)
+            print(f"Created user '{user.username}' with role '{user.role}'.")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Created user '{user.username}' with role '{user.role}'.")
     print(f"Database: {data_root / 'alex_users.db'}")
     return 0
 

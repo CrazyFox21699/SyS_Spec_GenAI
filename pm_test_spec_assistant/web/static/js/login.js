@@ -55,10 +55,28 @@
     if (loginShell) loginShell.hidden = false;
   }
 
+  async function showTeamServerBanner() {
+    const el = document.getElementById("login-server-url");
+    if (!el) return;
+    try {
+      const res = await fetch("/api/app-config", { credentials: "same-origin" });
+      if (!res.ok) return;
+      const cfg = await res.json();
+      const dep = cfg?.deployment || {};
+      if (dep.team_server && dep.public_url) {
+        el.textContent = `Team server · ${dep.public_url}`;
+        el.hidden = false;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   async function runSplashThenLogin() {
     await new Promise((resolve) => window.setTimeout(resolve, SPLASH_MS));
     hideSplash();
     showLoginShell();
+    showTeamServerBanner();
   }
 
   if (forgot) {
