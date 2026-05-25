@@ -42,7 +42,7 @@ const API_CACHE_TTL = {
   summary: 4000,
   logicReview: 12000,
   workbench: 10000,
-  gtestWorkspace: 15000,
+  gtestWorkspace: 60000,
   states: 12000,
 };
 
@@ -331,6 +331,12 @@ let state = {
     baselineDraft: null,
     variableMapDraft: {},
     harnessDraft: {},
+    codeStyleSamples: [],
+    engineerNote: "",
+    referenceTestName: "",
+    batchResults: null,
+    batchRunning: false,
+    draftCache: {},
     status: "",
   },
   guideOpenSection: null,
@@ -1443,20 +1449,16 @@ function renderGuideExportTab() {
 function renderGuideTestCodeTab() {
   return guideDetails(
     "Tab 6 — Test Code",
-    `<p class="detail">Sinh <code>TEST_F</code> từ Before/After của Final File — không cần config nhiều nếu tên signal trùng code.</p>
+    `<p class="detail">Sinh <code>TEST_F</code> từ Before/After — Copilot bám <b>code mẫu</b> project (fixture, helper, style).</p>
     <ol class="alex-guide-steps">
-      <li>Chọn <b>Test case</b> — code + Before/After đổi ngay (không reload cả trang).</li>
-      <li>Mặc định: <code>Given → in.SIGNAL</code>, <code>Then → out.SIGNAL</code> — copy được luôn.</li>
-      <li>Chỉ mở <b>Rename map</b> khi spec name ≠ code (vd. <code>IGN_SW</code> → <code>inputs.ign</code>):
-        <ul class="alex-guide-sublist">
-          <li><b>Suggest</b> — chỉ signal của TC đang chọn (không dump cả bundle).</li>
-          <li><b>Apply</b> — lưu map + regenerate.</li>
-        </ul>
-      </li>
-      <li><b>Regenerate</b> sau khi sửa Final File · <b>Copy</b> / <b>.cpp</b> khi ổn · <b>Save</b> giữ bản engineer đã sửa.</li>
-      <li><b>Harness defaults</b> — fixture class, in/out, evaluate fn (đóng sẵn, chỉ đổi một lần).</li>
+      <li>Upload <b>Code sample</b> (.cpp) — 1–3 TEST_F mẫu từ project (hoặc upload cùng spec ở Review).</li>
+      <li>Chọn <b>Reference test</b> làm anchor style (tuỳ chọn).</li>
+      <li>Ghi <b>Engineer note</b> (helper, timing, quy ước assert) trước Generate.</li>
+      <li><b>Regenerate</b> = skeleton offline · <b>Generate with Copilot</b> = viết theo I/O + mẫu.</li>
+      <li><b>Batch Copilot</b> — sinh hàng loạt TC cùng logic (cần M365).</li>
+      <li><b>Library</b> — lưu harness + code samples cho module sau.</li>
     </ol>
-    <p class="detail">Row chưa <b>ready</b> vẫn sinh code được nhưng nội dung có thể còn placeholder — ưu tiên approve ở Final File trước.</p>`,
+    <p class="detail">Approve Expected I/O ở Final File trước — Copilot cần Given/Then rõ.</p>`,
     { id: "guide-testcode", step: "6" }
   );
 }
@@ -6121,6 +6123,8 @@ async function fetchGtestWorkspace(force = false) {
   state.testCode.workspace = data;
   state.testCode.variableMapDraft = { ...(data.code_variable_map || {}) };
   state.testCode.harnessDraft = { ...(data.harness || {}) };
+  state.testCode.codeStyleSamples = data.code_style_samples || [];
+  if (data.copilot_batch?.last_results) state.testCode.batchResults = data.copilot_batch.last_results;
   return data;
 }
 
@@ -6148,29 +6152,32 @@ function applyTestCodeDraftToUi(draft, row) {
 
 async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows || []) {
   if (!candidateId || state.testCode.switching) return;
+  if (candidateId === state.testCode.selectedCandidateId && state.testCode.draft?.full_snippet) {
+    return;
+  }
   state.testCode.switching = true;
   state.testCode.selectedCandidateId = candidateId;
   state.workbookFocus.testcode = candidateId;
   const row = rows.find((r) => r.candidate_id === candidateId);
   if (row?.logic_id) state.testCode.selectedLogicId = row.logic_id;
   const statusEl = $("#testcode-status");
-  if (statusEl) statusEl.textContent = "Generating…";
+  if (statusEl) statusEl.textContent = "Loading…";
   try {
     const draftKey = candidateId;
     const saved = (state.testCode.workspace?.drafts || {})[draftKey];
-    let draft;
-    if (saved?.full_snippet && saved?.engineer_edited) {
+    const cacheKey = `${candidateId}:${state.testCode.selectedLogicId || ""}:${JSON.stringify(state.testCode.variableMapDraft || {})}`;
+    let draft = state.testCode.draftCache[cacheKey];
+    if (saved?.full_snippet) {
       draft = saved;
-    } else {
+      if (saved.source_kind === "copilot") state.testCode.copilotDraft = saved;
+    } else if (!draft) {
       draft = await regenerateGtestDraft();
     }
     state.testCode.draft = draft;
     state.testCode.lastDraftKey = draftKey;
     applyTestCodeDraftToUi(draft, row);
     if (statusEl) {
-      statusEl.textContent = draft?.unmapped_signals?.length
-        ? `${draft.unmapped_signals.length} need custom rename — edit map then Apply.`
-        : "Ready — edit code, then Copy.";
+      statusEl.textContent = "Ready — edit code, then Copy.";
     }
   } catch (e) {
     if (statusEl) statusEl.textContent = e.message;
@@ -6213,8 +6220,13 @@ function explainTestCodeError(message) {
   return `<p class="detail">${esc(msg)}</p>`;
 }
 
-async function regenerateGtestDraft() {
+async function regenerateGtestDraft(force = false) {
   const tc = state.testCode;
+  const cacheKey = `${tc.selectedCandidateId || ""}:${tc.selectedLogicId || ""}:${JSON.stringify(tc.variableMapDraft || {})}`;
+  if (!force && tc.draftCache[cacheKey]) {
+    tc.draft = tc.draftCache[cacheKey];
+    return tc.draft;
+  }
   const body = {
     candidate_id: tc.selectedCandidateId || null,
     logic_id: tc.selectedLogicId || null,
@@ -6227,6 +6239,7 @@ async function regenerateGtestDraft() {
     body: JSON.stringify(body),
   });
   tc.draft = res.draft || null;
+  if (tc.draft) tc.draftCache[cacheKey] = tc.draft;
   return tc.draft;
 }
 
@@ -6271,6 +6284,64 @@ function renderTestCodeIoStrip(row) {
   </div>`;
 }
 
+function renderTestCodeSamplesPanel(samples, referenceTestName) {
+  const rows = samples || [];
+  const refOpts = rows
+    .map((s) => {
+      const val = s.test_name || s.label || "";
+      return val ? `<option value="${esc(val)}" ${val === referenceTestName ? "selected" : ""}>${esc(s.label || s.test_name)}</option>` : "";
+    })
+    .join("");
+  const list =
+    rows.length === 0
+      ? `<p class="detail">Chưa có mẫu — upload .cpp hoặc upload file code cùng spec ở Review.</p>`
+      : `<ul class="alex-testcode-sample-list">${rows
+          .map(
+            (s) =>
+              `<li><b>${esc(s.label || s.test_name || "sample")}</b> <span class="detail">${esc(s.source_file || "")}${s.fixture_class ? ` · ${esc(s.fixture_class)}` : ""}</span></li>`
+          )
+          .join("")}</ul>`;
+  return `${list}
+    <label class="gtest-inline-label">Reference test
+      <select id="testcode-ref-select" class="gtest-input gtest-select">
+        <option value="">— auto first —</option>
+        ${refOpts}
+      </select>
+    </label>
+    <label class="detail">Engineer note (helpers, timing…)
+      <textarea id="testcode-engineer-note" class="gtest-input gtest-note" rows="3" placeholder="vd. Dùng RunForMs(100) sau When elapsed…">${esc(state.testCode.engineerNote || "")}</textarea>
+    </label>
+    <div class="gtest-map-toolbar">
+      <label class="btn secondary upload-label">Attach .cpp<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+    </div>`;
+}
+
+function renderTestCodeBatchPanel(results) {
+  if (!results?.length) return "";
+  const rows = results
+    .map((r) => {
+      const q = r.validation?.quality || (r.ok ? "good" : r.skipped ? "skip" : "failed");
+      const tag = r.skipped ? "skip" : r.ok ? "ok" : "warn";
+      return `<tr data-batch-cid="${esc(r.candidate_id)}">
+        <td><input type="checkbox" class="batch-apply-cb" data-batch-cid="${esc(r.candidate_id)}" ${r.ok ? "checked" : ""} ${r.ok ? "" : "disabled"} /></td>
+        <td>${esc(r.candidate_id)}</td>
+        <td><span class="tag ${tag}">${esc(q)}</span></td>
+        <td class="detail">${esc(r.reason || r.error || (r.validation?.flags || []).join(", ") || "")}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<details class="alex-testcode-panel alex-testcode-batch" open>
+    <summary>Batch results (${results.length})</summary>
+    <div class="alex-testcode-panel__body">
+      <table class="data-grid alex-table gtest-batch-table">
+        <thead><tr><th></th><th>TestCase</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-batch-apply">Apply selected drafts</button>
+    </div>
+  </details>`;
+}
+
 function renderTestCodeSpecPreview(draft) {
   const preview = draft?.spec_preview || {};
   if (preview.given_when || preview.then) {
@@ -6282,6 +6353,57 @@ function renderTestCodeSpecPreview(draft) {
   return `<p class="detail">Select a test case or logic group to preview spec text.</p>`;
 }
 
+function updateTestCodeBatchPanel(results) {
+  let host = document.querySelector(".alex-testcode-batch");
+  const html = renderTestCodeBatchPanel(results);
+  if (!html) {
+    host?.remove();
+    return;
+  }
+  if (host) {
+    host.outerHTML = html;
+  } else {
+    const hint = $("#testcode-status");
+    hint?.insertAdjacentHTML("afterend", html);
+  }
+  $("#btn-testcode-batch-apply")?.addEventListener("click", onTestCodeBatchApply);
+}
+
+function bindTestCodeSampleControls(onUpload) {
+  $("#testcode-ref-select")?.addEventListener("change", (ev) => {
+    state.testCode.referenceTestName = ev.target.value || "";
+  });
+  $("#testcode-engineer-note")?.addEventListener("input", (ev) => {
+    state.testCode.engineerNote = ev.target.value || "";
+  });
+  const uploadEl = $("#testcode-cpp-upload");
+  if (uploadEl && onUpload) {
+    uploadEl.onchange = onUpload;
+  }
+}
+
+async function onTestCodeBatchApply() {
+  const statusEl = $("#testcode-status");
+  const tc = state.testCode;
+  const selected = [...document.querySelectorAll(".batch-apply-cb:checked")].map((el) => el.dataset.batchCid).filter(Boolean);
+  if (!selected.length) {
+    if (statusEl) statusEl.textContent = "No batch drafts selected.";
+    return;
+  }
+  const ws = tc.workspace || (await fetchGtestWorkspace(true));
+  const drafts = ws.drafts || {};
+  if (selected.includes(tc.selectedCandidateId)) {
+    const d = drafts[tc.selectedCandidateId];
+    if (d?.full_snippet) {
+      const row = (tc.rows || []).find((r) => r.candidate_id === tc.selectedCandidateId);
+      applyTestCodeDraftToUi(d, row);
+      if (statusEl) statusEl.textContent = "Applied batch draft to editor — review and Save.";
+      return;
+    }
+  }
+  if (statusEl) statusEl.textContent = "Select a test case with a generated draft to preview in editor.";
+}
+
 function bindTestCodeHandlers(rows, logicItems) {
   const tc = state.testCode;
   const statusEl = $("#testcode-status");
@@ -6291,7 +6413,7 @@ function bindTestCodeHandlers(rows, logicItems) {
   const runGenerate = async () => {
     if (statusEl) statusEl.textContent = "Generating…";
     try {
-      const draft = await regenerateGtestDraft();
+      const draft = await regenerateGtestDraft(true);
       const row = rows.find((r) => r.candidate_id === tc.selectedCandidateId);
       applyDraftToEditor(draft, row);
       if (statusEl) {
@@ -6320,6 +6442,8 @@ function bindTestCodeHandlers(rows, logicItems) {
       if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
       return;
     }
+    tc.engineerNote = $("#testcode-engineer-note")?.value || "";
+    tc.referenceTestName = $("#testcode-ref-select")?.value || "";
     if (statusEl) statusEl.textContent = "Copilot generating GTest…";
     try {
       const res = await api(`/api/review/copilot/code/generate?job_id=${encodeURIComponent(state.jobId)}`, {
@@ -6329,6 +6453,8 @@ function bindTestCodeHandlers(rows, logicItems) {
           candidate_id: tc.selectedCandidateId,
           use_baseline: true,
           language: state.exportLanguage || "EN",
+          engineer_note: tc.engineerNote,
+          reference_test_name: tc.referenceTestName,
         }),
       });
       if (!res.ok) throw new Error(res.error || "Copilot code generation failed");
@@ -6336,9 +6462,10 @@ function bindTestCodeHandlers(rows, logicItems) {
       tc.copilotDraft = res.copilot_draft || null;
       const diffEl = $("#testcode-copilot-diff");
       const applyBtn = $("#btn-testcode-apply-copilot");
+      const val = res.validation || {};
       if (diffEl) {
         diffEl.hidden = false;
-        diffEl.innerHTML = `<p><b>Copilot draft ready</b> — baseline ${(res.baseline?.test_name || "skeleton")} · Copilot ${esc(res.copilot_draft?.test_name || "draft")}</p>`;
+        diffEl.innerHTML = `<p><b>Copilot draft ready</b> — quality: ${esc(val.quality || "?")}${val.flags?.length ? ` · ${esc(val.flags.join(", "))}` : ""}</p>`;
       }
       if (applyBtn) applyBtn.hidden = false;
       if (statusEl) statusEl.textContent = "Copilot draft ready — click Apply Copilot or edit manually.";
@@ -6346,6 +6473,77 @@ function bindTestCodeHandlers(rows, logicItems) {
       if (statusEl) statusEl.textContent = e.message;
     }
   });
+
+  $("#btn-testcode-batch")?.addEventListener("click", async () => {
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
+      return;
+    }
+    tc.engineerNote = $("#testcode-engineer-note")?.value || "";
+    tc.referenceTestName = $("#testcode-ref-select")?.value || "";
+    const logicId = tc.selectedLogicId || "";
+    if (statusEl) statusEl.textContent = "Batch Copilot running…";
+    tc.batchRunning = true;
+    try {
+      const res = await api(`/api/review/copilot/code/generate-batch?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          logic_id: logicId,
+          engineer_note: tc.engineerNote,
+          reference_test_name: tc.referenceTestName,
+          persist_drafts: true,
+          language: state.exportLanguage || "EN",
+        }),
+      });
+      tc.batchResults = res.results || [];
+      if (statusEl) {
+        statusEl.textContent = `Batch done: ${res.generated || 0} ok, ${res.skipped || 0} skipped, ${res.failed || 0} failed.`;
+      }
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      const ws = await fetchGtestWorkspace(true);
+      tc.workspace = ws;
+      tc.draftCache = {};
+      updateTestCodeBatchPanel(tc.batchResults);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    } finally {
+      tc.batchRunning = false;
+    }
+  });
+
+  $("#btn-testcode-batch-apply")?.addEventListener("click", onTestCodeBatchApply);
+
+  const handleCppUpload = async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    if (statusEl) statusEl.textContent = `Uploading ${file.name}…`;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/review/code-style-samples/upload?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "Upload failed");
+      tc.codeStyleSamples = data.samples || [];
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      const ws = await fetchGtestWorkspace(true);
+      tc.workspace = ws;
+      tc.codeStyleSamples = ws.code_style_samples || tc.codeStyleSamples;
+      const panel = $("#testcode-samples-panel");
+      if (panel) panel.innerHTML = renderTestCodeSamplesPanel(tc.codeStyleSamples, tc.referenceTestName);
+      bindTestCodeSampleControls(handleCppUpload);
+      if (statusEl) statusEl.textContent = `Saved ${tc.codeStyleSamples.length} code sample(s).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+    ev.target.value = "";
+  };
+
+  bindTestCodeSampleControls(handleCppUpload);
 
   $("#btn-testcode-apply-copilot")?.addEventListener("click", () => {
     const draft = tc.copilotDraft;
@@ -6433,6 +6631,8 @@ function bindTestCodeHandlers(rows, logicItems) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code_variable_map: map }),
       });
+      tc.variableMapDraft = map;
+      tc.draftCache = {};
       await runGenerate();
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
@@ -6526,7 +6726,7 @@ function bindTestCodeHandlers(rows, logicItems) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset: null }),
       });
-      if (statusEl) statusEl.textContent = "Preset saved to Library (.alex/gtest_harness_preset.yaml).";
+      if (statusEl) statusEl.textContent = "Preset saved to ALEX/web_data/.alex/ (harness + project memory).";
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
@@ -6540,6 +6740,8 @@ function bindTestCodeHandlers(rows, logicItems) {
 }
 
 async function renderTestCode(opts = {}) {
+  const preserveSelection = opts.preserveSelection === true;
+  const forceRefresh = opts.force === true;
   if (!state.jobId) {
     content().innerHTML = renderTestCodeHelpCard(
       "No review job yet",
@@ -6556,7 +6758,8 @@ async function renderTestCode(opts = {}) {
     content().innerHTML = `<p class="detail">Loading Test Code workspace…</p>`;
   }
   try {
-    const jobReady = await refreshJobSummary();
+    const jobReady =
+      state.testCode.mounted && !forceRefresh ? true : await refreshJobSummary(forceRefresh);
     if (!state.jobId) {
       content().innerHTML = renderTestCodeHelpCard(
         "Review job expired",
@@ -6578,7 +6781,7 @@ async function renderTestCode(opts = {}) {
       return;
     }
 
-    const ws = await fetchGtestWorkspace();
+    const ws = forceRefresh ? await fetchGtestWorkspace(true) : await fetchGtestWorkspace();
     const rows = ws.workbench_rows || [];
     const logicItems = ws.logic_items || [];
     if (!rows.length && !logicItems.length) {
@@ -6591,7 +6794,7 @@ async function renderTestCode(opts = {}) {
       bindTestCodeHelp("testcode-goto-export", () => showPage("export"));
       return;
     }
-    const focusId = state.workbookFocus.testcode;
+    const focusId = preserveSelection ? state.testCode.selectedCandidateId : state.workbookFocus.testcode;
     if (focusId && rows.some((r) => r.candidate_id === focusId)) {
       state.testCode.selectedCandidateId = focusId;
     } else if (rows.length) {
@@ -6613,10 +6816,15 @@ async function renderTestCode(opts = {}) {
     const draftKey = state.testCode.selectedCandidateId || state.testCode.selectedLogicId;
     state.testCode.lastDraftKey = draftKey;
     const saved = (ws.drafts || {})[draftKey];
-    if (saved?.full_snippet && saved?.engineer_edited) {
+    const cacheKey = `${state.testCode.selectedCandidateId || ""}:${state.testCode.selectedLogicId || ""}:${JSON.stringify(state.testCode.variableMapDraft || {})}`;
+    if (saved?.full_snippet) {
       draft = saved;
       state.testCode.draft = saved;
-    } else {
+      if (saved.source_kind === "copilot") state.testCode.copilotDraft = saved;
+    } else if (state.testCode.draftCache[cacheKey]?.full_snippet) {
+      draft = state.testCode.draftCache[cacheKey];
+      state.testCode.draft = draft;
+    } else if (!opts.skipGenerate) {
       try {
         draft = await regenerateGtestDraft();
       } catch (genErr) {
@@ -6651,7 +6859,8 @@ async function renderTestCode(opts = {}) {
         </div>
         <div class="alex-testcode-toolbar__actions">
           <button type="button" class="btn" id="btn-testcode-regenerate">Regenerate</button>
-          <button type="button" class="btn secondary" id="btn-testcode-copilot" ${m365KnowledgeReady() ? "" : "disabled"} title="M365 Copilot writes GTest from approved I/O">Generate with Copilot</button>
+          <button type="button" class="btn secondary" id="btn-testcode-copilot" ${m365KnowledgeReady() ? "" : "disabled"} title="M365 Copilot writes GTest from approved I/O + code samples">Generate with Copilot</button>
+          <button type="button" class="btn secondary" id="btn-testcode-batch" ${m365KnowledgeReady() ? "" : "disabled"} title="Generate all test cases in current logic group">Batch Copilot</button>
           <button type="button" class="btn secondary" id="btn-testcode-apply-copilot" hidden>Apply Copilot</button>
           <button type="button" class="btn secondary" id="btn-testcode-copy">Copy</button>
           <button type="button" class="btn secondary" id="btn-testcode-download">.cpp</button>
@@ -6659,10 +6868,17 @@ async function renderTestCode(opts = {}) {
         </div>
       </div>
       ${renderTestCodeIoStrip(activeRow)}
-      <p class="detail alex-testcode-hint" id="testcode-status">Skeleton = local Python · Copilot = M365 (needs sign-in). Chọn test case → Regenerate hoặc Generate with Copilot.</p>
+      <p class="detail alex-testcode-hint" id="testcode-status">Upload code sample → chọn TC → Generate with Copilot (M365) hoặc Regenerate offline.</p>
       <div id="testcode-copilot-diff" class="detail" hidden></div>
+      ${renderTestCodeBatchPanel(state.testCode.batchResults)}
       <div class="alex-testcode-workspace">
         <aside class="alex-testcode-side card">
+          <details class="alex-testcode-panel" open>
+            <summary>Code samples <span class="detail">(${ (state.testCode.codeStyleSamples || []).length }/3)</span></summary>
+            <div class="alex-testcode-panel__body" id="testcode-samples-panel">
+              ${renderTestCodeSamplesPanel(state.testCode.codeStyleSamples, state.testCode.referenceTestName)}
+            </div>
+          </details>
           <details class="alex-testcode-panel">
             <summary>Rename map <span class="detail">(optional)</span></summary>
             <div class="alex-testcode-panel__body">

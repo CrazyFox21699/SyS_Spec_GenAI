@@ -17,7 +17,7 @@ def test_run_code_write_parses_json() -> None:
         "logic": {},
         "baseline_skeleton": {},
     }
-    reply = '{"test_name": "TC1_test", "code_body": "TEST_F(T, TC1_test) {}", "full_snippet": "// c\\nTEST_F(T, TC1_test) {}"}'
+    reply = '{"test_name": "TC1_test", "code_body": "TEST_F(T, TC1_test) { EXPECT_EQ(a,1); }", "full_snippet": "// c\\nTEST_F(T, TC1_test) { EXPECT_EQ(a,1); }"}'
     with patch("web.copilot_code_writer.run_copilot_chat", return_value=reply):
         out = run_code_write(pack, {})
     assert out["ok"] is True

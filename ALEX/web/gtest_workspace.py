@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from src.engine.concrete_test_values import materialize_expected_input, materialize_expected_output
@@ -17,9 +18,38 @@ from src.engine.gtest_codegen import (
 )
 from src.engine.path_tc_matrix import _candidate_logic_id
 from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
+from web.alex_storage import (
+    code_style_samples_path,
+    default_library_root,
+    ensure_alex_data_dir,
+    gtest_preset_path,
+    migrate_legacy_alex_data,
+    project_memory_path,
+)
+from web.code_style_samples import load_code_style_samples
 
 GTEST_ARTIFACT = "gtest.json"
-LIBRARY_PRESET_NAME = "gtest_harness_preset.yaml"
+_PREVIEW_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PREVIEW_CACHE_TTL_S = 45.0
+
+
+def _cached_workbench_preview(
+    bundle: dict[str, Any],
+    *,
+    job_id: str = "",
+    bundle_version: int = 0,
+    language: str = "EN",
+) -> dict[str, Any]:
+    key = f"{job_id}:{bundle_version}:{language}"
+    hit = _PREVIEW_CACHE.get(key)
+    if hit and monotonic() - hit[0] < _PREVIEW_CACHE_TTL_S:
+        return hit[1]
+    preview = build_customer_testspec_preview(bundle, language=language)
+    _PREVIEW_CACHE[key] = (monotonic(), preview)
+    if len(_PREVIEW_CACHE) > 32:
+        oldest = min(_PREVIEW_CACHE.items(), key=lambda item: item[1][0])[0]
+        _PREVIEW_CACHE.pop(oldest, None)
+    return preview
 
 
 def gtest_store_path(job_output: Path) -> Path:
@@ -143,10 +173,18 @@ def build_workspace_payload(
     gtest_state: dict[str, Any],
     *,
     language: str = "EN",
+    job_id: str = "",
+    bundle_version: int = 0,
+    include_signals: bool = False,
 ) -> dict[str, Any]:
     harness = GTestHarnessConfig.from_dict(gtest_state.get("harness"))
     variable_map = dict(gtest_state.get("code_variable_map") or {})
-    preview = build_customer_testspec_preview(bundle, language=language)
+    preview = _cached_workbench_preview(
+        bundle,
+        job_id=job_id,
+        bundle_version=bundle_version,
+        language=language,
+    )
     logic_items = []
     seen: set[str] = set()
     for block in bundle.get("logic_blocks") or []:
@@ -160,15 +198,19 @@ def build_workspace_payload(
                     "expression": block.get("raw_expression") or block.get("expression") or "",
                 }
             )
-    return {
+    payload: dict[str, Any] = {
         "harness": harness.to_dict(),
         "code_variable_map": variable_map,
         "drafts": gtest_state.get("drafts") or {},
-        "signals": collect_signal_names(bundle),
+        "code_style_samples": load_code_style_samples(bundle),
+        "copilot_batch": gtest_state.get("copilot_batch") or {},
         "logic_items": logic_items,
         "workbench_rows": preview.get("rows") or [],
         "code_references": bundle.get("code_references") or [],
     }
+    if include_signals:
+        payload["signals"] = collect_signal_names(bundle)
+    return payload
 
 
 def generate_draft_for_request(
@@ -329,15 +371,23 @@ def export_approved_bundle(
     return compose_full_translation_unit(drafts, harness)
 
 
-def library_preset_path(library_root: Path) -> Path:
-    return library_root / ".alex" / LIBRARY_PRESET_NAME
+def library_preset_path(_library_root: Path | None = None) -> Path:
+    """GTest harness preset — always under ALEX/web_data/.alex (not Library root)."""
+    del _library_root
+    return gtest_preset_path()
 
 
-def export_library_preset(gtest_state: dict[str, Any], *, project_memory: dict[str, Any] | None = None) -> dict[str, Any]:
+def export_library_preset(
+    gtest_state: dict[str, Any],
+    *,
+    project_memory: dict[str, Any] | None = None,
+    code_style_samples: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     payload = {
         "kind": "alex_gtest_preset",
         "harness": gtest_state.get("harness") or {},
         "code_variable_map": gtest_state.get("code_variable_map") or {},
+        "code_style_samples": code_style_samples or [],
         "exported_at": _now_iso(),
     }
     if project_memory:
@@ -345,12 +395,21 @@ def export_library_preset(gtest_state: dict[str, Any], *, project_memory: dict[s
     return payload
 
 
-def import_library_preset(gtest_state: dict[str, Any], preset: dict[str, Any]) -> dict[str, Any]:
+def import_library_preset(
+    gtest_state: dict[str, Any],
+    preset: dict[str, Any],
+    *,
+    bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if preset.get("harness"):
         gtest_state["harness"] = {**(gtest_state.get("harness") or {}), **preset["harness"]}
     if preset.get("code_variable_map"):
         merged = dict(gtest_state.get("code_variable_map") or {})
         merged.update(preset["code_variable_map"])
         gtest_state["code_variable_map"] = merged
+    if bundle is not None and preset.get("code_style_samples"):
+        from web.code_style_samples import import_library_code_samples
+
+        import_library_code_samples(bundle, {"samples": preset["code_style_samples"]})
     gtest_state["updated_at"] = _now_iso()
     return gtest_state

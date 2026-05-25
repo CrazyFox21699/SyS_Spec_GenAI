@@ -145,7 +145,20 @@ from web.knowledge_reconciliation import (
     reject_pending_knowledge,
 )
 from web.copilot_code_context_pack import build_code_context_pack
-from web.copilot_code_orchestrator import run_copilot_code_generate
+from web.copilot_code_orchestrator import run_copilot_code_generate, run_copilot_code_generate_batch
+from web.alex_storage import (
+    code_style_samples_path,
+    default_library_root,
+    migrate_legacy_alex_data,
+    normalize_library_root,
+)
+from web.code_style_samples import (
+    export_library_code_samples,
+    ingest_cpp_upload,
+    load_code_style_samples,
+    merge_samples_from_bundle,
+    save_code_style_samples,
+)
 from web.project_memory import (
     export_library_memory,
     import_library_memory,
@@ -210,6 +223,7 @@ def _startup() -> None:
     init_db(WEB_DATA, production=_deployment_mode() == "production")
     if team_auth_enabled(cfg):
         init_user_db(WEB_DATA)
+    _repair_library_state()
 
 
 _prod_cfg = load_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else {}
@@ -450,7 +464,30 @@ class CopilotCodeGenerateRequest(BaseModel):
     candidate_id: str
     use_baseline: bool = True
     engineer_note: str = ""
+    reference_test_name: str = ""
     language: str = "EN"
+
+
+class CopilotCodeBatchRequest(BaseModel):
+    candidate_ids: list[str] = []
+    logic_id: str = ""
+    engineer_note: str = ""
+    reference_test_name: str = ""
+    persist_drafts: bool = False
+    language: str = "EN"
+
+
+class CodeStyleSampleRow(BaseModel):
+    label: str = ""
+    test_name: str = ""
+    fixture_class: str = ""
+    source_file: str = ""
+    snippet: str = ""
+
+
+class CodeStyleSamplesRequest(BaseModel):
+    samples: list[CodeStyleSampleRow] = []
+    replace: bool = False
 
 
 class PromoteVerificationPatternRequest(BaseModel):
@@ -849,13 +886,39 @@ def _library_root() -> Path | None:
         state = load_library(WEB_DATA)
     except Exception:  # noqa: BLE001
         return None
-    root = (state or {}).get("root") or ""
+    root = normalize_library_root((state or {}).get("root") or "")
     if not root:
-        return None
+        return default_library_root()
     try:
         return Path(root).expanduser().resolve()
     except OSError:
-        return None
+        return default_library_root()
+
+
+def _repair_library_state() -> None:
+    """Fix stale pm_test_spec_assistant paths; migrate .alex data into ALEX/web_data/.alex."""
+    try:
+        state = load_library(WEB_DATA)
+    except Exception:  # noqa: BLE001
+        return
+    raw = str(state.get("root") or "")
+    fixed = normalize_library_root(raw)
+    changed = fixed != raw
+    legacy_root = None
+    if raw and raw != fixed:
+        try:
+            legacy_root = Path(raw).expanduser().resolve()
+        except OSError:
+            legacy_root = None
+    if legacy_root:
+        migrate_legacy_alex_data(legacy_root)
+    if changed:
+        state["root"] = fixed
+        save_library(WEB_DATA, state)
+    elif legacy_root:
+        migrate_legacy_alex_data(legacy_root)
+    else:
+        migrate_legacy_alex_data(_library_root())
 
 
 def _safe_file_path(raw_path: str) -> Path:
@@ -2357,6 +2420,111 @@ def api_promote_precondition(job_id: str, body: PromotePreconditionRequest) -> d
     return {"ok": True, "precondition": row, "project_memory": memory}
 
 
+def _library_code_samples(_library_root: Path | None = None) -> list[dict[str, Any]]:
+    del _library_root
+    path = code_style_samples_path()
+    if not path.exists():
+        return []
+    try:
+        data = load_yaml(path)
+    except (OSError, ValueError, TypeError):
+        return []
+    if isinstance(data, dict):
+        rows = data.get("samples") or []
+        return [r for r in rows if isinstance(r, dict)]
+    return []
+
+
+def _ensure_gtest_workspace_imports(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    *,
+    library_root: Path | None,
+) -> tuple[dict[str, Any], bool, bool]:
+    """One-time library/sample imports. Returns (gtest_state, bundle_dirty, gtest_dirty)."""
+    if gtest_state.get("_workspace_imports_done"):
+        return gtest_state, False, False
+
+    bundle_dirty = False
+    gtest_dirty = False
+
+    _, samples_changed = merge_samples_from_bundle(bundle)
+    bundle_dirty = bundle_dirty or samples_changed
+
+    lib_samples = _library_code_samples()
+    if lib_samples and not load_code_style_samples(bundle):
+        save_code_style_samples(bundle, lib_samples)
+        bundle_dirty = True
+
+    preset_path = library_preset_path()
+    if preset_path.exists() and not gtest_state.get("harness"):
+        try:
+            preset = load_yaml(preset_path)
+            before_h = json.dumps(gtest_state.get("harness") or {}, sort_keys=True)
+            before_m = json.dumps(gtest_state.get("code_variable_map") or {}, sort_keys=True)
+            gtest_state = import_library_preset(gtest_state, preset, bundle=bundle)
+            after_h = json.dumps(gtest_state.get("harness") or {}, sort_keys=True)
+            after_m = json.dumps(gtest_state.get("code_variable_map") or {}, sort_keys=True)
+            if before_h != after_h or before_m != after_m:
+                gtest_dirty = True
+        except (OSError, ValueError, TypeError):
+            pass
+
+    gtest_state["_workspace_imports_done"] = True
+    return gtest_state, bundle_dirty, gtest_dirty
+
+
+@app.get("/api/review/code-style-samples")
+def api_get_code_style_samples(job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    merge_samples_from_bundle(bundle)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "samples": load_code_style_samples(bundle),
+        "code_references_count": len(bundle.get("code_references") or []),
+    }
+
+
+@app.post("/api/review/code-style-samples")
+def api_post_code_style_samples(job_id: str, body: CodeStyleSamplesRequest) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    rows = [s.model_dump() for s in body.samples]
+    if body.replace:
+        saved = save_code_style_samples(bundle, rows)
+    else:
+        existing = load_code_style_samples(bundle)
+        saved = save_code_style_samples(bundle, existing + rows)
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "samples": saved}
+
+
+@app.post("/api/review/code-style-samples/upload")
+async def api_upload_code_style_sample(
+    job_id: str,
+    file: UploadFile = File(...),
+    replace: bool = False,
+) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+    filename = file.filename or "upload.cpp"
+    result = ingest_cpp_upload(
+        bundle,
+        gtest_state,
+        content=text,
+        filename=filename,
+        replace=replace,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    _save_bundle_to_job(job_id, bundle)
+    return {"ok": True, "job_id": job_id, **result}
+
+
 @app.get("/api/review/copilot/code/context")
 def api_copilot_code_context(job_id: str, candidate_id: str, language: str = "EN") -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
@@ -2393,7 +2561,49 @@ def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> 
         engineer_note=body.engineer_note,
         use_baseline=body.use_baseline,
         language=body.language,
+        reference_test_name=body.reference_test_name,
+        library_code_samples=_library_code_samples(_library_root()),
     )
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/copilot/code/generate-batch")
+def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) -> dict[str, Any]:
+    cfg = _cfg()
+    if not m365_auth.is_api_ready(cfg):
+        raise HTTPException(403, "Sign in to Microsoft 365 Copilot first.")
+    if not m365_auth.is_copilot_chat_entitled():
+        raise HTTPException(403, "Microsoft 365 Copilot Chat API is not available for this account.")
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    merge_samples_from_bundle(bundle)
+
+    candidate_ids = list(body.candidate_ids or [])
+    if not candidate_ids and body.logic_id:
+        preview = build_customer_testspec_preview(bundle, language=body.language or "EN")
+        candidate_ids = [
+            str(r.get("candidate_id") or "")
+            for r in preview.get("rows") or []
+            if str(r.get("logic_id") or "") == body.logic_id
+        ]
+    if not candidate_ids:
+        preview = build_customer_testspec_preview(bundle, language=body.language or "EN")
+        candidate_ids = [str(r.get("candidate_id") or "") for r in preview.get("rows") or []]
+    candidate_ids = [c for c in candidate_ids if c]
+
+    result = run_copilot_code_generate_batch(
+        bundle,
+        gtest_state,
+        candidate_ids=candidate_ids,
+        cfg=cfg,
+        library_root=_library_root(),
+        engineer_note=body.engineer_note,
+        language=body.language,
+        reference_test_name=body.reference_test_name,
+        library_code_samples=_library_code_samples(_library_root()),
+        persist_drafts=body.persist_drafts,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
     return {"job_id": job_id, **result}
 
 
@@ -2401,19 +2611,24 @@ def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> 
 def api_gtest_workspace(job_id: str, language: str = "EN") -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
-    library_root = _library_root()
-    if library_root and not (gtest_state.get("code_variable_map") or {}):
-        preset_path = library_preset_path(library_root)
-        if preset_path.exists():
-            from src.utils.yaml_utils import load_yaml
-
-            try:
-                preset = load_yaml(preset_path)
-                gtest_state = import_library_preset(gtest_state, preset)
-            except (OSError, ValueError, TypeError):
-                pass
-    payload = build_workspace_payload(bundle, gtest_state, language=language)
-    return {"job_id": job_id, **payload, "bundle_version": _get_bundle_version(job_id)}
+    bundle_version = _get_bundle_version(job_id)
+    gtest_state, bundle_dirty, gtest_dirty = _ensure_gtest_workspace_imports(
+        bundle,
+        gtest_state,
+        library_root=_library_root(),
+    )
+    if gtest_dirty:
+        _persist_job_gtest_state(job_id, gtest_state)
+    if bundle_dirty:
+        bundle_version = _save_bundle_to_job(job_id, bundle)
+    payload = build_workspace_payload(
+        bundle,
+        gtest_state,
+        language=language,
+        job_id=job_id,
+        bundle_version=bundle_version,
+    )
+    return {"job_id": job_id, **payload, "bundle_version": bundle_version}
 
 
 @app.post("/api/review/gtest-generate")
@@ -2513,7 +2728,14 @@ def api_library_gtest_preset_export(job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     memory = merge_project_memory(library_root=_library_root(), bundle=bundle, gtest_state=gtest_state)
-    return {"ok": True, "preset": export_library_preset(gtest_state, project_memory=memory)}
+    return {
+        "ok": True,
+        "preset": export_library_preset(
+            gtest_state,
+            project_memory=memory,
+            code_style_samples=load_code_style_samples(bundle),
+        ),
+    }
 
 
 @app.post("/api/library/gtest-preset")
@@ -2521,22 +2743,31 @@ def api_library_gtest_preset_import(job_id: str, body: GTestLibraryPresetRequest
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     if body.preset:
-        gtest_state = import_library_preset(gtest_state, body.preset)
+        gtest_state.pop("_workspace_imports_done", None)
+        gtest_state = import_library_preset(gtest_state, body.preset, bundle=bundle)
         if body.preset.get("project_memory"):
             save_bundle_memory(bundle, import_library_memory(body.preset))
     _persist_job_gtest_state(job_id, gtest_state)
-    library_root = _library_root()
-    if library_root:
-        preset_path = library_preset_path(library_root)
-        preset_path.parent.mkdir(parents=True, exist_ok=True)
-        from src.utils.yaml_utils import dump_yaml
+    from web.alex_storage import ensure_alex_data_dir
 
-        memory = merge_project_memory(library_root=library_root, bundle=bundle, gtest_state=gtest_state)
-        dump_yaml(preset_path, export_library_preset(gtest_state, project_memory=memory))
-        mem_path = library_memory_path(library_root)
-        dump_yaml(mem_path, export_library_memory(memory))
+    ensure_alex_data_dir()
+    preset_path = library_preset_path()
+    memory = merge_project_memory(library_root=_library_root(), bundle=bundle, gtest_state=gtest_state)
+    samples = load_code_style_samples(bundle)
+    dump_yaml(
+        preset_path,
+        export_library_preset(gtest_state, project_memory=memory, code_style_samples=samples),
+    )
+    dump_yaml(library_memory_path(), export_library_memory(memory))
+    if samples:
+        dump_yaml(code_style_samples_path(), export_library_code_samples(bundle))
     _save_bundle_to_job(job_id, bundle)
-    return {"ok": True, "harness": gtest_state.get("harness"), "code_variable_map": gtest_state.get("code_variable_map")}
+    return {
+        "ok": True,
+        "harness": gtest_state.get("harness"),
+        "code_variable_map": gtest_state.get("code_variable_map"),
+        "code_style_samples": load_code_style_samples(bundle),
+    }
 
 
 @app.get("/api/app-config")

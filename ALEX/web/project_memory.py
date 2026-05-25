@@ -9,7 +9,7 @@ from src.utils.yaml_utils import load_yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MEMORY_PATH = ROOT / "config" / "project_memory.yaml"
-LIBRARY_MEMORY_NAME = "project_memory.yaml"
+from web.alex_storage import load_yaml_file, project_memory_path as alex_project_memory_path
 
 
 def default_project_memory() -> dict[str, Any]:
@@ -45,21 +45,21 @@ def load_default_memory() -> dict[str, Any]:
     return base
 
 
-def library_memory_path(library_root: Path) -> Path:
-    return library_root / ".alex" / LIBRARY_MEMORY_NAME
+def library_memory_path(library_root: Path | None = None) -> Path:
+    """Project memory file — always under ALEX/web_data/.alex."""
+    del library_root
+    return alex_project_memory_path()
 
 
-def load_library_memory(library_root: Path | None) -> dict[str, Any]:
-    if not library_root:
-        return default_project_memory()
-    path = library_memory_path(library_root)
+def load_library_memory(library_root: Path | None = None) -> dict[str, Any]:
+    del library_root
+    path = alex_project_memory_path()
     if not path.exists():
         return default_project_memory()
-    try:
-        data = load_yaml(path)
-    except (OSError, ValueError, TypeError):
+    data = load_yaml_file(path)
+    if not isinstance(data, dict):
         return default_project_memory()
-    pm = data.get("project_memory") if isinstance(data, dict) and "project_memory" in data else data
+    pm = data.get("project_memory") if "project_memory" in data else data
     if not isinstance(pm, dict):
         return default_project_memory()
     base = default_project_memory()
@@ -76,8 +76,9 @@ def merge_project_memory(
     bundle: dict[str, Any] | None = None,
     gtest_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    del library_root
     merged = load_default_memory()
-    lib = load_library_memory(library_root)
+    lib = load_library_memory()
     merged["io_variable_map"] = {**merged["io_variable_map"], **lib.get("io_variable_map", {})}
     merged["signal_roles"] = {**merged["signal_roles"], **lib.get("signal_roles", {})}
     merged["shared_preconditions"] = list(lib.get("shared_preconditions") or []) or merged["shared_preconditions"]

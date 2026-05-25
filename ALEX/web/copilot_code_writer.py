@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from web.code_style_samples import validate_copilot_code_draft
 from web.m365_copilot import run_copilot_chat
 
 
@@ -20,6 +21,30 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     return {}
 
 
+def _format_style_samples(style_ref: dict[str, Any]) -> str:
+    samples = style_ref.get("samples") or []
+    if not samples:
+        return "[]"
+    primary = style_ref.get("primary_reference") or {}
+    lines = [
+        "Use reference tests for FIXTURE class, helper calls (RunForMs, Evaluate…), "
+        "comment style, and assertion patterns ONLY.",
+        "Do NOT copy signal values or testcase logic from references — use expected_input/output below.",
+    ]
+    if primary.get("test_name"):
+        lines.append(f"Primary style anchor: {primary.get('test_name')} ({primary.get('source_file') or ''})")
+    blocks: list[dict[str, str]] = []
+    for row in samples[:3]:
+        blocks.append(
+            {
+                "label": str(row.get("label") or row.get("test_name") or "ref"),
+                "fixture": str(row.get("fixture_class") or ""),
+                "snippet": str(row.get("snippet") or "")[:8000],
+            }
+        )
+    return "\n".join(lines) + "\n\n" + json.dumps(blocks, ensure_ascii=False, indent=2)
+
+
 def _writer_prompt(context_pack: dict[str, Any], *, engineer_note: str = "") -> str:
     tc = context_pack.get("testcase") or {}
     harness = context_pack.get("harness") or {}
@@ -28,27 +53,32 @@ def _writer_prompt(context_pack: dict[str, Any], *, engineer_note: str = "") -> 
     siblings = context_pack.get("sibling_assertions") or []
     io_map = context_pack.get("io_variable_map") or {}
     logic = context_pack.get("logic") or {}
+    style_ref = context_pack.get("code_style_reference") or {}
+    style_text = _format_style_samples(style_ref)
 
     return (
         "You are Microsoft 365 Copilot writing Google Test (GTest) C++ for automotive ALEX.\n"
         "Write a complete TEST_F from the approved testcase spec below.\n\n"
         "Rules:\n"
+        "- Match project reference code style (fixture, helpers, comment blocks).\n"
         "- Use harness fixture/members exactly as provided.\n"
-        "- Map spec signals using io_variable_map; do not invent code symbol names.\n"
+        "- Map spec signals using io_variable_map when present; otherwise use harness members + spec names.\n"
         "- Every Then: line in expected_output MUST become an EXPECT_EQ or appropriate assert.\n"
         "- Given: lines become input assignments; When: timing becomes advance_time call.\n"
         "- Include spec comment block referencing candidate_id and control.\n"
         "- If verification_patterns list then_signals, assert ALL when Given matches.\n"
         "- If sibling_assertions show same Given with different Then, this case is one variant — "
-        "assert only this testcase's expected_output.\n\n"
+        "assert only this testcase's expected_output.\n"
+        "- Reference snippets are STYLE ONLY — never copy their literal values.\n\n"
         f"Engineer note: {engineer_note[:1500]}\n\n"
+        f"Project reference GTest (style + helpers):\n{style_text[:12000]}\n\n"
         f"Harness:\n{json.dumps(harness, ensure_ascii=False)[:2000]}\n\n"
         f"io_variable_map:\n{json.dumps(io_map, ensure_ascii=False)[:3000]}\n\n"
         f"Logic:\n{json.dumps(logic, ensure_ascii=False)[:2000]}\n\n"
         f"Testcase:\n{json.dumps(tc, ensure_ascii=False)[:6000]}\n\n"
         f"Verification patterns:\n{json.dumps(patterns, ensure_ascii=False)[:2000]}\n\n"
         f"Sibling assertions (same Given):\n{json.dumps(siblings, ensure_ascii=False)[:1500]}\n\n"
-        f"Python baseline skeleton (reference, improve if needed):\n"
+        f"Python baseline skeleton (structure reference, improve with project style):\n"
         f"{json.dumps({k: baseline.get(k) for k in ('test_name', 'code_body', 'full_snippet') if baseline.get(k)}, ensure_ascii=False)[:4000]}\n\n"
         "Return JSON only:\n"
         "{\n"
@@ -75,9 +105,20 @@ def run_code_write(
         comments = str(parsed.get("spec_comment_block") or "").strip()
         body = str(parsed.get("code_body") or "").strip()
         parsed["full_snippet"] = "\n".join(x for x in (comments, body) if x)
+    tc = context_pack.get("testcase") or {}
+    expected_name = str(tc.get("test_function") or tc.get("candidate_id") or "")
+    validation = validate_copilot_code_draft(parsed, expected_test_name=expected_name)
     return {
-        "ok": bool(parsed.get("full_snippet") or parsed.get("code_body")),
+        "ok": bool(parsed.get("full_snippet") or parsed.get("code_body")) and validation["ok"],
         "draft": parsed,
+        "validation": validation,
         "raw_preview": raw[:500] if not parsed else "",
         "provider": "m365_copilot",
     }
+
+
+def code_write_batch_size(cfg: dict[str, Any] | None) -> int:
+    if not cfg:
+        return 3
+    assist = cfg.get("assist") or {}
+    return max(1, min(8, int(assist.get("copilot_code_batch_size", assist.get("copilot_write_batch_size", 3)))))

@@ -1059,3 +1059,24 @@ textarea:focus-visible {
   min-width: 4rem;
   font-size: 0.85rem;
 }
+
+.gtest-note {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  margin-top: 0.35rem;
+}
+.alex-testcode-sample-list {
+  margin: 0 0 0.75rem 1rem;
+  padding: 0;
+  font-size: var(--text-sm);
+}
+.gtest-batch-table .tag.ok {
+  color: var(--success, #6bc46b);
+}
+.gtest-batch-table .tag.warn {
+  color: var(--warning, #e6a700);
+}
+.gtest-batch-table .tag.skip {
+  color: var(--muted, #888);
+}

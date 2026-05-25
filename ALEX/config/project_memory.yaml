@@ -1,4 +1,4 @@
-# ALEX — project memory defaults (override per Library .alex/project_memory.yaml)
+# ALEX — project memory defaults (runtime override: web_data/.alex/project_memory.yaml)
 project_memory:
   io_variable_map: {}
   signal_roles: {}

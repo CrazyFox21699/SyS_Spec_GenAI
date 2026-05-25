@@ -181,6 +181,19 @@ chmod -R u+rwX web_data
 
 User chạy `./chay.sh` phải sở hữu thư mục ALEX.
 
+### Folder `.alex` / dữ liệu runtime
+
+ALEX lưu cấu hình GTest + project memory trong **`ALEX/web_data/.alex/`** (không tạo `.alex` trong folder spec bên ngoài).
+
+```bash
+ls -la web_data/.alex/
+# gtest_harness_preset.yaml, project_memory.yaml, code_style_samples.yaml
+```
+
+Backup trước khi cập nhật: `tar czf alex-web_data-backup.tgz web_data/ .env`
+
+Nếu nâng cấp từ bản cũ trỏ `pm_test_spec_assistant`: khởi động server một lần — app tự migrate sang `web_data/.alex/`.
+
 ---
 
 ## Cập nhật phiên bản mới

@@ -12,6 +12,7 @@ from src.engine.verification_patterns import (
     build_verification_matrix,
 )
 from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
+from web.code_style_samples import code_style_reference_for_bundle
 from web.copilot_context_pack import _logic_block, build_context_pack
 from web.gtest_workspace import generate_draft_for_request
 from web.project_memory import merge_project_memory, patterns_for_logic
@@ -61,6 +62,8 @@ def build_code_context_pack(
     language: str = "EN",
     include_baseline: bool = True,
     cfg: dict[str, Any] | None = None,
+    reference_test_name: str = "",
+    library_code_samples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     row = _workbench_row(bundle, candidate_id, language=language)
     if not row:
@@ -76,6 +79,11 @@ def build_code_context_pack(
     memory = merge_project_memory(library_root=library_root, bundle=bundle, gtest_state=gtest_state)
     matrix = build_verification_matrix(bundle, logic_id) if logic_id else {}
     given_fp = _given_fingerprint(row.get("expected_input") or "")
+    style_ref = code_style_reference_for_bundle(
+        bundle,
+        reference_test_name=reference_test_name,
+        library_samples=library_code_samples,
+    )
 
     pack: dict[str, Any] = {
         "schema_version": "1",
@@ -106,6 +114,7 @@ def build_code_context_pack(
             bundle, logic_id, given_fp, exclude_candidate=candidate_id
         ),
         "code_references": bundle.get("code_references") or [],
+        "code_style_reference": style_ref,
     }
 
     if logic_id:

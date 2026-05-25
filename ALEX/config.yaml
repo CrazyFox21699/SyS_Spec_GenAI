@@ -54,6 +54,7 @@ assist:
   validation_retries: 1
   copilot_write_batch_size: 6
   copilot_write_retries: 1
+  copilot_code_batch_size: 3
   knowledge_batch_size: 15
   orchestrator: deterministic
   ollama:
