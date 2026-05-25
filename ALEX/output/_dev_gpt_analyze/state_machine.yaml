@@ -1,0 +1,447 @@
+states:
+- name: 'OFF'
+  mode: null
+  description: null
+- name: ACCESSORY
+  mode: null
+  description: null
+- name: RUN
+  mode: null
+  description: null
+- name: SHUT_OFF
+  mode: null
+  description: null
+- name: ANY
+  mode: null
+  description: null
+- name: DIAG_FLAG
+  mode: null
+  description: ''
+  semantic_labels: &id001
+  - DIAG_FLAG
+  source_types: &id002
+  - state_rule
+- name: FALLBACK_OFF
+  mode: null
+  description: ''
+  semantic_labels: &id003
+  - FALLBACK_OFF
+  source_types: &id004
+  - ocr_state_label
+- name: PWR_STATE
+  mode: null
+  description: ''
+  semantic_labels: &id005
+  - PWR_STATE
+  source_types: &id006
+  - state_rule
+- name: RELAY_MAIN
+  mode: null
+  description: ''
+  semantic_labels: &id007
+  - RELAY_MAIN
+  source_types: &id008
+  - state_rule
+transitions:
+- id: TR_OFF_ACC
+  from_state: 'OFF'
+  to_state: ACCESSORY
+  event: Accessory request
+  raw_condition: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+    | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 64
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=1; RELAY_MAIN=ON
+  input_stimulus: PWR_REQ=1; IGN_STS=1
+  timing: T_ACC_CONFIRM=250ms
+  required_logic: PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF
+  diagram_link: 'Diagram: OFF→ACCESSORY'
+  inferred_logic_id: TC2_XL_Test_Pow_SEC_03_02
+- id: TR_ACC_RUN
+  from_state: ACCESSORY
+  to_state: RUN
+  event: Run request
+  raw_condition: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms
+    | PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 65
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=2; RELAY_MAIN=ON
+  input_stimulus: PWR_REQ=1; GEAR_POS=P; BATT_OK=1
+  timing: T_RUN_CONFIRM=400ms
+  required_logic: PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1
+  diagram_link: 'Diagram: ACCESSORY→RUN'
+- id: TR_RUN_SHUT
+  from_state: RUN
+  to_state: SHUT_OFF
+  event: Shutoff request
+  raw_condition: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+    IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 66
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=3; RELAY_MAIN=OFF
+  input_stimulus: PWR_REQ=1; IGN_STS=0; GEAR_POS=P; VEH_SPD=0
+  timing: T_SHUT_CONFIRM=300ms
+  required_logic: SYS_SHUTOFF AND NOT NOK_SHUTOFF
+  diagram_link: 'Diagram: RUN→SHUT_OFF'
+  inferred_logic_id: TC2_XL_Test_Pow_SEC_03_01
+- id: TR_SHUT_OFF
+  from_state: SHUT_OFF
+  to_state: 'OFF'
+  event: Shutdown complete
+  raw_condition: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+    | Diagram: SHUT_OFF→OFF'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 67
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=0; WAKE_REQ=0
+  input_stimulus: RELAY_MAIN feedback=OFF
+  timing: T_FAIL_TIMEOUT=1000ms
+  required_logic: RELAY_MAIN feedback = OFF
+  diagram_link: 'Diagram: SHUT_OFF→OFF'
+- id: TR_FAIL_OFF
+  from_state: ANY
+  to_state: 'OFF'
+  event: Transition failed
+  raw_condition: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+    | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 68
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=0; DIAG_FLAG=1
+  input_stimulus: Inject timeout or diagnostic
+  timing: 1000ms / T_DIAG_FILTER=80ms
+  required_logic: T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED
+  diagram_link: 'Diagram: Any→OFF fallback'
+- id: TR_OFF_ACC
+  from_state: 'OFF'
+  to_state: ACCESSORY
+  event: Accessory request
+  raw_condition: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+    | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 64
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=1; RELAY_MAIN=ON
+  input_stimulus: PWR_REQ=1; IGN_STS=1
+  timing: T_ACC_CONFIRM=250ms
+  required_logic: PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF
+  diagram_link: 'Diagram: OFF→ACCESSORY'
+  inferred_logic_id: TC2_XL_Test_Pow_SEC_03_02
+- id: TR_ACC_RUN
+  from_state: ACCESSORY
+  to_state: RUN
+  event: Run request
+  raw_condition: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms
+    | PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 65
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=2; RELAY_MAIN=ON
+  input_stimulus: PWR_REQ=1; GEAR_POS=P; BATT_OK=1
+  timing: T_RUN_CONFIRM=400ms
+  required_logic: PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1
+  diagram_link: 'Diagram: ACCESSORY→RUN'
+- id: TR_RUN_SHUT
+  from_state: RUN
+  to_state: SHUT_OFF
+  event: Shutoff request
+  raw_condition: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+    IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 66
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=3; RELAY_MAIN=OFF
+  input_stimulus: PWR_REQ=1; IGN_STS=0; GEAR_POS=P; VEH_SPD=0
+  timing: T_SHUT_CONFIRM=300ms
+  required_logic: SYS_SHUTOFF AND NOT NOK_SHUTOFF
+  diagram_link: 'Diagram: RUN→SHUT_OFF'
+  inferred_logic_id: TC2_XL_Test_Pow_SEC_03_01
+- id: TR_SHUT_OFF
+  from_state: SHUT_OFF
+  to_state: 'OFF'
+  event: Shutdown complete
+  raw_condition: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+    | Diagram: SHUT_OFF→OFF'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 67
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=0; WAKE_REQ=0
+  input_stimulus: RELAY_MAIN feedback=OFF
+  timing: T_FAIL_TIMEOUT=1000ms
+  required_logic: RELAY_MAIN feedback = OFF
+  diagram_link: 'Diagram: SHUT_OFF→OFF'
+- id: TR_FAIL_OFF
+  from_state: ANY
+  to_state: 'OFF'
+  event: Transition failed
+  raw_condition: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+    | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  source:
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 68
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+  derivation: excel_transition_interpretation
+  outputs:
+  - PWR_STATE=0; DIAG_FLAG=1
+  input_stimulus: Inject timeout or diagnostic
+  timing: 1000ms / T_DIAG_FILTER=80ms
+  required_logic: T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED
+  diagram_link: 'Diagram: Any→OFF fallback'
+diagram_semantics:
+  states:
+  - state: ACCESSORY
+    labels:
+    - ACCESSORY
+    source_types:
+    - ocr_state_label
+    - transition
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / Test_Power_State_Spec
+    - GPT_GenLogic.xlsx / excel_transition_table / row 64
+    - GPT_GenLogic.xlsx / excel_transition_table / row 65
+    ocr_mentioned: true
+  - state: ANY
+    labels:
+    - ANY
+    source_types:
+    - transition
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 68
+    ocr_mentioned: false
+  - state: DIAG_FLAG
+    labels: *id001
+    source_types: *id002
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 43
+    ocr_mentioned: false
+  - state: FALLBACK_OFF
+    labels: *id003
+    source_types: *id004
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / Test_Power_State_Spec
+    ocr_mentioned: true
+  - state: 'OFF'
+    labels:
+    - 'OFF'
+    source_types:
+    - ocr_state_label
+    - transition
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / Test_Power_State_Spec
+    - GPT_GenLogic.xlsx / excel_transition_table / row 64
+    - GPT_GenLogic.xlsx / excel_transition_table / row 67
+    - GPT_GenLogic.xlsx / excel_transition_table / row 68
+    ocr_mentioned: true
+  - state: PWR_STATE
+    labels: *id005
+    source_types: *id006
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 24
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 33
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 43
+    ocr_mentioned: false
+  - state: RELAY_MAIN
+    labels: *id007
+    source_types: *id008
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 24
+    - GPT_GenLogic.xlsx / excel_cell_diagram / row 33
+    ocr_mentioned: false
+  - state: RUN
+    labels:
+    - RUN
+    source_types:
+    - ocr_state_label
+    - transition
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / Test_Power_State_Spec
+    - GPT_GenLogic.xlsx / excel_transition_table / row 65
+    - GPT_GenLogic.xlsx / excel_transition_table / row 66
+    ocr_mentioned: true
+  - state: SHUT_OFF
+    labels:
+    - SHUT_OFF
+    source_types:
+    - ocr_state_label
+    - transition
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_cell_diagram / Test_Power_State_Spec
+    - GPT_GenLogic.xlsx / excel_transition_table / row 66
+    - GPT_GenLogic.xlsx / excel_transition_table / row 67
+    ocr_mentioned: true
+  edges:
+  - from_state: 'OFF'
+    to_state: ACCESSORY
+    event: Accessory request
+    semantic_type: explicit_transition
+    conditions:
+    - 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms | PWR_REQ=1;
+      IGN_STS=1 | Diagram: OFF→ACCESSORY'
+    source_derivations:
+    - excel_transition_interpretation
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 64
+    confidence_levels:
+    - high
+    review_required: true
+    transition_ids:
+    - TR_OFF_ACC
+    - TR_OFF_ACC
+  - from_state: ACCESSORY
+    to_state: RUN
+    event: Run request
+    semantic_type: explicit_transition
+    conditions:
+    - 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms | PWR_REQ=1;
+      GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+    source_derivations:
+    - excel_transition_interpretation
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 65
+    confidence_levels:
+    - high
+    review_required: true
+    transition_ids:
+    - TR_ACC_RUN
+    - TR_ACC_RUN
+  - from_state: RUN
+    to_state: SHUT_OFF
+    event: Shutoff request
+    semantic_type: explicit_transition
+    conditions:
+    - 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1; IGN_STS=0;
+      GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+    source_derivations:
+    - excel_transition_interpretation
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 66
+    confidence_levels:
+    - high
+    review_required: true
+    transition_ids:
+    - TR_RUN_SHUT
+    - TR_RUN_SHUT
+  - from_state: SHUT_OFF
+    to_state: 'OFF'
+    event: Shutdown complete
+    semantic_type: explicit_transition
+    conditions:
+    - 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+      | Diagram: SHUT_OFF→OFF'
+    source_derivations:
+    - excel_transition_interpretation
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 67
+    confidence_levels:
+    - high
+    review_required: true
+    transition_ids:
+    - TR_SHUT_OFF
+    - TR_SHUT_OFF
+  - from_state: ANY
+    to_state: 'OFF'
+    event: Transition failed
+    semantic_type: explicit_transition
+    conditions:
+    - 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms | Inject
+      timeout or diagnostic | Diagram: Any→OFF fallback'
+    source_derivations:
+    - excel_transition_interpretation
+    evidence_refs:
+    - GPT_GenLogic.xlsx / excel_transition_table / row 68
+    confidence_levels:
+    - high
+    review_required: true
+    transition_ids:
+    - TR_FAIL_OFF
+    - TR_FAIL_OFF
+  summary:
+    states_total: 9
+    edges_total: 5
+    explicit_edges: 5
+    rule_inferred_edges: 0
+    ocr_state_mentions: 5
+  graph_built: true
+source_files:
+- /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/GPT_GenLogic.xlsx
+- /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/GPT_GenLogic.xlsx

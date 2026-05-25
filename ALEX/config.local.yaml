@@ -1,0 +1,140 @@
+# ALEX — Mac local dev (./dev.sh)
+# Ubuntu/server dùng config.yaml — không đổi file này trên máy công ty.
+
+product:
+  name: ALEX
+  display_name: ALEX
+  version: "0.3"
+project:
+  name: alex
+  legacy_folder: ALEX
+features:
+  evidence_registry: true
+  validator: true
+  add_clone_tc: true
+  source_index: true
+  term_roles: true
+  ollama_assist: false
+  atom_model: true
+  understanding_gate: true
+  document_map: true
+  library_map: true
+  word_section_router: true
+  word_merge_geometry: true
+  state_grammar_parser: true
+  formal_logic_ir_v2: true
+  memory_semantics_parser: true
+  excel_annotations: true
+test_generation:
+  mode: legacy
+  coverage: mcdc
+  max_expansion_factor: 32
+deployment:
+  mode: local
+  host: 127.0.0.1
+  port: 8765
+  lan_ipv4: ""
+  public_url: http://127.0.0.1:8765
+team_auth:
+  enabled: false
+security:
+  enabled: true
+  require_token: false
+  max_upload_mb: 50
+  rate_limit_per_minute: 300
+export:
+  strict: false
+assist:
+  default_provider: m365
+  require_m365_login: true
+  allow_ollama_fallback: false
+  validation_retries: 1
+  copilot_write_batch_size: 6
+  copilot_write_retries: 1
+  knowledge_batch_size: 15
+  orchestrator: deterministic
+  ollama:
+    base_url: http://127.0.0.1:11434
+    model: qwen2.5:latest
+    role: fallback_inference
+  m365:
+    enabled: true
+    client_id: "325c9e27-c681-4869-ab33-bc423ddf5df9"
+    tenant_id: "f01e930a-b52e-42b1-b70f-a8882b5d043b"
+    timezone: Asia/Tokyo
+    # Delegated scopes only (must match IT API permissions + admin consent):
+    login_scopes:
+      - openid
+      - profile
+      - email
+      - offline_access
+      - User.Read
+    # Extra Copilot scopes — leave empty until IT grants more delegated permissions:
+    copilot_scopes: []
+  copilot:
+    enabled: false   # Tắt — chưa được phép dùng trên server multi-user
+classification:
+  state_name_patterns:
+  - ADM\d+_[A-Z0-9_]+
+  gtest_patterns:
+  - TEST_F
+  - EXPECT_EQ
+  - ASSERT_EQ
+  behavior_keywords:
+  - state
+  - transition
+  - condition
+  - event
+  - output
+  - next state
+  - fail
+  - timeout
+  signal_keywords:
+  - signal
+  - interface
+  - sender
+  - receiver
+  - initial
+  - fail-safe
+  - fail safe
+  - value
+  test_spec_keywords:
+  - test case
+  - testcase
+  - expected
+  - result
+  - pass/fail
+timing:
+  default_interpret_equal_time_as: '>='
+  review_required_for_equal_time: true
+  patterns:
+  - T\s*=\s*\d+\s*ms
+  - T\s*>=\s*\d+\s*ms
+  - After\s+\d+\s*ms
+  - Within\s+\d+\s*ms
+  - not elapsed
+  - elapsed
+  - timeout
+  - exceeded
+llm:
+  enabled: false
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen2.5:latest
+  timeout_seconds: 120
+output:
+  backup_existing_files: true
+ui:
+  strict_mode: true
+  default_input_dir: sample_inputs/input
+gtest:
+  fixture_class: PowerModeTest
+  inputs_member: in
+  outputs_member: out
+  state_member: state
+  state_enum: PowerModeState
+  evaluate_fn: EvaluatePowerMode
+  include_header: "#include <gtest/gtest.h>"
+  helpers:
+    set_signal: SetSignal
+    advance_time: RunForMs

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)" />
+  <title>ALEX — Spec review</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem("alex.theme") === "light" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/style.css?v=73" />
+</head>
+<body>
+  <aside id="sidebar" aria-label="Workflow">
+    <div class="sidebar-brand">
+      <span class="sidebar-brand__logo" aria-hidden="true">AX</span>
+      <div class="sidebar-brand__text">
+        <h1>ALEX</h1>
+        <p class="sidebar-tagline">Spec review assistant</p>
+      </div>
+    </div>
+    <nav id="nav" aria-label="Main steps"></nav>
+    <footer class="sidebar-footer">
+      <span class="sidebar-version">ALEX · v2</span>
+    </footer>
+  </aside>
+  <div id="main">
+    <div id="m365-expired-banner" class="m365-expired-banner" hidden role="alert">
+      <span id="m365-expired-banner-text">Microsoft 365 session expired.</span>
+      <button type="button" class="btn secondary" id="btn-m365-expired-signin">Sign in again</button>
+    </div>
+    <header id="topbar" aria-label="Job summary">
+      <div class="topbar-left">
+        <div class="topbar-crumb" aria-label="Current step">
+          <span class="topbar-crumb__step" id="topbar-page-step">Step 1</span>
+          <span class="topbar-crumb__title" id="topbar-page-title">Spec review</span>
+        </div>
+        <div class="topbar-stats">
+        <span class="stat">JOB <b id="job-id">—</b></span>
+        <span class="stat">Selected <b id="stat-selected">0 / 0</b></span>
+        <span class="stat stat--ok">Rows Ready <b id="stat-ready">—</b></span>
+        <span class="stat stat--blocked">Rows Blocked <b id="stat-blocked">—</b></span>
+        <span class="stat stat--warn">Missing Terms <b id="stat-missing">—</b></span>
+        <span class="stat stat--info">Logic Groups <b id="stat-logic">—</b></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-meta" aria-label="Service status">
+          <span class="topbar-chip" id="chip-m365" title="M365 Copilot">
+            <span class="topbar-chip__dot" aria-hidden="true"></span>
+            <span class="topbar-chip__label">M365</span>
+            <span class="topbar-chip__value" id="stat-m365">—</span>
+          </span>
+          <span class="topbar-chip" id="chip-ollama" title="Ollama">
+            <span class="topbar-chip__dot" aria-hidden="true"></span>
+            <span class="topbar-chip__label">Ollama</span>
+            <span class="topbar-chip__value" id="stat-ollama">—</span>
+          </span>
+        </div>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <div class="topbar-user" id="topbar-user-wrap" hidden>
+          <span class="topbar-user__name" id="stat-user">—</span>
+          <button type="button" class="topbar-user__signout" id="btn-sign-out">Sign out</button>
+        </div>
+        <button
+          type="button"
+          class="theme-toggle-btn"
+          id="theme-toggle"
+          aria-label="Toggle light theme"
+          aria-pressed="false"
+          title="Light / dark theme"
+        >
+          <svg class="theme-toggle-btn__icon theme-toggle-btn__icon--moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z"/>
+          </svg>
+          <svg class="theme-toggle-btn__icon theme-toggle-btn__icon--sun" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12Zm0 4a1 1 0 0 1-1-1v-1.1a1 1 0 1 1 2 0V21a1 1 0 0 1-1 1Zm0-17.9a1 1 0 0 1-1-1V2a1 1 0 1 1 2 0v1.1a1 1 0 0 1-1 1ZM4.2 19.8a1 1 0 0 1-1.4-1.4l.8-.8a1 1 0 1 1 1.4 1.4l-.8.8ZM19.4 4.6a1 1 0 0 1-1.4-1.4l.8-.8a1 1 0 0 1 1.4 1.4l-.8.8ZM2 13H.9a1 1 0 1 1 0-2H2a1 1 0 1 1 0 2Zm21 0h-1.1a1 1 0 1 1 0-2H23a1 1 0 1 1 0 2ZM4.6 19.4l-.8.8a1 1 0 1 1-1.4-1.4l.8-.8a1 1 0 0 1 1.4 1.4ZM19.8 4.2l-.8-.8a1 1 0 0 1 1.4-1.4l.8.8a1 1 0 0 1-1.4 1.4Z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <main id="content" role="main"></main>
+  </div>
+  <script src="/static/js/icons.js?v=5"></script>
+  <script src="/static/js/app.js?v=111"></script>
+</body>
+</html>

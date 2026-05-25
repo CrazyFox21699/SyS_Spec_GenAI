@@ -1,0 +1,92 @@
+classified_files:
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/GPT_GenLogic.xlsx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Control / condition logic table
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Behavior_Logic_Sample.xlsx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Spreadsheet with test-case columns (Given / Expected)
+  - Control / condition logic table
+  - State-machine style naming in content
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Condition_Tree_Diagram.png
+  file_type: system_spec
+  file_type_label: System Spec
+  role: diagram
+  reason:
+  - Diagram or image (supporting system specification)
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_StateFlow_Timing_Sample.pdf
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - PDF specification or diagram document
+  - State-machine style naming in content
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_State_Machine_Diagram.png
+  file_type: system_spec
+  file_type_label: System Spec
+  role: diagram
+  reason:
+  - Diagram or image (supporting system specification)
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_System_Spec_Sample.docx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Word document contains test reference tables
+  - State-machine style naming in content
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/PM_Timing_Chart.png
+  file_type: system_spec
+  file_type_label: System Spec
+  role: diagram
+  reason:
+  - Diagram or image (supporting system specification)
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/Sample_Power_Control_Specification.docx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Word control / condition tables
+  - Word document contains test reference tables
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/Shutoff_Condition_Spec_v2.docx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Word control / condition tables
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/edited_Shutoff_Condition_Spec.docx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Word control / condition tables
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/pm_controller_sample.cpp
+  file_type: sample_code
+  file_type_label: Sample Code
+  role: code_reference
+  reason:
+  - C/C++ reference / sample implementation
+  - State-machine style naming in content
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/power_mode_gtest_sample.cpp
+  file_type: test_code
+  file_type_label: Test Code
+  role: code_reference
+  reason:
+  - C/C++ source with test framework macros
+  - State-machine style naming in content
+  user_confirmation_suggested: false

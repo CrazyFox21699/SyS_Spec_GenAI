@@ -1,5 +1,0 @@
-build/
-.venv/
-__pycache__/
-*.pyc
-condition_index.json

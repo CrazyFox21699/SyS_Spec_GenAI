@@ -1,0 +1,13 @@
+version: '3'
+root: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_test_spec_assistant/input
+focus_id: LIB_355b2f42
+items:
+- id: LIB_355b2f42
+  file: ''
+- id: LIB_6a2ce929
+  file: ''
+links:
+- id: LNK_9bb17851
+  source: LIB_355b2f42
+  target: LIB_6a2ce929
+  label: Input

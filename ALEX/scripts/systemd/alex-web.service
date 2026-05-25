@@ -1,0 +1,17 @@
+[Unit]
+Description=ALEX web UI
+After=network.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/opt/alex/ALEX
+Environment=PATH=/opt/alex/ALEX/.venv/bin:/usr/bin
+EnvironmentFile=-/opt/alex/ALEX/.env
+ExecStart=/opt/alex/ALEX/.venv/bin/python run_web.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

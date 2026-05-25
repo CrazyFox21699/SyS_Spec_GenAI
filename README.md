@@ -1,3 +1,14 @@
-# SyS_Spec_GenAI
+# SyS Spec GenAI — ALEX
 
-ALEX test-spec assistant: see [pm_test_spec_assistant/README.md](pm_test_spec_assistant/README.md).
+Công cụ phân tích spec và sinh test case cho engineer power-mode.
+
+**Toàn bộ mã nguồn nằm trong folder [`ALEX/`](ALEX/).** Đọc [`ALEX/README.md`](ALEX/README.md) để cài đặt và vận hành trên Ubuntu.
+
+```text
+SyS_Spec_GenAI/
+  └── ALEX/          ← app duy nhất cần giữ
+        ├── cai_dat.sh
+        ├── chay.sh
+        ├── config.yaml
+        └── README.md
+```

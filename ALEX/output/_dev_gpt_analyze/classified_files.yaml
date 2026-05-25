@@ -1,0 +1,15 @@
+classified_files:
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/GPT_GenLogic.xlsx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Control / condition logic table
+  user_confirmation_suggested: false
+- file: /Users/tranthaonguyen/TruongHuy/TMC_Cursor/pm_sample_inputs/input/GPT_GenLogic.xlsx
+  file_type: system_spec
+  file_type_label: System Spec
+  role: system_spec
+  reason:
+  - Control / condition logic table
+  user_confirmation_suggested: false

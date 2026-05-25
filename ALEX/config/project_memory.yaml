@@ -1,0 +1,9 @@
+# ALEX — project memory defaults (override per Library .alex/project_memory.yaml)
+project_memory:
+  io_variable_map: {}
+  signal_roles: {}
+  shared_preconditions: []
+  verification_patterns: []
+  copilot_hints:
+    prefer_reuse_patterns: true
+    max_patterns_in_prompt: 5

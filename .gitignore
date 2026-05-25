@@ -1,14 +1,1 @@
 .DS_Store
-**/.venv/
-**/__pycache__/
-**/*.pyc
-**/.pytest_cache/
-**/web_data/uploads/*
-**/web_data/output/*
-!**/web_data/uploads/.gitkeep
-!**/web_data/output/.gitkeep
-*.log
-.env
-.env.*
-~$*
-**/~$*

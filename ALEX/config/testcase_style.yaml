@@ -1,0 +1,28 @@
+# ALEX — default testcase writing style for M365 Copilot (EN workbook)
+name: alex_default_en
+language: EN
+
+rules:
+  - "Use line-oriented fields: Precondition, Given, When, Then (prefix with colon in output)"
+  - "Use concrete numeric or boolean values — never prose like vehicle is moving"
+  - "Keep signal and variable names in ASCII (e.g. OK_SHUTOFF, VEH_SPD)"
+  - "Include units when the spec uses them (km/h, ms, percent)"
+  - "For thresholds, pick a value just past the boundary (2.01, 5.01 ms)"
+  - "Expected input lists stimulus Given lines; outputs belong in Expected output as Then"
+  - "Do not put output assertion signals in Given unless they are true inputs"
+  - "UseCase is one short scenario sentence referencing the control and path intent"
+  - "Operation describes the test action or trigger in one or two lines"
+
+examples:
+  expected_input: |
+    Precondition: System state = OFF
+    Given: OK_SHUTOFF=1
+    Given: NOK_SHUTOFF=0
+    When: Evaluate control logic
+  expected_output: |
+    Then: SHUTOFF_DECISION=1
+
+forbidden:
+  - "Markdown headings inside field text"
+  - "Vague phrases without signal=value pairs"
+  - "Inventing candidate_id values not in the approved plan"

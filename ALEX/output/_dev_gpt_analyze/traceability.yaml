@@ -1,0 +1,626 @@
+transition_context:
+- transition_id: TR_OFF_ACC
+  signals_mentioned: []
+  raw_condition: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+    | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  from_state: 'OFF'
+  to_state: ACCESSORY
+  outputs: &id001
+  - PWR_STATE=1; RELAY_MAIN=ON
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 64
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_ACC_RUN
+  signals_mentioned: []
+  raw_condition: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms
+    | PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  from_state: ACCESSORY
+  to_state: RUN
+  outputs: &id002
+  - PWR_STATE=2; RELAY_MAIN=ON
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 65
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_RUN_SHUT
+  signals_mentioned: []
+  raw_condition: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+    IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  from_state: RUN
+  to_state: SHUT_OFF
+  outputs: &id003
+  - PWR_STATE=3; RELAY_MAIN=OFF
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 66
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_SHUT_OFF
+  signals_mentioned: []
+  raw_condition: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+    | Diagram: SHUT_OFF→OFF'
+  from_state: SHUT_OFF
+  to_state: 'OFF'
+  outputs: &id004
+  - PWR_STATE=0; WAKE_REQ=0
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 67
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_FAIL_OFF
+  signals_mentioned: []
+  raw_condition: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+    | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  from_state: ANY
+  to_state: 'OFF'
+  outputs: &id005
+  - PWR_STATE=0; DIAG_FLAG=1
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 68
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_OFF_ACC
+  signals_mentioned: []
+  raw_condition: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+    | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  from_state: 'OFF'
+  to_state: ACCESSORY
+  outputs: &id006
+  - PWR_STATE=1; RELAY_MAIN=ON
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 64
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_ACC_RUN
+  signals_mentioned: []
+  raw_condition: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms
+    | PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  from_state: ACCESSORY
+  to_state: RUN
+  outputs: &id007
+  - PWR_STATE=2; RELAY_MAIN=ON
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 65
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_RUN_SHUT
+  signals_mentioned: []
+  raw_condition: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+    IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  from_state: RUN
+  to_state: SHUT_OFF
+  outputs: &id008
+  - PWR_STATE=3; RELAY_MAIN=OFF
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 66
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_SHUT_OFF
+  signals_mentioned: []
+  raw_condition: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+    | Diagram: SHUT_OFF→OFF'
+  from_state: SHUT_OFF
+  to_state: 'OFF'
+  outputs: &id009
+  - PWR_STATE=0; WAKE_REQ=0
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 67
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+- transition_id: TR_FAIL_OFF
+  signals_mentioned: []
+  raw_condition: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+    | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  from_state: ANY
+  to_state: 'OFF'
+  outputs: &id010
+  - PWR_STATE=0; DIAG_FLAG=1
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 8. State Transition Interpretation and Expected Output
+    section_index: 5
+    row: 68
+    kind: excel_transition_table
+  confidence: high
+  review_required: true
+test_traceability:
+- test_candidate_id: TC_PM_001
+  signals:
+  - PWR_REQ_VALID
+  - IGN_STS
+  conditions:
+  - 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms | PWR_REQ=1;
+    IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  states:
+    from: 'OFF'
+    to: ACCESSORY
+  outputs: *id001
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+      | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_004
+  signals:
+  - PWR_REQ_VALID
+  - GEAR_POS
+  conditions:
+  - 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms | PWR_REQ=1;
+    GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  states:
+    from: ACCESSORY
+    to: RUN
+  outputs: *id002
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms |
+      PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_007
+  signals:
+  - SYS_SHUTOFF
+  conditions:
+  - 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1; IGN_STS=0;
+    GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  states:
+    from: RUN
+    to: SHUT_OFF
+  outputs: *id003
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+      IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_010
+  signals: []
+  conditions:
+  - 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF |
+    Diagram: SHUT_OFF→OFF'
+  states:
+    from: SHUT_OFF
+    to: 'OFF'
+  outputs: *id004
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+      | Diagram: SHUT_OFF→OFF'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_012
+  signals: []
+  conditions:
+  - 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms | Inject
+    timeout or diagnostic | Diagram: Any→OFF fallback'
+  states:
+    from: ANY
+    to: 'OFF'
+  outputs: *id005
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+      | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_014
+  signals:
+  - PWR_REQ_VALID
+  - IGN_STS
+  conditions:
+  - 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms | PWR_REQ=1;
+    IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  states:
+    from: 'OFF'
+    to: ACCESSORY
+  outputs: *id006
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'PWR_REQ_VALID AND IGN_STS=1 AND NOT NOK_SHUTOFF | T_ACC_CONFIRM=250ms
+      | PWR_REQ=1; IGN_STS=1 | Diagram: OFF→ACCESSORY'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_017
+  signals:
+  - PWR_REQ_VALID
+  - GEAR_POS
+  conditions:
+  - 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms | PWR_REQ=1;
+    GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  states:
+    from: ACCESSORY
+    to: RUN
+  outputs: *id007
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'PWR_REQ_VALID AND GEAR_POS=P AND BATT_OK=1 | T_RUN_CONFIRM=400ms |
+      PWR_REQ=1; GEAR_POS=P; BATT_OK=1 | Diagram: ACCESSORY→RUN'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_020
+  signals:
+  - SYS_SHUTOFF
+  conditions:
+  - 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1; IGN_STS=0;
+    GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  states:
+    from: RUN
+    to: SHUT_OFF
+  outputs: *id008
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'SYS_SHUTOFF AND NOT NOK_SHUTOFF | T_SHUT_CONFIRM=300ms | PWR_REQ=1;
+      IGN_STS=0; GEAR_POS=P; VEH_SPD=0 | Diagram: RUN→SHUT_OFF'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_023
+  signals: []
+  conditions:
+  - 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF |
+    Diagram: SHUT_OFF→OFF'
+  states:
+    from: SHUT_OFF
+    to: 'OFF'
+  outputs: *id009
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'RELAY_MAIN feedback = OFF | T_FAIL_TIMEOUT=1000ms | RELAY_MAIN feedback=OFF
+      | Diagram: SHUT_OFF→OFF'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_025
+  signals: []
+  conditions:
+  - 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms | Inject
+    timeout or diagnostic | Diagram: Any→OFF fallback'
+  states:
+    from: ANY
+    to: 'OFF'
+  outputs: *id010
+  source_evidence:
+  - file: GPT_GenLogic.xlsx
+    location: sheet Test_Power_State_Spec row None
+    evidence: 'T_FAIL_TIMEOUT elapsed OR DIAG_BLOCKED | 1000ms / T_DIAG_FILTER=80ms
+      | Inject timeout or diagnostic | Diagram: Any→OFF fallback'
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_027
+  signals:
+  - PWR_REQ_VALID
+  - VEHICLE_SAFE
+  - NORMAL_ROUTE
+  - BACKUP_ROUTE
+  conditions:
+  - (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE AND T_SHUT_CONFIRM
+    elapsed)) AND NOT NOK_SHUTOFF)
+  states: {}
+  outputs:
+  - SYS_SHUTOFF
+  source_evidence:
+  - &id011
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 5. Control Conditions - Merged Logic Table
+    section_index: 3
+    control: SYS_SHUTOFF
+    table_id: XL_Test_Pow_SEC_03_01
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_028
+  signals:
+  - PWR_REQ_VALID
+  - VEHICLE_SAFE
+  - NORMAL_ROUTE
+  - BACKUP_ROUTE
+  conditions:
+  - (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE AND T_SHUT_CONFIRM
+    elapsed)) AND NOT NOK_SHUTOFF)
+  states: {}
+  outputs:
+  - SYS_SHUTOFF
+  source_evidence:
+  - *id011
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_029
+  signals:
+  - ENGINE_RUNNING
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - &id012
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 5. Control Conditions - Merged Logic Table
+    section_index: 3
+    control: NOK_SHUTOFF
+    table_id: XL_Test_Pow_SEC_03_02
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_030
+  signals:
+  - GEAR_NOT_PARK
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_031
+  signals:
+  - DOOR_UNLOCKED
+  - VEH_SPD
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_032
+  signals:
+  - DIAG_BLOCKED
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_033
+  signals:
+  - ENGINE_RUNNING
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_034
+  signals:
+  - GEAR_NOT_PARK
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_035
+  signals:
+  - DOOR_UNLOCKED
+  - VEH_SPD
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_036
+  signals:
+  - DIAG_BLOCKED
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id012
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_037
+  signals:
+  - PWR_REQ_VALID
+  - VEHICLE_SAFE
+  - NORMAL_ROUTE
+  - BACKUP_ROUTE
+  conditions:
+  - (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE AND T_SHUT_CONFIRM
+    elapsed)) AND NOT NOK_SHUTOFF)
+  states: {}
+  outputs:
+  - SYS_SHUTOFF
+  source_evidence:
+  - &id013
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 5. Control Conditions - Merged Logic Table
+    section_index: 3
+    control: SYS_SHUTOFF
+    table_id: XL_Test_Pow_SEC_03_01
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_038
+  signals:
+  - PWR_REQ_VALID
+  - VEHICLE_SAFE
+  - NORMAL_ROUTE
+  - BACKUP_ROUTE
+  conditions:
+  - (PWR_REQ_VALID AND VEHICLE_SAFE AND (NORMAL_ROUTE OR (BACKUP_ROUTE AND T_SHUT_CONFIRM
+    elapsed)) AND NOT NOK_SHUTOFF)
+  states: {}
+  outputs:
+  - SYS_SHUTOFF
+  source_evidence:
+  - *id013
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_039
+  signals:
+  - ENGINE_RUNNING
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - &id014
+    file: GPT_GenLogic.xlsx
+    sheet: Test_Power_State_Spec
+    section: 5. Control Conditions - Merged Logic Table
+    section_index: 3
+    control: NOK_SHUTOFF
+    table_id: XL_Test_Pow_SEC_03_02
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_040
+  signals:
+  - GEAR_NOT_PARK
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_041
+  signals:
+  - DOOR_UNLOCKED
+  - VEH_SPD
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_042
+  signals:
+  - DIAG_BLOCKED
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_043
+  signals:
+  - ENGINE_RUNNING
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_044
+  signals:
+  - GEAR_NOT_PARK
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_045
+  signals:
+  - DOOR_UNLOCKED
+  - VEH_SPD
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true
+- test_candidate_id: TC_PM_046
+  signals:
+  - DIAG_BLOCKED
+  conditions:
+  - (ENGINE_RUNNING OR GEAR_NOT_PARK OR (DOOR_UNLOCKED AND VEH_SPD > 0) OR DIAG_BLOCKED)
+  states: {}
+  outputs:
+  - NOK_SHUTOFF
+  source_evidence:
+  - *id014
+  confidence: medium
+  review_required: true

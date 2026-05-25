@@ -1,4 +1,0 @@
-title,Applies_To,Givens,Dependencies,file,section,references
-Synthetic ACC rail allow,Gateway ECU / power mgr v2,IGN_AUX==true; BATT_VOLTAGE>=9.0,,SynthAcc.md,$3.2,See SPEC-9001 appendix
-Synthetic driver-door close,BCM retention,ENGINE_STATE==OFF; DRIVER_DOOR==OPEN,COND_001,SynthRetention.txt,B-4,DOC_pwrmodes_v3.pdf
-Synthetic CAN sleep inhibit,Network coordinator,AWAKE_CLIENT_BITMAP!=0,,SynthNetSleep.csv,r17,TBD REQ-5544

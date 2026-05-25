@@ -1,0 +1,23 @@
+# systemd unit — copy to /etc/systemd/system/alex.service and edit paths.
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now alex
+#   journalctl -u alex -f
+
+[Unit]
+Description=ALEX Test Spec Assistant
+After=network.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/opt/alex/ALEX
+Environment=ALEX_CONFIG=config.yaml
+EnvironmentFile=/opt/alex/ALEX/.env
+ExecStart=/opt/alex/ALEX/.venv/bin/python /opt/alex/ALEX/scripts/start_alex_all.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
