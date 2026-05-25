@@ -137,7 +137,23 @@ brew install tesseract
 
 ---
 
-## Run — Web UI (recommended)
+## Run — Ubuntu công ty (khuyến nghị)
+
+Trên máy Ubuntu **`10.88.152.11`** — tải **ZIP** từ GitHub (không cần `git clone`). Xem [`docs/HUONG_DAN_CAI_DAT_UBUNTU.md`](docs/HUONG_DAN_CAI_DAT_UBUNTU.md):
+
+```bash
+cd ~/SyS_Spec_GenAI-main/pm_test_spec_assistant   # sau khi unzip
+./cai_dat.sh    # lần đầu
+./chay.sh       # mỗi ngày
+```
+
+Login: **http://10.88.152.11:8765/login** · `admin` / `Alex@2025!`
+
+`config.yaml` đã cấu hình sẵn cho LAN multi-user (`production`, `0.0.0.0:8765`).
+
+---
+
+## Run — Web UI (dev local)
 
 ```bash
 python run_web.py
@@ -497,9 +513,7 @@ This tree is **self-contained**. It does not modify `power-spec-kit/`, `power-mo
 | `docs/ALEX_M365_REASONING_UPGRADE_PLAN.md` | **Primary roadmap** — M365 co-reasoning for complex customer logic, auth tiers, phased delivery |
 | `docs/M365_COPILOT_ACTIVATION_GUIDE.md` | IT-facing checklist to assign the `Microsoft 365 Copilot` add-on + grant tenant consent, with engineer verification commands and fallback options |
 | `docs/COMPANY_DEPLOYMENT.md` | Sanitize personal data and package ALEX for a clean company-machine install |
-| `docs/HUONG_DAN_CAI_DAT_UBUNTU.md` | **Hướng dẫn cài Ubuntu LAN** (`10.88.152.11`) — nhiều user Windows cùng mạng |
-| `docs/LAN_UBUNTU_WINDOWS_DEPLOY.md` | **Ubuntu LAN server** (`0.0.0.0:8765`) + **Windows clients** (browser only) |
-| `docs/TEAM_SERVER_DEPLOY.md` | Multi-user team auth, worker, job isolation |
+| `docs/HUONG_DAN_CAI_DAT_UBUNTU.md` | **Cài Ubuntu công ty** — `./cai_dat.sh` + `./chay.sh` |
 | `docs/M365_DEV_PROGRAM_SETUP.md` | Sandbox tenant alternative when company tenant blocks app registration |
 | `docs/DESIGN_PLAN_COPILOT_LOOP.md` | Original Copilot-in-loop UX (clipboard / IDE era) |
 | `docs/COPILOT_PROMPTS.md` | Standard prompt templates per issue type |
