@@ -34,6 +34,7 @@ REQUIRED=(
   scripts/ubuntu_deploy_gates.sh
   cai_dat.sh
   chay.sh
+  setup_ubuntu.sh
   config.yaml
   requirements.txt
 )

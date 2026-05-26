@@ -4,7 +4,8 @@ Tài liệu chi tiết + xử lý lỗi thường gặp. Tóm tắt nhanh vẫn 
 
 **Triển khai ổn định (ISMS, không patch code lẻ):**
 
-- [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md) — chính sách cập nhật full release
+- **[CAI_UBUNTU_DON_GIAN.md](./CAI_UBUNTU_DON_GIAN.md)** — **đọc file này trước** (3 bước)
+- [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md) — cập nhật full release
 - [IT_REQUEST_CHECKLIST.md](./IT_REQUEST_CHECKLIST.md) — gửi IT (root CA + M365 + firewall)
 
 ---

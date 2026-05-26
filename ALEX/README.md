@@ -12,7 +12,8 @@ Hướng dẫn vận hành trong app: tab **Guide** (tiếng Việt).
 
 | File | Nội dung |
 |------|----------|
-| [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md) | Cài Ubuntu, firewall, `.env`, SSL ISMS |
+| [docs/CAI_UBUNTU_DON_GIAN.md](docs/CAI_UBUNTU_DON_GIAN.md) | **Cài Ubuntu — 3 bước (đọc file này trước)** |
+| [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md) | Chi tiết + xử lý lỗi nâng cao |
 | [docs/UBUNTU_UPDATE_POLICY.md](docs/UBUNTU_UPDATE_POLICY.md) | Cập nhật full release — không copy lẻ file |
 | [docs/IT_REQUEST_CHECKLIST.md](docs/IT_REQUEST_CHECKLIST.md) | Gửi IT: root CA + M365 + firewall |
 | [docs/M365_COPILOT_ACTIVATION_GUIDE.md](docs/M365_COPILOT_ACTIVATION_GUIDE.md) | Sign in M365 + license Copilot |
@@ -56,7 +57,27 @@ Không cần `power-spec-kit`, `power-mode-spec-pipeline`, hay folder cũ `pm_te
 
 ## Cài trên Ubuntu server (LAN team)
 
-Hướng dẫn đầy đủ cho engineer **không quen Linux**: tải ZIP → giải nén → 2 script. Không cần `git clone`.
+**Đọc trước:** [docs/CAI_UBUNTU_DON_GIAN.md](docs/CAI_UBUNTU_DON_GIAN.md) — 3 bước, không cần hiểu hết Linux.
+
+```bash
+cd /home/tmc_ai_common/ALEX    # hoặc folder ALEX sau khi giải nén ZIP
+git pull origin main           # lấy code mới nhất
+chmod +x setup_ubuntu.sh
+./setup_ubuntu.sh              # cài 1 lần — tự sửa IP, venv, admin
+# điền .env + config/company-ca.pem (IT cấp)
+./chay.sh                      # chạy mỗi ngày
+```
+
+| | |
+|---|---|
+| Link web | `http://<IP-LAN>:8765/login` |
+| Đăng nhập team | `admin` / `Alex@2025!` |
+| Sign in M365 | Tab Review (cần CA từ IT + secret trong `.env`) |
+
+Không có M365 vẫn dùng được: upload spec, review logic, export Excel.
+
+<details>
+<summary>Chi tiết từng bước (mở rộng)</summary>
 
 ### Checklist trước khi bắt đầu
 
@@ -171,21 +192,17 @@ Tạo user mới: `/admin` (cần quyền admin).
 
 Xem mẫu [deploy/alex.service.example](deploy/alex.service.example) — sửa `WorkingDirectory`, `User`, `EnvironmentFile` trỏ tới `.env`. Chi tiết trong [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md).
 
+</details>
+
 ---
 
 ## Sửa IP server
 
-Nếu IP máy **khác** `10.88.152.11`, sửa `config.yaml`:
-
-```yaml
-deployment:
-  host: 0.0.0.0
-  port: 8765
-  lan_ipv4: <IP-may-ban>
-  public_url: http://<IP-may-ban>:8765
+```bash
+cd /home/tmc_ai_common/ALEX
+./scripts/set_lan_ip.sh
+./chay.sh
 ```
-
-Rồi chạy lại `./chay.sh`.
 
 ---
 
