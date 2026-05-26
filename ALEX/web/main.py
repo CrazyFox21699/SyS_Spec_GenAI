@@ -694,6 +694,16 @@ def _m365_user_id() -> str | None:
     return user.username if user else None
 
 
+def _llm_enabled_for_assist(cfg: dict[str, Any]) -> bool:
+    return feature_enabled(cfg, "ollama_assist", default=False) or bool(cfg.get("llm", {}).get("enabled"))
+
+
+def _github_copilot_cli_enabled(cfg: dict[str, Any]) -> bool:
+    assist = cfg.get("assist") if isinstance(cfg.get("assist"), dict) else {}
+    copilot = assist.get("copilot") if isinstance(assist.get("copilot"), dict) else {}
+    return bool(copilot.get("enabled", False))
+
+
 def _job_write_lock(job_id: str) -> threading.Lock:
     with _job_lock_registry:
         if job_id not in _job_write_locks:
@@ -2130,8 +2140,8 @@ def api_llm_status(light: bool = Query(False)) -> dict[str, Any]:
     st = provider_status(cfg, light=light)
     return {
         **st,
-        "enabled": llm_enabled_for_assist(cfg),
-        "copilot_enabled": copilot_enabled(cfg),
+        "enabled": _llm_enabled_for_assist(cfg),
+        "copilot_enabled": _github_copilot_cli_enabled(cfg),
     }
 
 
@@ -2546,9 +2556,11 @@ def api_copilot_code_context(job_id: str, candidate_id: str, language: str = "EN
 @app.post("/api/review/copilot/code/generate")
 def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> dict[str, Any]:
     cfg = _cfg()
-    if not m365_auth.is_api_ready(cfg):
+    uid = _m365_user_id()
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
         raise HTTPException(403, "Sign in to Microsoft 365 Copilot first.")
-    if not m365_auth.is_copilot_chat_entitled():
+    if not m365_st.get("copilot_chat_entitled"):
         raise HTTPException(403, "Microsoft 365 Copilot Chat API is not available for this account.")
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
@@ -2570,9 +2582,11 @@ def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> 
 @app.post("/api/review/copilot/code/generate-batch")
 def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) -> dict[str, Any]:
     cfg = _cfg()
-    if not m365_auth.is_api_ready(cfg):
+    uid = _m365_user_id()
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
         raise HTTPException(403, "Sign in to Microsoft 365 Copilot first.")
-    if not m365_auth.is_copilot_chat_entitled():
+    if not m365_st.get("copilot_chat_entitled"):
         raise HTTPException(403, "Microsoft 365 Copilot Chat API is not available for this account.")
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
@@ -3454,7 +3468,7 @@ def api_save_settings(settings: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/copilot/status")
 def api_copilot_status() -> dict[str, Any]:
-    if not copilot_enabled(_cfg()):
+    if not _github_copilot_cli_enabled(_cfg()):
         return {
             "installed": False,
             "enabled": False,
@@ -3465,7 +3479,7 @@ def api_copilot_status() -> dict[str, Any]:
 
 
 def _copilot_disabled() -> None:
-    if not copilot_enabled(_cfg()):
+    if not _github_copilot_cli_enabled(_cfg()):
         raise HTTPException(403, "GitHub Copilot CLI is disabled. Set assist.copilot.enabled: true only when approved.")
 
 
