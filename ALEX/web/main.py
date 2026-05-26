@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime
 
+import yaml
+
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -146,6 +148,11 @@ from web.knowledge_reconciliation import (
 )
 from web.copilot_code_context_pack import build_code_context_pack
 from web.copilot_code_orchestrator import run_copilot_code_generate, run_copilot_code_generate_batch
+from web.copilot_errors import classify_copilot_error, enrich_error_response
+from web.copilot_row_assist import apply_row_draft, preview_row_draft, write_from_row_via_copilot
+from src.importers.job_bootstrap import bootstrap_from_bundle_dict, bootstrap_from_testspec_xlsx
+from src.importers.customer_testspec_importer import preview_testspec_workbook
+from web.job_diagnostic import diagnose_job_bundle, load_bundle_for_diagnostic
 from web.alex_storage import (
     code_style_samples_path,
     default_library_root,
@@ -273,6 +280,16 @@ class AnalyzeRequest(BaseModel):
     input_dir: Optional[str] = None
 
 
+class ImportTestSpecRequest(BaseModel):
+    language: str = "EN"
+    module_name: str = ""
+    label: str = ""
+
+
+class ImportBundleRequest(BaseModel):
+    label: str = ""
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -379,6 +396,18 @@ class CopilotConfirmRequest(BaseModel):
     draft_indices: list[int] = []
 
 
+class CopilotRowRequest(BaseModel):
+    candidate_id: str
+    engineer_note: str = ""
+    language: str = "EN"
+
+
+class CopilotApplyRowRequest(BaseModel):
+    candidate_id: str
+    draft: dict[str, Any]
+    language: str = "EN"
+
+
 class ImportKnowledgeRequest(BaseModel):
     logic_id: str
     payload: str
@@ -464,14 +493,24 @@ class CopilotCodeGenerateRequest(BaseModel):
     candidate_id: str
     use_baseline: bool = True
     engineer_note: str = ""
+    copilot_prompt_override: str = ""
     reference_test_name: str = ""
     language: str = "EN"
+    from_testcase_only: bool | None = None
+    reuse_conversation: bool = False
+
+
+class CopilotFollowUpRequest(BaseModel):
+    logic_id: str = ""
+    message: str
+    reuse_conversation: bool = True
 
 
 class CopilotCodeBatchRequest(BaseModel):
     candidate_ids: list[str] = []
     logic_id: str = ""
     engineer_note: str = ""
+    copilot_prompt_override: str = ""
     reference_test_name: str = ""
     persist_drafts: bool = False
     language: str = "EN"
@@ -642,6 +681,61 @@ def _job_output_dir(job_id: str) -> Path:
     if job and job.output_dir:
         return Path(job.output_dir)
     return _output_root() / job_id
+
+
+def _m365_copilot_gate() -> dict[str, Any]:
+    cfg = _cfg()
+    uid = _m365_user_id()
+    return m365_auth.m365_status(cfg, user_id=uid)
+
+
+def _copilot_gate_response(
+    *,
+    m365_st: dict[str, Any] | None = None,
+    bundle: dict[str, Any] | None = None,
+    logic_id: str = "",
+    has_context: bool = True,
+    has_plan: bool = True,
+    raw_error: str = "",
+    http_status: int | None = None,
+) -> dict[str, Any] | None:
+    st = m365_st if m365_st is not None else _m365_copilot_gate()
+    if not st.get("api_ready"):
+        return classify_copilot_error(m365_ready=False)
+    if st.get("copilot_chat_entitled") is False:
+        return classify_copilot_error(m365_ready=True, copilot_entitled=False)
+    if bundle is not None:
+        has_candidates = bool(bundle.get("test_candidates"))
+        if not has_candidates:
+            return classify_copilot_error(
+                m365_ready=True,
+                copilot_entitled=True,
+                has_bundle=True,
+                has_candidates=False,
+            )
+        if logic_id and not has_context:
+            has_logic = any(
+                str(b.get("id") or "") == logic_id for b in bundle.get("logic_blocks") or []
+            )
+            return classify_copilot_error(
+                m365_ready=True,
+                copilot_entitled=True,
+                has_bundle=True,
+                has_candidates=has_candidates,
+                has_logic_id=has_logic,
+                has_context_pack=False,
+            )
+    if raw_error:
+        return classify_copilot_error(
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_context_pack=has_context,
+            has_plan=has_plan,
+            raw_error=raw_error,
+            http_status=http_status,
+        )
+    return None
 
 
 def _load_job_gtest_state(job_id: str) -> dict[str, Any]:
@@ -1484,6 +1578,126 @@ def api_list_jobs() -> dict[str, Any]:
     return {"jobs": jobs[:20]}
 
 
+def _finalize_import_job(job_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+    """Persist imported bundle and mark job ready."""
+    from web.bundle_store import save_split_bundle
+
+    bundle = ensure_enriched_bundle(bundle)
+    out_dir = _job_output_dir(job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dump_yaml(out_dir / "ui_bundle.yaml", bundle)
+    ver = save_split_bundle(out_dir, bundle)
+    summary = bundle.get("summary") or {}
+    update_job(
+        job_id,
+        status="done",
+        progress=100,
+        current_step="Imported — ready for edit",
+        bundle=bundle,
+        output_dir=out_dir,
+        bundle_version=ver,
+        warnings=summary.get("warnings", 0),
+        errors=summary.get("errors", 0),
+    )
+    append_log(job_id, f"Import complete: {summary.get('test_candidates', 0)} test case(s)")
+    return {"job_id": job_id, "status": "completed", "bundle_version": ver, "summary": summary}
+
+
+@app.post("/api/jobs/import-testspec")
+async def api_import_testspec(
+    file: UploadFile = File(...),
+    language: str = Query("EN"),
+    module_name: str = Query(""),
+    label: str = Query(""),
+) -> dict[str, Any]:
+    """Bootstrap a job from an existing Final TestSpec xlsx without full analyze."""
+    name = (file.filename or "").lower()
+    if not name.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Upload a .xlsx or .xlsm TestSpec workbook.")
+    user = _current_team_user()
+    created_by = user.username if user else "system"
+    job = create_job(created_by=created_by)
+    out_dir = _job_output_dir(job.job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    update_job(job.job_id, output_dir=out_dir, status="running", current_step="Importing TestSpec…")
+    dest = out_dir / "import" / (file.filename or "TestSpec.xlsx")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    content = await file.read()
+    dest.write_bytes(content)
+    preview = preview_testspec_workbook(dest)
+    if not preview.get("ok"):
+        update_job(job.job_id, status="error", error_message="TestSpec header mismatch", current_step="Import failed")
+        raise HTTPException(
+            400,
+            detail={
+                "error": "TestSpec column headers do not match ALEX export format.",
+                "preview": preview,
+            },
+        )
+    try:
+        bundle = bootstrap_from_testspec_xlsx(
+            dest,
+            language=language,
+            module_name=module_name or label,
+        )
+    except Exception as exc:  # noqa: BLE001
+        update_job(job.job_id, status="error", error_message=str(exc), current_step="Import failed")
+        raise HTTPException(400, f"Could not import TestSpec: {exc}") from exc
+    if not bundle.get("test_candidates"):
+        update_job(job.job_id, status="error", error_message="No test rows imported", current_step="Import failed")
+        raise HTTPException(
+            400,
+            detail={
+                "error": "No test case rows found. Check sheet has data under Test Function / UseCase columns.",
+                "preview": preview,
+                "sheet_summary": (bundle.get("excel_import") or {}).get("sheets") or [],
+            },
+        )
+    result = _finalize_import_job(job.job_id, bundle)
+    result["bootstrap_source"] = "imported_testspec"
+    result["sheet_summary"] = (bundle.get("excel_import") or {}).get("sheets") or []
+    return result
+
+
+@app.post("/api/jobs/import-bundle")
+async def api_import_bundle(
+    file: UploadFile = File(...),
+    label: str = Query(""),
+) -> dict[str, Any]:
+    """Bootstrap a job from ui_bundle.yaml without full analyze."""
+    name = (file.filename or "").lower()
+    if not name.endswith((".yaml", ".yml")):
+        raise HTTPException(400, "Upload ui_bundle.yaml or .yml file.")
+    user = _current_team_user()
+    created_by = user.username if user else "system"
+    job = create_job(created_by=created_by)
+    out_dir = _job_output_dir(job.job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    update_job(job.job_id, output_dir=out_dir, status="running", current_step="Importing bundle…")
+    raw = await file.read()
+    try:
+        imported = yaml.safe_load(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        update_job(job.job_id, status="error", error_message=str(exc))
+        raise HTTPException(400, f"Invalid YAML: {exc}") from exc
+    if not isinstance(imported, dict):
+        raise HTTPException(400, "Bundle YAML must be a mapping/object.")
+    bundle = bootstrap_from_bundle_dict(imported, source="imported_yaml", label=label or name)
+    result = _finalize_import_job(job.job_id, bundle)
+    result["bootstrap_source"] = "imported_yaml"
+    return result
+
+
+@app.get("/api/jobs/{job_id}/diagnostic")
+def api_job_diagnostic(job_id: str) -> dict[str, Any]:
+    _assert_job_access(job_id)
+    out_dir = _job_output_dir(job_id)
+    bundle = load_bundle_for_diagnostic(out_dir)
+    if not bundle:
+        raise HTTPException(404, "No bundle for this job.")
+    return {"job_id": job_id, "diagnostic": diagnose_job_bundle(bundle, uploads_dir=_uploads_dir())}
+
+
 @app.post("/api/analyze")
 def api_analyze(body: AnalyzeRequest) -> dict[str, Any]:
     input_dir = Path(body.input_dir) if body.input_dir else _uploads_dir()
@@ -2171,6 +2385,30 @@ def api_m365_status() -> dict[str, Any]:
         raise _m365_api_error(exc) from exc
 
 
+@app.post("/api/m365/copilot-probe")
+def api_m365_copilot_probe() -> dict[str, Any]:
+    """Verify Graph Copilot conversation + chat works for the signed-in account."""
+    from web.m365_copilot import probe_copilot_api
+
+    cfg = _cfg()
+    uid = _m365_user_id()
+    st = m365_auth.m365_status(cfg, user_id=uid)
+    if not st.get("api_ready"):
+        return {"ok": False, **classify_copilot_error(m365_ready=False)}
+    result = probe_copilot_api(cfg, user_id=uid)
+    status = m365_auth.m365_status(cfg, user_id=uid)
+    if not result.get("ok"):
+        enriched = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=bool(status.get("copilot_chat_entitled")),
+            raw_error=str(result.get("error") or result.get("entitlement_hint") or ""),
+            http_status=int(result.get("graph_status") or 0) or None,
+        )
+        return {**enriched, **status}
+    return {**result, **status}
+
+
 @app.get("/api/m365/connectivity")
 def api_m365_connectivity() -> dict[str, Any]:
     """Ping Microsoft HTTPS — diagnose SSL/firewall on Ubuntu."""
@@ -2197,7 +2435,16 @@ def api_m365_setup_reset() -> dict[str, Any]:
 @app.post("/api/m365/login/start")
 def api_m365_login_start() -> dict[str, Any]:
     try:
-        return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id())
+        return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id(), include_copilot_scopes=False)
+    except Exception as exc:
+        raise _m365_api_error(exc) from exc
+
+
+@app.post("/api/m365/login/copilot-start")
+def api_m365_login_copilot_start() -> dict[str, Any]:
+    """Device login with Graph Copilot delegated scopes (requires IT admin consent)."""
+    try:
+        return m365_auth.start_copilot_device_login(_cfg(), user_id=_m365_user_id())
     except Exception as exc:
         raise _m365_api_error(exc) from exc
 
@@ -2230,6 +2477,11 @@ class AssistImproveIoRequest(BaseModel):
 
 @app.post("/api/assist/improve-io")
 def api_assist_improve_io(body: AssistImproveIoRequest, job_id: str) -> dict[str, Any]:
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
     cfg = _cfg()
     result = improve_io(
         cfg,
@@ -2238,6 +2490,13 @@ def api_assist_improve_io(body: AssistImproveIoRequest, job_id: str) -> dict[str
         expected_output=body.expected_output,
         issues=body.issues,
     )
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            raw_error=str(result.get("error") or ""),
+        )
     return {"job_id": job_id, "candidate_id": body.candidate_id, **result}
 
 
@@ -2582,27 +2841,39 @@ def api_copilot_code_context(job_id: str, candidate_id: str, language: str = "EN
 
 @app.post("/api/review/copilot/code/generate")
 def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> dict[str, Any]:
-    cfg = _cfg()
-    uid = _m365_user_id()
-    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    m365_st = _m365_copilot_gate()
     if not m365_st.get("api_ready"):
-        raise HTTPException(403, "Sign in to Microsoft 365 Copilot first.")
-    if not m365_st.get("copilot_chat_entitled"):
-        raise HTTPException(403, "Microsoft 365 Copilot Chat API is not available for this account.")
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
     bundle = _bundle_for_job(job_id)
+    if not bundle.get("test_candidates"):
+        return {"job_id": job_id, **classify_copilot_error(has_candidates=False)}
     gtest_state = _load_job_gtest_state(job_id)
     result = run_copilot_code_generate(
         bundle,
         gtest_state,
         candidate_id=body.candidate_id,
-        cfg=cfg,
+        cfg=_cfg(),
         library_root=_library_root(),
         engineer_note=body.engineer_note,
+        copilot_prompt_override=body.copilot_prompt_override,
         use_baseline=body.use_baseline,
         language=body.language,
         reference_test_name=body.reference_test_name,
         library_code_samples=_library_code_samples(_library_root()),
+        from_testcase_only=body.from_testcase_only,
+        reuse_conversation=body.reuse_conversation,
     )
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
     return {"job_id": job_id, **result}
 
 
@@ -2612,10 +2883,12 @@ def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) 
     uid = _m365_user_id()
     m365_st = m365_auth.m365_status(cfg, user_id=uid)
     if not m365_st.get("api_ready"):
-        raise HTTPException(403, "Sign in to Microsoft 365 Copilot first.")
-    if not m365_st.get("copilot_chat_entitled"):
-        raise HTTPException(403, "Microsoft 365 Copilot Chat API is not available for this account.")
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
     bundle = _bundle_for_job(job_id)
+    if not bundle.get("test_candidates"):
+        return {"job_id": job_id, **classify_copilot_error(has_candidates=False)}
     gtest_state = _load_job_gtest_state(job_id)
     merge_samples_from_bundle(bundle)
 
@@ -2639,12 +2912,22 @@ def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) 
         cfg=cfg,
         library_root=_library_root(),
         engineer_note=body.engineer_note,
+        copilot_prompt_override=body.copilot_prompt_override,
         language=body.language,
         reference_test_name=body.reference_test_name,
         library_code_samples=_library_code_samples(_library_root()),
         persist_drafts=body.persist_drafts,
     )
     _persist_job_gtest_state(job_id, gtest_state)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
     return {"job_id": job_id, **result}
 
 
@@ -3258,7 +3541,14 @@ def api_review_m365_brief(job_id: str, logic_id: str) -> dict[str, Any]:
 
 @app.get("/api/review/copilot/context")
 def api_copilot_context(job_id: str, logic_id: str, note: str = "", term: str = "") -> dict[str, Any]:
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
     bundle = _bundle_for_job(job_id)
+    if not any(str(b.get("id") or "") == logic_id for b in bundle.get("logic_blocks") or []):
+        return {"job_id": job_id, **classify_copilot_error(has_logic_id=False)}
     result = build_context(
         bundle,
         logic_id,
@@ -3273,6 +3563,9 @@ def api_copilot_context(job_id: str, logic_id: str, note: str = "", term: str = 
 @app.post("/api/review/copilot/plan")
 def api_copilot_plan(body: CopilotPlanRequest, job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
+    gate = _copilot_gate_response(bundle=bundle, logic_id=body.logic_id, has_context=False)
+    if gate:
+        return {"job_id": job_id, **gate}
     if body.note.strip():
         ai = bundle.setdefault("ai_assists", {})
         ai.setdefault("engineer_notes", {})[body.logic_id] = body.note.strip()
@@ -3285,6 +3578,16 @@ def api_copilot_plan(body: CopilotPlanRequest, job_id: str) -> dict[str, Any]:
     )
     if result.get("ok"):
         _save_bundle_to_job(job_id, bundle)
+    else:
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_logic_id=True,
+            has_context_pack=bool(get_copilot_session(bundle, body.logic_id).get("context_pack")),
+            has_plan=False,
+        )
     return {"job_id": job_id, **result}
 
 
@@ -3299,9 +3602,23 @@ def api_copilot_plan_patch(body: CopilotPlanPatchRequest, job_id: str) -> dict[s
 @app.post("/api/review/copilot/write")
 def api_copilot_write(body: CopilotWriteRequest, job_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
+    gate = _copilot_gate_response(bundle=bundle, logic_id=body.logic_id, has_context=False, has_plan=False)
+    if gate:
+        return {"job_id": job_id, **gate}
     result = run_write(bundle, body.logic_id, _cfg())
     if result.get("ok"):
         _save_bundle_to_job(job_id, bundle)
+    else:
+        session = get_copilot_session(bundle, body.logic_id)
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_logic_id=True,
+            has_context_pack=bool(session.get("context_pack")),
+            has_plan=bool((session.get("plan") or {}).get("plan_items")),
+        )
     return {"job_id": job_id, **result}
 
 
@@ -3328,6 +3645,94 @@ def api_copilot_session(job_id: str, logic_id: str) -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
     session = get_copilot_session(bundle, logic_id)
     return {"job_id": job_id, "logic_id": logic_id, "session": session}
+
+
+@app.post("/api/review/copilot/write-from-row")
+def api_copilot_write_from_row(body: CopilotRowRequest, job_id: str) -> dict[str, Any]:
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+    bundle = _bundle_for_job(job_id)
+    if not bundle.get("test_candidates"):
+        return {"job_id": job_id, **classify_copilot_error(has_candidates=False)}
+    preview = build_customer_testspec_preview(bundle, language=body.language or "EN")
+    row = next(
+        (r for r in preview.get("rows") or [] if str(r.get("candidate_id") or "") == body.candidate_id),
+        None,
+    )
+    if not row:
+        return {"job_id": job_id, "ok": False, "error": f"Test case not found: {body.candidate_id}"}
+    result = write_from_row_via_copilot(_cfg(), row, engineer_note=body.engineer_note)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
+        return {"job_id": job_id, **result}
+    draft = result.get("draft") or {}
+    preview_result = preview_row_draft(bundle, row, draft)
+    return {"job_id": job_id, **result, **preview_result}
+
+
+@app.post("/api/review/copilot/apply-row")
+def api_copilot_apply_row(body: CopilotApplyRowRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    if not bundle.get("test_candidates"):
+        return {"job_id": job_id, **classify_copilot_error(has_candidates=False)}
+    preview = build_customer_testspec_preview(bundle, language=body.language or "EN")
+    row = next(
+        (r for r in preview.get("rows") or [] if str(r.get("candidate_id") or "") == body.candidate_id),
+        None,
+    )
+    if not row:
+        return {"job_id": job_id, "ok": False, "error": f"Test case not found: {body.candidate_id}"}
+    result = apply_row_draft(bundle, row, body.draft)
+    if result.get("ok"):
+        _save_bundle_to_job(job_id, bundle)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/copilot/follow-up")
+def api_copilot_follow_up(body: CopilotFollowUpRequest, job_id: str) -> dict[str, Any]:
+    from web.m365_copilot import run_copilot_chat_result
+
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+    msg = str(body.message or "").strip()
+    if not msg:
+        return {"job_id": job_id, "ok": False, "error": "Message is required."}
+    cfg = _cfg()
+    uid = _m365_user_id()
+    prefix = ""
+    if body.logic_id:
+        bundle = _bundle_for_job(job_id)
+        ai = bundle.get("ai_assists") or {}
+        note = str((ai.get("engineer_notes") or {}).get(body.logic_id) or "")
+        if note:
+            prefix = f"Engineer context for logic {body.logic_id}:\n{note[:2000]}\n\n"
+    result = run_copilot_chat_result(
+        cfg,
+        f"{prefix}{msg}",
+        user_id=uid,
+        reuse_session_conversation=bool(body.reuse_conversation),
+    )
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            raw_error=str(result.get("error") or ""),
+        )
+    return {"job_id": job_id, "logic_id": body.logic_id, **result}
 
 
 @app.post("/api/review/style-samples")
@@ -3721,10 +4126,13 @@ def api_job_summary(job_id: str) -> dict[str, Any]:
         "summary": {
             **(b.get("summary", {})),
             **workbench,
+            "bootstrap_source": b.get("bootstrap_source") or "analyze",
+            "bootstrap_label": b.get("bootstrap_label") or "",
         },
         "strict_mode": b.get("strict_mode"),
         "module_name": derive_module_name(b),
         "has_bundle": True,
+        "bootstrap_source": b.get("bootstrap_source") or "analyze",
         "bundle_version": _get_bundle_version(job_id),
     }
 
@@ -3750,6 +4158,12 @@ def api_review_dashboard(job_id: str) -> dict[str, Any]:
         },
         "module_name": derive_module_name(b),
         "spec_understanding": rep,
+        "bootstrap_source": b.get("bootstrap_source") or "analyze",
+        "excel_sheets": (
+            (b.get("excel_import") or {}).get("sheets")
+            or (b.get("summary") or {}).get("excel_sheets")
+            or []
+        ),
         "top_issues": prioritized[:8],
         "prioritized_issues": prioritized,
         "overview": overview,

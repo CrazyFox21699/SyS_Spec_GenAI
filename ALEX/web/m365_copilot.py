@@ -32,6 +32,35 @@ _NOT_ENTITLED_HINTS = (
     "user is not licensed for copilot",
 )
 
+_MISSING_SCOPE_HINTS = (
+    "required scopes",
+    "insufficient privileges",
+    "insufficient scope",
+    "authorization_requestdenied",
+)
+
+
+class M365CopilotMissingScopesError(RuntimeError):
+    """Raised when the access token lacks delegated scopes required by Copilot Chat API."""
+
+    def __init__(self, *, status_code: int, raw_body: str, message: str = "") -> None:
+        self.status_code = status_code
+        self.raw_body = raw_body
+        msg = message or (
+            "Microsoft 365 Copilot API requires additional Graph delegated permissions. "
+            "Sign out, then Sign in again. If the error persists, ask IT to admin-consent "
+            "Sites.Read.All, Mail.Read, People.Read.All, Chat.Read, ChannelMessage.Read.All, "
+            "ExternalItem.Read.All, and OnlineMeetingTranscript.Read.All on the Azure app."
+        )
+        super().__init__(msg)
+
+
+def _classify_missing_scopes(status_code: int, body_text: str) -> bool:
+    lower = (body_text or "").lower()
+    if status_code in (401, 403) and any(hint in lower for hint in _MISSING_SCOPE_HINTS):
+        return True
+    return "required scopes" in lower
+
 
 class M365CopilotNotEntitledError(RuntimeError):
     """Raised when the M365 Copilot Chat Graph API rejects the caller because of MSA / no Copilot license.
@@ -106,6 +135,8 @@ def _create_conversation(access_token: str) -> str:
     )
     if r.status_code not in (200, 201):
         body = r.text or ""
+        if _classify_missing_scopes(r.status_code, body):
+            raise M365CopilotMissingScopesError(status_code=r.status_code, raw_body=body[:500])
         reason = _classify_not_entitled(r.status_code, body)
         if reason:
             raise M365CopilotNotEntitledError(
@@ -144,6 +175,8 @@ def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str
     )
     if r.status_code != 200:
         body = r.text or ""
+        if _classify_missing_scopes(r.status_code, body):
+            raise M365CopilotMissingScopesError(status_code=r.status_code, raw_body=body[:500])
         reason = _classify_not_entitled(r.status_code, body)
         if reason:
             raise M365CopilotNotEntitledError(
@@ -197,11 +230,149 @@ def parse_knowledge_response(text: str) -> tuple[list[dict[str, Any]], list[dict
     return _parse_copilot_response(text)
 
 
+def _copilot_error_payload(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, M365CopilotMissingScopesError):
+        return {
+            "ok": False,
+            "error": str(exc),
+            "error_category": "m365_missing_scopes",
+            "graph_status": exc.status_code,
+            "raw_preview": (exc.raw_body or "")[:500],
+            "user_action": (
+                "Sign out of M365, then Sign in again to request Copilot Graph scopes. "
+                "If it still fails, ask IT to admin-consent delegated permissions on the Azure app."
+            ),
+        }
+    if isinstance(exc, M365CopilotNotEntitledError):
+        return {
+            "ok": False,
+            "error": str(exc),
+            "error_category": "m365_not_entitled",
+            "not_entitled_reason": exc.reason,
+            "graph_status": exc.status_code,
+            "raw_preview": (exc.raw_body or "")[:500],
+            "user_action": (
+                "Sign in with a work/school account that has Microsoft 365 Copilot, "
+                "or contact IT to assign SKU Microsoft_365_Copilot."
+            ),
+        }
+    if isinstance(exc, PermissionError):
+        return {
+            "ok": False,
+            "error": str(exc) or "M365 sign-in required.",
+            "error_category": "m365_not_ready",
+            "user_action": "Open Review tab and complete Microsoft 365 sign-in.",
+        }
+    if isinstance(exc, requests.RequestException):
+        msg = str(exc) or "Microsoft Graph network error."
+        lower = msg.lower()
+        category = "m365_ssl" if "ssl" in lower or "certificate" in lower else "graph_500"
+        return {
+            "ok": False,
+            "error": msg,
+            "error_category": category,
+            "user_action": (
+                "Check server SSL settings (assist.m365.ssl_verify) and company CA, then retry."
+                if category == "m365_ssl"
+                else "Retry later or check M365 connectivity on the server."
+            ),
+        }
+    msg = str(exc) or "M365 Copilot request failed."
+    lower = msg.lower()
+    category = "m365_copilot_api" if "conversation" in lower or "copilot" in lower else "unknown"
+    return {
+        "ok": False,
+        "error": msg,
+        "error_category": category,
+        "user_action": "Use Test Copilot API on Review tab to diagnose, then retry.",
+    }
+
+
+def run_copilot_chat_result(
+    cfg: dict[str, Any],
+    prompt: str,
+    *,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+    reuse_session_conversation: bool = False,
+    persist_conversation: bool = True,
+) -> dict[str, Any]:
+    """Single-turn M365 Copilot chat; returns structured result (never raises)."""
+    uid = user_id or _m365_user_id_from_context()
+    try:
+        token = m365_auth.require_api_token(cfg, user_id=uid)
+        conv_id = str(conversation_id or "").strip()
+        if not conv_id and reuse_session_conversation:
+            conv_id = m365_auth.get_copilot_conversation_id(user_id=uid)
+        if conv_id:
+            created = False
+        else:
+            conv_id = _create_conversation(token)
+            created = True
+        reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg))
+        if persist_conversation and conv_id:
+            m365_auth.set_copilot_conversation_id(conv_id, user_id=uid)
+        return {
+            "ok": True,
+            "reply": reply,
+            "conversation_id": conv_id,
+            "conversation_created": created,
+            "chat_ok": bool(reply.strip()),
+        }
+    except Exception as exc:
+        if isinstance(exc, (M365CopilotNotEntitledError, M365CopilotMissingScopesError)):
+            if reuse_session_conversation:
+                m365_auth.clear_copilot_conversation_id(user_id=uid)
+        return _copilot_error_payload(exc)
+
+
+def probe_copilot_api(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+    """Create a Graph conversation and send a short ping — verifies Copilot API entitlement."""
+    result = run_copilot_chat_result(
+        cfg,
+        "You are ALEX connectivity probe. Reply with exactly: ALEX probe OK",
+        user_id=user_id,
+        persist_conversation=False,
+    )
+    if not result.get("ok"):
+        m365_auth.record_copilot_api_probe(
+            cfg,
+            ok=False,
+            error=str(result.get("error") or ""),
+            reason=str(result.get("not_entitled_reason") or ""),
+            graph_status=int(result.get("graph_status") or 0),
+            user_id=user_id,
+        )
+        return {
+            "ok": False,
+            "conversation_created": False,
+            "chat_ok": False,
+            "entitlement_hint": str(result.get("error") or ""),
+            "error_category": result.get("error_category"),
+            "not_entitled_reason": result.get("not_entitled_reason"),
+            "graph_status": result.get("graph_status"),
+            "raw_preview": result.get("raw_preview"),
+            "user_action": result.get("user_action"),
+        }
+    reply = str(result.get("reply") or "")
+    chat_ok = bool(reply.strip())
+    m365_auth.record_copilot_api_probe(cfg, ok=chat_ok, user_id=user_id)
+    return {
+        "ok": chat_ok,
+        "conversation_created": True,
+        "chat_ok": chat_ok,
+        "reply_preview": reply[:200],
+        "entitlement_hint": "" if chat_ok else "Copilot replied but response was empty.",
+        "conversation_id": result.get("conversation_id"),
+    }
+
+
 def run_copilot_chat(cfg: dict[str, Any], prompt: str) -> str:
-    """Single-turn M365 Copilot chat; returns assistant text."""
-    token = m365_auth.require_api_token(cfg, user_id=_m365_user_id_from_context())
-    conv_id = _create_conversation(token)
-    return _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg))
+    """Single-turn M365 Copilot chat; returns assistant text (raises on failure)."""
+    result = run_copilot_chat_result(cfg, prompt)
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("error") or "M365 Copilot request failed"))
+    return str(result.get("reply") or "")
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -218,12 +389,12 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
 def improve_io_via_m365(cfg: dict[str, Any], prompt: str) -> dict[str, Any]:
     """Improve Expected I/O fields via M365 Copilot (JSON response)."""
-    try:
-        reply = run_copilot_chat(cfg, f"{prompt}\n\nReturn JSON only.")
-    except M365CopilotNotEntitledError as exc:
-        return {"ok": False, "error": str(exc), "reason": "not_entitled"}
-    except (RuntimeError, PermissionError, ValueError) as exc:
-        return {"ok": False, "error": str(exc) or "M365 Copilot request failed"}
+    chat = run_copilot_chat_result(cfg, f"{prompt}\n\nReturn JSON only.")
+    if not chat.get("ok"):
+        out = dict(chat)
+        out["reason"] = "not_entitled" if chat.get("error_category") == "m365_not_entitled" else "api_error"
+        return out
+    reply = str(chat.get("reply") or "")
     result = _parse_json_object(reply)
     if result:
         return {"ok": True, "result": result, "provider": "m365"}
@@ -258,8 +429,11 @@ def apply_knowledge_via_m365(
     if failure_context:
         prompt += "\n\nFix these logic_compliance failures:\n"
         prompt += json.dumps(failure_context[:30], ensure_ascii=False)[:6000]
-    reply = run_copilot_chat(cfg, prompt)
-    conv_id = ""
+    chat = run_copilot_chat_result(cfg, prompt)
+    if not chat.get("ok"):
+        return chat
+    reply = str(chat.get("reply") or "")
+    conv_id = str(chat.get("conversation_id") or "")
     patches, definition_updates = _parse_copilot_response(reply)
     if definition_updates:
         eng = bundle.setdefault("ai_assists", {}).setdefault("engineer_definitions", {})

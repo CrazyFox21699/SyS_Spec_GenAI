@@ -10,11 +10,28 @@ from docx.table import Table
 from src.models.evidence_model import make_evidence_ref
 
 
+def _run_is_deleted(run_element) -> bool:
+    rpr = run_element.find(qn("w:rPr"))
+    if rpr is not None:
+        if rpr.find(qn("w:strike")) is not None or rpr.find(qn("w:dstrike")) is not None:
+            return True
+    parent = run_element.getparent()
+    while parent is not None:
+        if parent.tag in {qn("w:del"), qn("w:moveFrom")}:
+            return True
+        parent = parent.getparent()
+    return False
+
+
 def _cell_text(tc_element) -> str:
     parts: list[str] = []
-    for node in tc_element.iter():
-        if node.tag == qn("w:t") and node.text:
-            parts.append(node.text)
+    for p in tc_element.findall(".//" + qn("w:p")):
+        for r in p.findall(qn("w:r")):
+            if _run_is_deleted(r):
+                continue
+            for node in r.iter():
+                if node.tag == qn("w:t") and node.text:
+                    parts.append(node.text)
     return "".join(parts).strip()
 
 

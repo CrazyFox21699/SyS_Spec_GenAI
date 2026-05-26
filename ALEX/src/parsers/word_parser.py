@@ -34,12 +34,76 @@ from src.models.spec_profile import LogicZone, build_spec_profile
 from src.utils.feature_flags import feature_enabled
 from src.parsers.two_column_table_parser import parse_control_condition_grid, tables_to_dicts
 from src.parsers.signal_table_parser import parse_signal_grid
-from src.parsers.word_merge_reader import build_row_branch_groups, collect_word_merged_cell_evidence
+from src.parsers.word_merge_reader import build_row_branch_groups, collect_word_merged_cell_evidence, table_to_merge_aware_grid
 from src.parsers.word_section_router import (
     annotate_source_with_zone,
     build_word_section_map,
     zone_for_table,
 )
+
+_LOGIC_CONTROL_TOKENS = (
+    "control",
+    "event",
+    "function",
+    "item",
+    "judgment",
+    "signal",
+    "permission",
+    "prohibition",
+)
+
+
+def _is_two_column_logic_table(header: list[str]) -> bool:
+    hdr_joined = " ".join(header)
+    if "logic" in header and "condition" in hdr_joined:
+        return False
+    has_condition = "condition" in hdr_joined or " cond" in hdr_joined or header[-1:] == ["cond"]
+    has_control = any(any(t in h for t in _LOGIC_CONTROL_TOKENS) for h in header if h)
+    return bool(has_condition and has_control)
+
+
+def _flat_fallback_logic_blocks(
+    table_grids: list[list[list[str]]],
+    *,
+    file_name: str,
+    src_base: dict[str, Any],
+    skip_indices: set[int],
+) -> list[dict[str, Any]]:
+    """When header routing finds nothing, emit one leaf block per condition-like row."""
+    blocks: list[dict[str, Any]] = []
+    seq = 0
+    for ti, grid in enumerate(table_grids):
+        if ti in skip_indices or len(grid) < 2:
+            continue
+        for ri, cells in enumerate(grid[1:], start=2):
+            if len(cells) < 2:
+                continue
+            label = (cells[0] or "").strip()
+            condition = (cells[1] or "").strip()
+            if not condition or condition.upper() in {"AND", "OR", "NOT"}:
+                continue
+            if not label:
+                label = f"Row {ri}"
+            seq += 1
+            block_id = f"WD_FLAT_{ti + 1}_{seq:03d}"
+            blocks.append(
+                {
+                    "id": block_id,
+                    "name": label[:120],
+                    "raw_expression": condition,
+                    "tree": {
+                        "type": "leaf",
+                        "signal": label[:80],
+                        "value": condition,
+                        "parse_status": "partial",
+                    },
+                    "block_type": "flat_fallback",
+                    "parse_status": "partial",
+                    "review_required": True,
+                    "source": {**src_base, "table": f"table_{ti + 1}", "row": ri, "kind": "flat_fallback"},
+                }
+            )
+    return blocks
 
 
 def peek_word_text(path: Path, max_chars: int = 8000) -> str:
@@ -59,7 +123,22 @@ def peek_word_text(path: Path, max_chars: int = 8000) -> str:
     return "\n".join(parts)[:max_chars]
 
 
-def _table_to_grid(table) -> list[list[str]]:
+def _table_to_grid(table, cfg: dict[str, Any] | None = None) -> list[list[str]]:
+    if cfg is None:
+        try:
+            from src.utils.config_path import get_config_path
+            from src.utils.yaml_utils import load_yaml
+
+            cfg = load_yaml(get_config_path())
+        except OSError:
+            cfg = {}
+    if feature_enabled(cfg, "word_merge_geometry", default=True):
+        try:
+            grid, _ = table_to_merge_aware_grid(table)
+            if grid:
+                return grid
+        except Exception:
+            pass
     return [[c.text.strip() for c in row.cells] for row in table.rows]
 
 
@@ -113,9 +192,10 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
     state_table_payloads: list[dict[str, Any]] = []
 
     header_keywords = ("signal", "name", "interface", "direction", "sender", "receiver", "initial", "fail")
+    matched_table_indices: set[int] = set()
 
     for ti, table in enumerate(doc.tables):
-        grid = _table_to_grid(table)
+        grid = _table_to_grid(table, cfg=cfg)
         if use_merge_geometry:
             try:
                 merged_cell_evidence.extend(
@@ -133,9 +213,10 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
         table_grids.append(grid)
         source_tbl = _source_tbl(ti)
 
-        # Two-column Control | Condition (gates embedded in condition column(s))
+        # Two-column Control/Event/Judgment/Signal + Condition (gates embedded in condition column(s))
         hdr_joined = " ".join(header)
-        if "control" in hdr_joined and "condition" in hdr_joined and "logic" not in header:
+        if _is_two_column_logic_table(header):
+            matched_table_indices.add(ti)
             state_table_payloads.append({"grid": grid, "source": source_tbl})
             merge_branch_by_row: dict[int, dict[str, Any]] = {}
             if use_merge_geometry:
@@ -174,12 +255,14 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
 
         # Logic / control tables (separate Logic column)
         if "logic" in header and "condition" in header:
+            matched_table_indices.add(ti)
             blocks = rows_from_grid(grid, source_tbl, block_id_prefix=f"WD{ti+1}")
             logic_blocks.extend(blocks)
             continue
 
         # Condition definition table
         if header[0] == "condition" and len(header) > 1 and "definition" in header[1]:
+            matched_table_indices.add(ti)
             for ri, cells in enumerate(grid[1:], start=2):
                 if len(cells) < 2 or not cells[0]:
                     continue
@@ -194,6 +277,7 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
 
         # Test reference (Given / When / Expected)
         if "given" in " ".join(header) and ("expected" in " ".join(header) or "when" in " ".join(header)):
+            matched_table_indices.add(ti)
             hdr_map = {h: i for i, h in enumerate(header)}
             for ri, cells in enumerate(grid[1:], start=2):
                 if not any(cells):
@@ -216,11 +300,13 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
             or "next" in " ".join(header)
             or "previous state" in body_text_joined
         ):
+            matched_table_indices.add(ti)
             transitions.extend(parse_transition_table(grid, source_tbl))
             continue
 
         # Signal-like tables
         if any(any(k in h for k in header_keywords) for h in header):
+            matched_table_indices.add(ti)
             signals.extend(_extract_signal_rows_from_grid(grid, source_tbl))
 
     paragraph_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
@@ -256,6 +342,15 @@ def extract_word_document(path: Path, *, cfg: dict[str, Any] | None = None) -> d
 
     logic_dicts = [_block_to_dict(b) for b in logic_blocks]
     logic_dicts.extend(two_column_logic_dicts)
+    if not logic_dicts:
+        logic_dicts.extend(
+            _flat_fallback_logic_blocks(
+                table_grids,
+                file_name=path.name,
+                src_base=src_base,
+                skip_indices=matched_table_indices,
+            )
+        )
     transitions.extend(transitions_from_logic_blocks(logic_dicts))
     alias_map = build_alias_map(parsed_tc_tables)
     footnote_refs = extract_footnote_refs(parsed_tc_tables)

@@ -77,6 +77,8 @@ assist:
       - email
       - offline_access
       - User.Read
+    # Copilot Graph API delegated scopes — requested at sign-in (IT admin consent required).
+    # Leave empty to use built-in defaults (COPILOT_API_SCOPES in m365_auth.py).
     copilot_scopes: []
   copilot:
     enabled: false   # Tắt — multi-user server, chưa được phép dùng GitHub Copilot CLI

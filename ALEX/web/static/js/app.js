@@ -333,12 +333,14 @@ let state = {
     harnessDraft: {},
     codeStyleSamples: [],
     engineerNote: "",
+    copilotPromptOverride: "",
     referenceTestName: "",
     batchResults: null,
     batchRunning: false,
     draftCache: {},
     status: "",
   },
+  copilotRowDraft: {},
   guideOpenSection: null,
 };
 
@@ -930,7 +932,13 @@ function m365AuthBadge(m) {
       const label = m.not_entitled_reason === "msa" ? "MSA (NO API)" : "NO LICENSE";
       return `<span class="auth-badge auth-badge--warn" title="${esc(m.entitlement_note || "Copilot Chat API not entitled")}">${label}</span>`;
     }
-    return `<span class="auth-badge auth-badge--ok">${icon("check", "alex-icon--badge")} AUTH OK</span>`;
+    if (m.copilot_api_probe_ok === true) {
+      return `<span class="auth-badge auth-badge--ok">${icon("check", "alex-icon--badge")} COPILOT OK</span>`;
+    }
+    if (m.copilot_api_probe_ok === false) {
+      return `<span class="auth-badge auth-badge--err" title="${esc(m.copilot_api_probe_error || "Probe failed")}">PROBE FAIL</span>`;
+    }
+    return `<span class="auth-badge auth-badge--warn">TEST API</span>`;
   }
   if (m.client_id_configured) {
     return `<span class="auth-badge auth-badge--warn">SIGN IN</span>`;
@@ -960,6 +968,12 @@ function renderM365KnowledgeBanner() {
   const st = state.m365Status || {};
   if (st.copilot_chat_entitled === false) {
     return renderM365EntitlementBanner(st, { compact: true });
+  }
+  if ((st.api_ready || st.connected) && st.copilot_api_probe_ok === false) {
+    return `<div class="m365-entitlement-banner m365-entitlement-banner--compact" role="status">
+      <strong>Copilot API probe failed.</strong>
+      <span class="detail"> ${esc(st.copilot_api_probe_error || "Click Test Copilot API on Review tab or contact IT.")}</span>
+    </div>`;
   }
   const msg = st.client_id_configured
     ? "Sign in on the Review tab to use Resolve with Copilot. Apply locally works without AI for simple patterns."
@@ -1599,9 +1613,68 @@ function updateTopbar(summary) {
   applyJobSummary(summary);
 }
 
-function requireJobHtml() {
+function resolveInitialPage(summary) {
+  const fromPath = pageFromPath(window.location.pathname);
+  const imported = jobBootstrapSource(summary).startsWith("imported");
+  if (imported && fromPath === "logic-review") {
+    return "export";
+  }
+  if (fromPath === "logic-review" && !state.jobId) {
+    return "review";
+  }
+  return fromPath;
+}
+
+function persistCurrentPage(pageId) {
+  try {
+    sessionStorage.setItem("alex.currentPageId", pageId);
+  } catch (_) {
+    /* private mode */
+  }
+}
+
+function jobBootstrapSource(summary) {
+  return String(summary?.bootstrap_source || state._summaryCache?.summary?.bootstrap_source || "").trim();
+}
+
+function jobHasWorkableBundle(summary) {
+  if (!state.jobId) return false;
+  const s = summary || state._summaryCache?.summary || {};
+  const src = jobBootstrapSource(s);
+  if (src.startsWith("imported")) return true;
+  return (s.test_candidates ?? 0) > 0 || (s.logic_groups ?? 0) > 0 || (s.logic_blocks ?? 0) > 0;
+}
+
+function jobReadiness(summary) {
+  if (!state.jobId) return "no_job";
+  if (jobHasWorkableBundle(summary)) {
+    const src = jobBootstrapSource(summary);
+    if (src.startsWith("imported")) return "imported_ready";
+    return "analyzed_ready";
+  }
+  return "pending";
+}
+
+function copilotErrorBanner(result) {
+  if (!result || result.ok !== false) return "";
+  const cat = result.error_category || "unknown";
+  const action = result.user_action ? `<p class="detail">${esc(result.user_action)}</p>` : "";
+  return `<div class="card copilot-error-banner" data-error-category="${esc(cat)}">
+    <p><b>Copilot:</b> ${esc(result.error || "Request failed")}</p>
+    <p class="detail">Category: <code>${esc(cat)}</code></p>
+    ${action}
+  </div>`;
+}
+
+function requireJobHtml(mode = "no_job") {
+  if (mode === "imported_ready" || mode === "analyzed_ready") return "";
   return `<div class="card">
-    <p><b>No review yet.</b> On <b>Spec review</b>, select files and click <b>Review specification</b>.</p>
+    <p><b>No active job yet.</b> You can either analyze spec files or import existing work:</p>
+    <ul class="detail">
+      <li><b>Review specification</b> — parse .docx / .xlsx from uploads.</li>
+      <li><b>Import TestSpec</b> — upload Final TestSpec .xlsx (no analyze required).</li>
+      <li><b>Import bundle</b> — upload saved <code>ui_bundle.yaml</code>.</li>
+    </ul>
     <button class="btn secondary" id="btn-goto-review">Go to Spec review</button>
   </div>`;
 }
@@ -1630,6 +1703,7 @@ function showPage(id, opts = {}) {
   if (!opts.skipHistory) {
     syncUrlForPage(pageId, { replace: !!opts.replace });
   }
+  persistCurrentPage(pageId);
   updatePageChrome(pageId);
   $("#nav").querySelectorAll("button").forEach((b) => {
     b.classList.toggle("active", b.dataset.page === pageId);
@@ -1769,6 +1843,16 @@ function renderReviewSummaryPanel(dash, preview, containerId) {
       ["Logic groups", wb.logic_groups ?? 0, "info"],
     ])}
     ${renderSpecOverviewPanel(dash.overview)}
+    ${
+      (dash.excel_sheets || []).length
+        ? `<div style="margin-top:1rem"><h3 class="alex-primary-panel__label">Excel sheets</h3><ul class="detail">${(dash.excel_sheets || [])
+            .map(
+              (s) =>
+                `<li><b>${esc(s.name || "?")}</b>${s.selected === false ? " (skipped)" : ""} — ${esc(String(s.logic_blocks ?? s.rows_imported ?? "—"))} block/row(s)</li>`
+            )
+            .join("")}</ul></div>`
+        : ""
+    }
     ${
       (dash.prioritized_issues || []).length
         ? `<div style="margin-top:1rem"><h3 class="alex-primary-panel__label">Notes</h3>${renderPrioritizedIssues((dash.prioritized_issues || []).slice(0, 10))}</div>`
@@ -1935,6 +2019,16 @@ async function renderReview() {
       </header>
       ${renderReviewLoginHub(copilot)}
       <section class="card">
+        <h3 class="section-kicker">Import existing TestSpec (Excel)</h3>
+        <p class="detail">Chỉ cần file <b>.xlsx</b> — không cần bundle. Tool đọc sheet có header giống export <b>Final TestSpec</b> của ALEX (Test Function, UseCase, Operation, Expected value for input/output, …).</p>
+        <p class="detail">Nếu file Excel công ty dùng tên cột khác, cần đổi header cho khớp hoặc báo team thêm mapping — import sẽ báo lỗi preview trước khi tạo job.</p>
+        <div class="toolbar-row">
+          <label class="btn secondary btn-with-icon upload-label">${icon("upload", "alex-icon--btn")} Import TestSpec (.xlsx)<input type="file" id="import-testspec-file" accept=".xlsx,.xlsm" hidden /></label>
+          <label class="btn secondary btn-with-icon upload-label" title="Chỉ dùng khi restore job từ máy khác">${icon("upload", "alex-icon--btn")} Restore ui_bundle.yaml (advanced)<input type="file" id="import-bundle-file" accept=".yaml,.yml" hidden /></label>
+        </div>
+        <p id="import-status" class="detail"></p>
+      </section>
+      <section class="card">
         <div class="toolbar-row">
           <div class="toolbar-row__start">
             <label class="btn secondary btn-with-icon upload-label">${icon("upload", "alex-icon--btn")} Upload<input type="file" id="file-upload" multiple accept=".docx,.xlsx,.xlsm,.pdf,.cpp,.h,.png,.jpg,.md" hidden /></label>
@@ -1992,6 +2086,48 @@ async function renderReview() {
     };
     $("#btn-review-guide").onclick = () => openGuideSection("guide-start");
     bindTabHelpLinks();
+
+    async function importJobFromFile(inputId, endpoint) {
+      const inp = $(inputId);
+      if (!inp?.files?.length) return;
+      const statusEl = $("#import-status");
+      statusEl.textContent = "Importing…";
+      const fd = new FormData();
+      fd.append("file", inp.files[0]);
+      try {
+        const r = await fetch(endpoint, { method: "POST", body: fd });
+        const text = await r.text();
+        let data = {};
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text || `HTTP ${r.status}`);
+        }
+        if (!r.ok) {
+          const msg =
+            typeof data.detail === "object"
+              ? data.detail.error || JSON.stringify(data.detail.preview || data.detail)
+              : data.detail || data.error || text;
+          throw new Error(msg);
+        }
+        setJobId(data.job_id);
+        invalidateApiCache();
+        await refreshJobSummary(true);
+        const sheets = (data.sheet_summary || [])
+          .map((s) => `${s.name}: ${s.rows_imported ?? 0} row(s)`)
+          .join("; ");
+        statusEl.textContent = `Import complete — job ${data.job_id}${sheets ? ` (${sheets})` : ""}.`;
+        showPage("export", { replace: true });
+      } catch (e) {
+        statusEl.textContent = `Import failed: ${e.message}`;
+      }
+      inp.value = "";
+    }
+
+    $("#import-testspec-file").onchange = () =>
+      importJobFromFile("#import-testspec-file", "/api/jobs/import-testspec");
+    $("#import-bundle-file").onchange = () =>
+      importJobFromFile("#import-bundle-file", "/api/jobs/import-bundle");
 
     $("#btn-clear-files").onclick = async () => {
       $("#src-status").textContent = "Clearing uploaded files…";
@@ -2581,6 +2717,39 @@ function renderCopilotPlanTable(plan) {
   ${plan.understanding_summary ? `<p class="detail"><b>Summary:</b> ${esc(plan.understanding_summary)}</p>` : ""}`;
 }
 
+function buildCopilotM365Brief({ engineerNote = "", copilotSession = null, logicId = "" } = {}) {
+  const pack = copilotSession?.context_pack || {};
+  const plan = copilotSession?.plan || {};
+  const logic = pack.logic || {};
+  const lines = [
+    "# ALEX — M365 Copilot brief",
+    logicId ? `Logic group: ${logicId}` : "",
+    logic.control_name ? `Control: ${logic.control_name}` : "",
+    "",
+    "## Engineer note",
+    engineerNote.trim() || "(none)",
+    "",
+    "## Context summary",
+    `Test cases: ${(pack.testcases || []).length}`,
+    `Paths: ${(pack.paths || []).length}`,
+    `Missing paths: ${pack.coverage_gaps?.missing_path_count ?? 0}`,
+    "",
+  ];
+  const items = plan.plan_items || [];
+  if (items.length) {
+    lines.push("## Plan items");
+    items.forEach((it, i) => {
+      lines.push(`${i + 1}. [${it.action || "update"}] ${it.candidate_id || "new"} — ${it.rationale || it.summary || ""}`);
+    });
+    lines.push("");
+  }
+  if (plan.understanding_summary) {
+    lines.push("## Understanding");
+    lines.push(plan.understanding_summary);
+  }
+  return lines.filter((l) => l !== undefined).join("\n");
+}
+
 function renderCopilotDraftDiffs(diffs) {
   if (!diffs?.length) return "<p class='detail'>No drafts — click Write test cases.</p>";
   return `<div class="copilot-draft-list">${diffs
@@ -2595,6 +2764,8 @@ function renderCopilotDraftDiffs(diffs) {
         </header>
         ${noop ? `<p class="detail">Copilot did not change this row — review plan or regenerate write.</p>` : ""}
         <div class="knowledge-diff-grid">
+          <div class="alex-io-block"><h5>Operation before</h5>${formatIoBlock(d.before?.operation || "—")}</div>
+          <div class="alex-io-block"><h5>Operation after</h5>${formatIoBlock(d.after?.operation || "—")}</div>
           <div class="alex-io-block"><h5>UseCase before</h5>${formatIoBlock(d.before?.use_case || "—")}</div>
           <div class="alex-io-block"><h5>UseCase after</h5>${formatIoBlock(d.after?.use_case || "—")}</div>
           <div class="alex-io-block"><h5>Expected input before</h5>${formatIoBlock(d.before?.expected_input || "—")}</div>
@@ -2646,6 +2817,16 @@ function renderCopilotWorkbench(inbox, { engineerNote = "", attachments = [], lo
     <div data-copilot-panel="plan" ${step === "plan" ? "" : "hidden"}>${renderCopilotPlanTable(plan)}</div>
     <div data-copilot-panel="write" ${step === "write" ? "" : "hidden"}><p class="detail">Write runs in batches (config: copilot_write_batch_size). NO-OP drafts are retried automatically when copilot_write_retries &gt; 0.</p></div>
     <div data-copilot-panel="review" ${step === "review" ? "" : "hidden"}>${renderCopilotDraftDiffs(diffs)}</div>
+    <div class="copilot-followup-box" ${m365KnowledgeReady() ? "" : "hidden"}>
+      <label class="detail">Ask Copilot follow-up (same Graph conversation)
+        <textarea id="copilot-followup-message" class="clarify-box" rows="3" placeholder="Refine plan or testcase wording…"></textarea>
+      </label>
+      <div class="review-actions">
+        <button type="button" class="btn secondary" id="btn-copilot-followup">Send follow-up</button>
+        <button type="button" class="btn secondary" id="btn-copilot-copy-brief">Copy M365 brief</button>
+      </div>
+      <p id="copilot-followup-status" class="detail"></p>
+    </div>
     <div data-definition-query-status class="detail"></div>
   </div>`;
 }
@@ -3036,11 +3217,33 @@ function stopServiceStatusPolling() {
   }
 }
 
-function m365KnowledgeReady() {
-  const avail = state.assistStatus?.providers_available?.m365;
-  if (avail != null) return !!avail;
+function m365ApiSignedIn() {
   const st = state.m365Status || {};
-  return !!(st.api_ready && st.copilot_chat_entitled !== false);
+  return !!(st.api_ready || st.connected);
+}
+
+function m365KnowledgeReady() {
+  const st = state.m365Status || {};
+  if (!m365ApiSignedIn()) return false;
+  if (st.copilot_chat_entitled === false) return false;
+  return st.copilot_api_probe_ok === true;
+}
+
+async function runM365CopilotProbe() {
+  setM365AuthMessage("Testing Copilot API (Graph conversation)…");
+  const res = await api("/api/m365/copilot-probe", { method: "POST" });
+  state.m365Status = { ...(state.m365Status || {}), ...res };
+  applyM365TopbarStatus(state.m365Status);
+  refreshReviewM365Tile();
+  if (res.ok) {
+    const preview = res.reply_preview ? ` — ${res.reply_preview.slice(0, 80)}` : "";
+    setM365AuthMessage(`Copilot API OK${preview}`);
+    return res;
+  }
+  const cat = res.error_category || "error";
+  const action = res.user_action ? ` ${res.user_action}` : "";
+  setM365AuthMessage(`[${cat}] ${res.error || res.entitlement_hint || "Copilot API probe failed"}.${action}`);
+  return res;
 }
 
 function assistEnabled() {
@@ -3245,7 +3448,14 @@ function m365ReviewStatusText(st) {
           : "no Microsoft 365 Copilot license assigned";
       return `Signed in: ${who} · ${reason}`;
     }
-    return `Signed in: ${who}`;
+    if (st.copilot_api_probe_ok === true) {
+      return `Signed in: ${who} · Copilot API OK`;
+    }
+    if (st.copilot_api_probe_ok === false) {
+      const hint = st.copilot_api_probe_error || "Copilot API probe failed";
+      return `Signed in: ${who} · ${hint.slice(0, 80)}`;
+    }
+    return `Signed in: ${who} · click Test Copilot API`;
   }
   if (st.client_id_configured) {
     if (st.server_managed_setup && st.client_secret_configured === false) {
@@ -3272,9 +3482,16 @@ function refreshReviewM365Tile() {
   if (badge) badge.innerHTML = m365AuthBadge(state.m365Status);
   const signOut = $("#btn-m365-disconnect");
   const signIn = $("#btn-m365-connect");
-  const ready = m365KnowledgeReady();
-  if (signOut) signOut.hidden = !ready;
-  if (signIn) signIn.disabled = ready || !!state.m365LoginInProgress;
+  const probeBtn = $("#btn-m365-copilot-probe");
+  const copilotAuthBtn = $("#btn-m365-copilot-auth");
+  const signedIn = m365ApiSignedIn();
+  if (signOut) signOut.hidden = !signedIn;
+  if (signIn) signIn.disabled = signedIn || !!state.m365LoginInProgress;
+  if (probeBtn) probeBtn.hidden = !signedIn;
+  if (copilotAuthBtn) {
+    copilotAuthBtn.hidden = !signedIn;
+    copilotAuthBtn.disabled = !!state.m365LoginInProgress || !!state.m365Status?.copilot_scopes_granted;
+  }
 }
 
 function refreshGithubAuthBadge(copilot) {
@@ -3331,15 +3548,21 @@ function renderM365SetupFields(m) {
 }
 
 function renderM365SetupActions(m) {
+  const probeBtn = `<button type="button" class="btn secondary" id="btn-m365-copilot-probe" hidden>Test Copilot API</button>`;
+  const copilotAuthBtn = `<button type="button" class="btn secondary" id="btn-m365-copilot-auth" hidden>Authorize Copilot API</button>`;
   if (m.server_managed_setup) {
     return `<div class="review-actions" style="margin-top:0.5rem">
             <button type="button" class="btn secondary" id="btn-m365-connect">Sign in</button>
+            ${copilotAuthBtn}
+            ${probeBtn}
             <button type="button" class="btn secondary" id="btn-m365-disconnect" hidden>Sign out</button>
           </div>`;
   }
   return `<div class="review-actions" style="margin-top:0.5rem">
             <button type="button" class="btn secondary" id="btn-m365-save-setup">Save</button>
             <button type="button" class="btn secondary" id="btn-m365-connect">Sign in</button>
+            ${copilotAuthBtn}
+            ${probeBtn}
             <button type="button" class="btn secondary" id="btn-m365-disconnect" hidden>Sign out</button>
             <button type="button" class="btn secondary" id="btn-m365-reset-setup">Clear</button>
           </div>`;
@@ -3476,6 +3699,30 @@ function bindReviewLoginHub() {
       }
     };
   }
+  const m365ProbeBtn = $("#btn-m365-copilot-probe");
+  if (m365ProbeBtn) {
+    m365ProbeBtn.onclick = async () => {
+      m365ProbeBtn.disabled = true;
+      try {
+        await runM365CopilotProbe();
+      } catch (e) {
+        setM365AuthMessage(e.message);
+      } finally {
+        m365ProbeBtn.disabled = false;
+      }
+    };
+  }
+  const m365CopilotAuthBtn = $("#btn-m365-copilot-auth");
+  if (m365CopilotAuthBtn) {
+    m365CopilotAuthBtn.onclick = async () => {
+      try {
+        await signInM365Copilot();
+        refreshReviewM365Tile();
+      } catch (e) {
+        setM365AuthMessage(e.message);
+      }
+    };
+  }
 }
 
 function stopM365LoginTimer() {
@@ -3578,6 +3825,51 @@ function showM365SetupError(message) {
   }
 }
 
+async function signInM365Copilot() {
+  await loadM365Status();
+  if (state.m365Status?.setup_required) {
+    throw new Error("Save the M365 Client ID on the Review tab before signing in.");
+  }
+  if (state.m365LoginInProgress) {
+    throw new Error("Sign-in already in progress.");
+  }
+  const generation = (state.m365SignInGeneration = (state.m365SignInGeneration || 0) + 1);
+  setM365AuthMessage("Starting Copilot API authorization (7 Graph scopes)…");
+  await cancelM365Login();
+  const start = await api("/api/m365/login/copilot-start", { method: "POST" });
+  if (generation !== state.m365SignInGeneration) return null;
+  showM365LoginPanel(start);
+  const intervalMs = Math.max(3, Number(start.interval || 5)) * 1000;
+  const deadline = Date.now() + Number(start.expires_in || 900) * 1000;
+  await sleepMs(intervalMs);
+  while (Date.now() < deadline) {
+    if (generation !== state.m365SignInGeneration) {
+      hideM365LoginPanel();
+      return null;
+    }
+    const poll = await api("/api/m365/login/poll", { method: "POST" });
+    if (poll.ok && poll.status === "completed") {
+      hideM365LoginPanel();
+      await loadM365Status();
+      setM365AuthMessage("Copilot scopes authorized. Running API probe…");
+      refreshReviewM365Tile();
+      try {
+        await runM365CopilotProbe();
+      } catch (_) {
+        setM365AuthMessage("Authorized — probe failed. Click Test Copilot API.");
+      }
+      return poll;
+    }
+    if (poll.status === "failed") {
+      hideM365LoginPanel();
+      throw new Error(poll.error || "Copilot authorization failed.");
+    }
+    await sleepMs(poll.interval ? poll.interval * 1000 : intervalMs);
+  }
+  hideM365LoginPanel();
+  throw new Error("Copilot authorization timed out.");
+}
+
 async function signInM365() {
   await loadM365Status();
   if (state.m365Status?.setup_required) {
@@ -3650,10 +3942,57 @@ function renderFieldSourceBadge(row, fieldLabel) {
   const touched = String(row?.ai_touched_fields || "")
     .split(",")
     .map((s) => s.trim());
+  const provider = String(row?.ai_provider || "").toLowerCase();
   if (touched.includes(fieldLabel)) {
-    return `<span class="tag high field-source-badge">Engineer</span>`;
+    if (provider.includes("copilot") || provider.includes("m365")) {
+      return `<span class="tag high field-source-badge field-source-badge--copilot">Copilot</span>`;
+    }
+    return `<span class="tag warning field-source-badge field-source-badge--manual">Manual</span>`;
   }
-  return `<span class="tag field-source-badge">Auto</span>`;
+  return `<span class="tag field-source-badge field-source-badge--auto">Auto</span>`;
+}
+
+function workbookFieldLabel(colKey) {
+  const map = {
+    use_case: "UseCase",
+    operation: "Operation",
+    expected_input: "ExpectedInput",
+    expected_output: "ExpectedOutput",
+  };
+  return map[colKey] || "";
+}
+
+function fieldHighlightClass(row, fieldLabel) {
+  const touched = String(row?.ai_touched_fields || "")
+    .split(",")
+    .map((s) => s.trim());
+  if (!touched.includes(fieldLabel)) return "";
+  const provider = String(row?.ai_provider || "").toLowerCase();
+  return provider.includes("copilot") || provider.includes("m365")
+    ? "field-copilot-changed"
+    : "field-manual-changed";
+}
+
+function renderCopilotRowDiffPanel(diffs, scope) {
+  if (!diffs?.length) return "";
+  const d = diffs[0];
+  return `<div class="copilot-row-diff-panel" id="${scope}-copilot-row-diff">
+    <p class="detail"><b>Copilot row preview</b> — ${esc(d.candidate_id || "")}</p>
+    <div class="knowledge-diff-grid">
+      <div class="alex-io-block"><h5>Operation before</h5>${formatIoBlock(d.before?.operation || "—")}</div>
+      <div class="alex-io-block"><h5>Operation after</h5>${formatIoBlock(d.after?.operation || "—")}</div>
+      <div class="alex-io-block"><h5>UseCase before</h5>${formatIoBlock(d.before?.use_case || "—")}</div>
+      <div class="alex-io-block"><h5>UseCase after</h5>${formatIoBlock(d.after?.use_case || "—")}</div>
+      <div class="alex-io-block"><h5>Expected input before</h5>${formatIoBlock(d.before?.expected_input || "—")}</div>
+      <div class="alex-io-block"><h5>Expected input after</h5>${formatIoBlock(d.after?.expected_input || "—")}</div>
+      <div class="alex-io-block"><h5>Expected output before</h5>${formatIoBlock(d.before?.expected_output || "—")}</div>
+      <div class="alex-io-block"><h5>Expected output after</h5>${formatIoBlock(d.after?.expected_output || "—")}</div>
+    </div>
+    <div class="review-actions">
+      <button type="button" class="btn" id="${scope}-copilot-row-apply">Apply Copilot row</button>
+      <button type="button" class="btn secondary" id="${scope}-copilot-row-discard">Discard</button>
+    </div>
+  </div>`;
 }
 
 function renderValidationBadge(row) {
@@ -3732,6 +4071,10 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
   if (!baseRow) return "<p class='detail'>No final workbook rows yet.</p>";
   const row = mergeRowWithDraft(baseRow, scope);
   state.workbookFocus[scope] = row.candidate_id;
+  const ucCls = fieldHighlightClass(row, "UseCase");
+  const opCls = fieldHighlightClass(row, "Operation");
+  const inCls = fieldHighlightClass(row, "ExpectedInput");
+  const outCls = fieldHighlightClass(row, "ExpectedOutput");
   return `<div class="card workbook-focus-card" id="${scope}-workbook-anchor">
     <div class="focus-head">
       <div>
@@ -3745,10 +4088,10 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
       <label>Event<input id="${scope}-focus-event" class="gtest-input" value="${esc(row.event || "")}" /></label>
     </div>
     <div class="focus-grid focus-grid--workbook">
-      <label class="focus-span-2">UseCase ${renderFieldSourceBadge(row, "UseCase")}<textarea id="${scope}-focus-use_case" class="focus-text focus-text--wide">${esc(row.use_case || "")}</textarea></label>
-      <label class="focus-span-2">Operation ${renderFieldSourceBadge(row, "Operation")}<textarea id="${scope}-focus-operation" class="focus-text focus-text--wide">${esc(row.operation || "")}</textarea></label>
-      <label class="focus-span-2">Expected input ${renderFieldSourceBadge(row, "ExpectedInput")}<textarea id="${scope}-focus-expected_input" class="focus-text focus-text focus-text--io" rows="14">${esc(row.expected_input || "")}</textarea></label>
-      <label class="focus-span-2">Expected output ${renderFieldSourceBadge(row, "ExpectedOutput")}<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out" rows="6">${esc(row.expected_output || "")}</textarea></label>
+      <label class="focus-span-2">UseCase ${renderFieldSourceBadge(row, "UseCase")}<textarea id="${scope}-focus-use_case" class="focus-text focus-text--wide ${ucCls}">${esc(row.use_case || "")}</textarea></label>
+      <label class="focus-span-2">Operation ${renderFieldSourceBadge(row, "Operation")}<textarea id="${scope}-focus-operation" class="focus-text focus-text--wide ${opCls}">${esc(row.operation || "")}</textarea></label>
+      <label class="focus-span-2">Expected input ${renderFieldSourceBadge(row, "ExpectedInput")}<textarea id="${scope}-focus-expected_input" class="focus-text focus-text focus-text--io ${inCls}" rows="14">${esc(row.expected_input || "")}</textarea></label>
+      <label class="focus-span-2">Expected output ${renderFieldSourceBadge(row, "ExpectedOutput")}<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out ${outCls}" rows="6">${esc(row.expected_output || "")}</textarea></label>
     </div>
     <label class="detail"><input type="checkbox" id="${scope}-focus-remember-io" /> Remember I/O → code variable map on save</label>
     <div class="focus-meta">
@@ -3771,7 +4114,8 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
       <button type="button" class="btn secondary" id="${scope}-focus-open-testcode">Open in Test Code</button>
       ${
         assistEnabled()
-          ? `<button type="button" class="btn secondary" id="${scope}-focus-improve-io">Improve I/O (AI)</button>`
+          ? `<button type="button" class="btn secondary" id="${scope}-focus-improve-io">Improve I/O (AI)</button>
+             <button type="button" class="btn secondary" id="${scope}-focus-copilot-row">Copilot improve row</button>`
           : ""
       }
       ${
@@ -3782,6 +4126,7 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
           : ""
       }
     </div>
+    <div id="${scope}-copilot-row-diff-slot">${state.copilotRowDraft?.[scope]?.candidate_id === row.candidate_id ? renderCopilotRowDiffPanel(state.copilotRowDraft[scope].diffs, scope) : ""}</div>
   </div>`;
 }
 
@@ -3898,12 +4243,12 @@ function renderWorkbookTable(
   </tr></thead><tbody>${rows
     .map((row, idx) => `<tr class="workbook-row" data-row-index="${idx}" data-candidate-id="${esc(row.candidate_id || "")}">
       ${cols
-        .map(
-          (col) =>
-            `<td class="${col.colClass || ""}" data-col="${esc(col.key)}">${renderWorkbookValue(row, col, editable, idx, {
+        .map((col) => {
+          const hi = fieldHighlightClass(row, workbookFieldLabel(col.key));
+          return `<td class="${col.colClass || ""}${hi ? ` ${hi}` : ""}" data-col="${esc(col.key)}">${renderWorkbookValue(row, col, editable, idx, {
               spreadsheet,
-            })}</td>`
-        )
+            })}</td>`;
+        })
         .join("")}
       ${editable ? `<td class="col-save" data-col="save"><button class="btn secondary btn-row-save" data-row-save="${idx}">Save</button></td>` : ""}
     </tr>`)
@@ -3936,6 +4281,43 @@ function bindWorkbookColumnResize(tableId) {
       document.addEventListener("mouseup", onUp);
     };
   });
+}
+
+function bindCopilotRowDiffActions(scope, rows, onReload, statusElSelector) {
+  const pending = state.copilotRowDraft?.[scope];
+  const applyBtn = document.getElementById(`${scope}-copilot-row-apply`);
+  const discardBtn = document.getElementById(`${scope}-copilot-row-discard`);
+  if (!pending || !applyBtn) return;
+  applyBtn.onclick = async () => {
+    const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
+    if (statusEl) statusEl.textContent = "Applying Copilot row…";
+    try {
+      const res = await api(`/api/review/copilot/apply-row?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: pending.candidate_id,
+          draft: pending.draft,
+          language: state.exportLanguage || "EN",
+        }),
+      });
+      if (!res.ok) throw new Error(res.error || "Apply failed");
+      delete state.copilotRowDraft[scope];
+      invalidateApiCache(`workbench:${state.jobId}:${state.exportLanguage || "EN"}`);
+      if (statusEl) statusEl.textContent = `Applied Copilot changes to ${pending.candidate_id}.`;
+      state.workbookFocus[scope] = pending.candidate_id;
+      onReload();
+      document.getElementById(`${scope}-workbook-anchor`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  };
+  if (discardBtn) {
+    discardBtn.onclick = () => {
+      delete state.copilotRowDraft[scope];
+      onReload();
+    };
+  }
 }
 
 function bindWorkbookEditors(rows, language, statusElSelector) {
@@ -4107,7 +4489,11 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
             issues: focusRow.validation?.issues || [],
           }),
         });
-        if (!res.ok) throw new Error(res.error || "M365 Copilot assist failed");
+        if (!res.ok) {
+          const action = res.user_action ? ` — ${res.user_action}` : "";
+          if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "M365 Copilot assist failed"}${action}`;
+          return;
+        }
         const patch = res.result || {};
         if (patch.expected_input) {
           document.getElementById(`${scope}-focus-expected_input`).value = patch.expected_input;
@@ -4121,6 +4507,49 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
       }
     };
   }
+
+  const copilotRowBtn = document.getElementById(`${scope}-focus-copilot-row`);
+  if (copilotRowBtn) {
+    copilotRowBtn.onclick = async () => {
+      const focusRow = currentFocusRow(rows, scope);
+      if (!focusRow?.candidate_id) return;
+      const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
+      if (statusEl) statusEl.textContent = "M365 Copilot improving row…";
+      try {
+        const res = await api(
+          `/api/review/copilot/write-from-row?job_id=${encodeURIComponent(state.jobId)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              candidate_id: focusRow.candidate_id,
+              engineer_note: "",
+              language: state.exportLanguage || language || "EN",
+            }),
+          }
+        );
+        if (!res.ok) {
+          const action = res.user_action ? ` — ${res.user_action}` : "";
+          if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Copilot row improve failed"}${action}`;
+          return;
+        }
+        const draft = res.draft || {};
+        state.copilotRowDraft = state.copilotRowDraft || {};
+        state.copilotRowDraft[scope] = {
+          candidate_id: focusRow.candidate_id,
+          draft,
+          diffs: res.diffs || [],
+        };
+        if (statusEl) statusEl.textContent = "Copilot row preview ready — review diff below, then Apply.";
+        onReload();
+        document.getElementById(`${scope}-workbook-anchor`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    };
+  }
+
+  bindCopilotRowDiffActions(scope, rows, onReload, statusElSelector);
 
   if (!featureOn("add_clone_tc")) return;
 
@@ -5123,7 +5552,7 @@ function bindLibraryPicker() {
 
 async function renderDiagramGraph() {
   if (!state.jobId) {
-    content().innerHTML = requireJobHtml();
+    content().innerHTML = requireJobHtml("no_job");
     bindNoJob();
     return;
   }
@@ -5255,7 +5684,7 @@ async function renderDiagramGraph() {
 
 async function renderLogicReview(opts = {}) {
   if (!state.jobId) {
-    content().innerHTML = requireJobHtml();
+    content().innerHTML = requireJobHtml("no_job");
     bindNoJob();
     return;
   }
@@ -5282,7 +5711,22 @@ async function renderLogicReview(opts = {}) {
     };
     const items = data.logic_review_items || [];
     if (!items.length) {
-      content().innerHTML = `<h2>Logic Review</h2><p class="detail">No logic blocks in this job.</p>`;
+      const src = jobBootstrapSource(state._summaryCache?.summary);
+      const hint =
+        src.startsWith("imported")
+          ? "Imported job has synthetic logic groups — open Export or Test Code to edit test cases. Run diagnostic for parser details."
+          : "No logic blocks detected. Try Import TestSpec or run Review specification. Parser may not match your docx table headers.";
+      content().innerHTML = `<h2>Logic Review</h2><p class="detail">${esc(hint)}</p>
+        <button class="btn secondary" id="btn-logic-diagnostic" type="button">Run job diagnostic</button>
+        <pre id="logic-diagnostic-out" class="detail" style="white-space:pre-wrap;margin-top:0.75rem"></pre>`;
+      $("#btn-logic-diagnostic").onclick = async () => {
+        try {
+          const d = await api(`/api/jobs/${encodeURIComponent(state.jobId)}/diagnostic`);
+          $("#logic-diagnostic-out").textContent = JSON.stringify(d.diagnostic, null, 2);
+        } catch (e) {
+          $("#logic-diagnostic-out").textContent = e.message;
+        }
+      };
       return;
     }
     const sel = state.selectedLogicId || items[0].logic_id;
@@ -5662,7 +6106,11 @@ async function renderLogicReview(opts = {}) {
             note,
             term,
           });
-          await api(`/api/review/copilot/context?${q}`);
+          const res = await api(`/api/review/copilot/context?${q}`);
+          if (res.ok === false) {
+            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Build context failed"}`;
+            return;
+          }
           state.copilotStep[item.logic_id] = "context";
           invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
           if (statusEl) statusEl.textContent = "Context ready — review summary, then Generate plan.";
@@ -5692,7 +6140,10 @@ async function renderLogicReview(opts = {}) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ logic_id: item.logic_id, note, term }),
           });
-          if (!res.ok) throw new Error(res.error || "Plan failed");
+          if (res.ok === false) {
+            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Plan failed"}`;
+            return;
+          }
           state.copilotStep[item.logic_id] = "plan";
           invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
           const count = (res.plan?.plan_items || []).length;
@@ -5764,6 +6215,59 @@ async function renderLogicReview(opts = {}) {
           if (statusEl) statusEl.textContent = e.message;
         } finally {
           writeDraftsBtn.disabled = !m365KnowledgeReady();
+        }
+      };
+    }
+    const followUpBtn = $("#btn-copilot-followup");
+    if (followUpBtn) {
+      followUpBtn.onclick = async () => {
+        const msg = $("#copilot-followup-message")?.value?.trim() || "";
+        const statusEl = $("#copilot-followup-status") || document.querySelector("[data-definition-query-status]");
+        if (!msg) {
+          if (statusEl) statusEl.textContent = "Enter a follow-up message.";
+          return;
+        }
+        if (!m365KnowledgeReady()) {
+          if (statusEl) statusEl.textContent = "Authorize Copilot API first.";
+          return;
+        }
+        if (statusEl) statusEl.textContent = "Sending follow-up to Copilot…";
+        followUpBtn.disabled = true;
+        try {
+          const res = await api(`/api/review/copilot/follow-up?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ logic_id: item.logic_id, message: msg, reuse_conversation: true }),
+          });
+          if (!res.ok) {
+            const action = res.user_action ? ` — ${res.user_action}` : "";
+            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Follow-up failed"}${action}`;
+            return;
+          }
+          const preview = res.reply || res.reply_preview || res.message || "";
+          if (statusEl) {
+            statusEl.textContent = preview
+              ? `Copilot: ${preview.slice(0, 280)}${preview.length > 280 ? "…" : ""}`
+              : "Follow-up sent — Copilot replied (see conversation).";
+          }
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          followUpBtn.disabled = !m365KnowledgeReady();
+        }
+      };
+    }
+    const copyBriefBtn = $("#btn-copilot-copy-brief");
+    if (copyBriefBtn) {
+      copyBriefBtn.onclick = async () => {
+        const note = $("#definition-workbench-note")?.value || "";
+        const brief = buildCopilotM365Brief({ engineerNote: note, copilotSession, logicId: item.logic_id });
+        const statusEl = $("#copilot-followup-status");
+        try {
+          await navigator.clipboard.writeText(brief);
+          if (statusEl) statusEl.textContent = "M365 brief copied to clipboard.";
+        } catch (_) {
+          if (statusEl) statusEl.textContent = "Copy failed — select text manually.";
         }
       };
     }
@@ -5971,7 +6475,7 @@ async function triggerDownload(url) {
 
 async function renderExport() {
   if (!state.jobId) {
-    content().innerHTML = requireJobHtml();
+    content().innerHTML = requireJobHtml("no_job");
     bindNoJob();
     return;
   }
@@ -6311,6 +6815,9 @@ function renderTestCodeSamplesPanel(samples, referenceTestName) {
     <label class="detail">Engineer note (helpers, timing…)
       <textarea id="testcode-engineer-note" class="gtest-input gtest-note" rows="3" placeholder="vd. Dùng RunForMs(100) sau When elapsed…">${esc(state.testCode.engineerNote || "")}</textarea>
     </label>
+    <label class="detail">Copilot instructions (optional, markdown-style)
+      <textarea id="testcode-copilot-prompt" class="gtest-input gtest-note" rows="3" placeholder="vd. Dùng TEST_F, không mock CAN trực tiếp…">${esc(state.testCode.copilotPromptOverride || "")}</textarea>
+    </label>
     <div class="gtest-map-toolbar">
       <label class="btn secondary upload-label">Attach .cpp<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
     </div>`;
@@ -6375,6 +6882,9 @@ function bindTestCodeSampleControls(onUpload) {
   });
   $("#testcode-engineer-note")?.addEventListener("input", (ev) => {
     state.testCode.engineerNote = ev.target.value || "";
+  });
+  $("#testcode-copilot-prompt")?.addEventListener("input", (ev) => {
+    state.testCode.copilotPromptOverride = ev.target.value || "";
   });
   const uploadEl = $("#testcode-cpp-upload");
   if (uploadEl && onUpload) {
@@ -6443,9 +6953,11 @@ function bindTestCodeHandlers(rows, logicItems) {
       return;
     }
     tc.engineerNote = $("#testcode-engineer-note")?.value || "";
+    tc.copilotPromptOverride = $("#testcode-copilot-prompt")?.value || "";
     tc.referenceTestName = $("#testcode-ref-select")?.value || "";
     if (statusEl) statusEl.textContent = "Copilot generating GTest…";
     try {
+      const importedMode = jobBootstrapSource(state._summaryCache?.summary).startsWith("imported");
       const res = await api(`/api/review/copilot/code/generate?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6454,9 +6966,17 @@ function bindTestCodeHandlers(rows, logicItems) {
           use_baseline: true,
           language: state.exportLanguage || "EN",
           engineer_note: tc.engineerNote,
+          copilot_prompt_override: tc.copilotPromptOverride,
           reference_test_name: tc.referenceTestName,
+          from_testcase_only: importedMode ? true : null,
+          reuse_conversation: true,
         }),
       });
+      if (res.ok === false) {
+        const action = res.user_action ? ` — ${res.user_action}` : "";
+        if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Copilot code generation failed"}${action}`;
+        return;
+      }
       if (!res.ok) throw new Error(res.error || "Copilot code generation failed");
       tc.baselineDraft = res.baseline || null;
       tc.copilotDraft = res.copilot_draft || null;
@@ -6465,10 +6985,17 @@ function bindTestCodeHandlers(rows, logicItems) {
       const val = res.validation || {};
       if (diffEl) {
         diffEl.hidden = false;
-        diffEl.innerHTML = `<p><b>Copilot draft ready</b> — quality: ${esc(val.quality || "?")}${val.flags?.length ? ` · ${esc(val.flags.join(", "))}` : ""}</p>`;
+        const fallbackNote = res.copilot_fallback
+          ? `<p class="detail warn">Copilot unavailable — showing offline baseline only.</p>`
+          : "";
+        diffEl.innerHTML = `${fallbackNote}<p><b>${res.copilot_fallback ? "Baseline draft" : "Copilot draft ready"}</b> — quality: ${esc(val.quality || "?")}${val.flags?.length ? ` · ${esc(val.flags.join(", "))}` : ""}</p>`;
       }
       if (applyBtn) applyBtn.hidden = false;
-      if (statusEl) statusEl.textContent = "Copilot draft ready — click Apply Copilot or edit manually.";
+      if (statusEl) {
+        statusEl.textContent = res.copilot_fallback
+          ? "Baseline only (Copilot unavailable) — click Apply or edit manually."
+          : "Copilot draft ready — click Apply Copilot or edit manually.";
+      }
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
@@ -6480,6 +7007,7 @@ function bindTestCodeHandlers(rows, logicItems) {
       return;
     }
     tc.engineerNote = $("#testcode-engineer-note")?.value || "";
+    tc.copilotPromptOverride = $("#testcode-copilot-prompt")?.value || "";
     tc.referenceTestName = $("#testcode-ref-select")?.value || "";
     const logicId = tc.selectedLogicId || "";
     if (statusEl) statusEl.textContent = "Batch Copilot running…";
@@ -6491,12 +7019,18 @@ function bindTestCodeHandlers(rows, logicItems) {
         body: JSON.stringify({
           logic_id: logicId,
           engineer_note: tc.engineerNote,
+          copilot_prompt_override: tc.copilotPromptOverride,
           reference_test_name: tc.referenceTestName,
           persist_drafts: true,
           language: state.exportLanguage || "EN",
         }),
       });
       tc.batchResults = res.results || [];
+      if (res.ok === false) {
+        const action = res.user_action ? ` — ${res.user_action}` : "";
+        if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Batch failed"}${action}`;
+        return;
+      }
       if (statusEl) {
         statusEl.textContent = `Batch done: ${res.generated || 0} ok, ${res.skipped || 0} skipped, ${res.failed || 0} failed.`;
       }
@@ -6744,8 +7278,8 @@ async function renderTestCode(opts = {}) {
   const forceRefresh = opts.force === true;
   if (!state.jobId) {
     content().innerHTML = renderTestCodeHelpCard(
-      "No review job yet",
-      `<p class="detail">Test Code needs generated test cases from a completed review run.</p>`,
+      "No active job",
+      `<p class="detail">Import a Final TestSpec .xlsx or run Review specification first.</p>`,
       "Go to Review",
       "testcode-goto-review"
     );
@@ -6993,7 +7527,7 @@ async function boot() {
   setJobId(jobFromUrl || savedJob || null);
   updateSelectedCount();
   await refreshJobSummary();
-  const initialPage = pageFromPath(window.location.pathname);
+  const initialPage = resolveInitialPage(state._summaryCache?.summary);
   showPage(initialPage, { replace: true });
   state.routingBoot = false;
 }

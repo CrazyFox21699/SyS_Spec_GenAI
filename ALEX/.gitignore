@@ -7,9 +7,13 @@
 **/web_data/output/*
 **/web_data/.alex/*
 **/web_data/.ssl/*
+**/web_data/*.db
+**/web_data/m365/local_config.json
 !**/web_data/uploads/.gitkeep
 !**/web_data/output/.gitkeep
 !**/web_data/.alex/.gitkeep
+output/**
+!output/.gitkeep
 *.log
 .env
 .env.*

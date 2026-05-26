@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from web.code_style_samples import validate_copilot_code_draft
-from web.m365_copilot import run_copilot_chat
+from web.m365_copilot import run_copilot_chat_result
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:
@@ -45,7 +45,7 @@ def _format_style_samples(style_ref: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n\n" + json.dumps(blocks, ensure_ascii=False, indent=2)
 
 
-def _writer_prompt(context_pack: dict[str, Any], *, engineer_note: str = "") -> str:
+def _writer_prompt(context_pack: dict[str, Any], *, engineer_note: str = "", copilot_prompt_override: str = "") -> str:
     tc = context_pack.get("testcase") or {}
     harness = context_pack.get("harness") or {}
     baseline = context_pack.get("baseline_skeleton") or {}
@@ -80,7 +80,8 @@ def _writer_prompt(context_pack: dict[str, Any], *, engineer_note: str = "") -> 
         f"Sibling assertions (same Given):\n{json.dumps(siblings, ensure_ascii=False)[:1500]}\n\n"
         f"Python baseline skeleton (structure reference, improve with project style):\n"
         f"{json.dumps({k: baseline.get(k) for k in ('test_name', 'code_body', 'full_snippet') if baseline.get(k)}, ensure_ascii=False)[:4000]}\n\n"
-        "Return JSON only:\n"
+        + (f"Additional Copilot instructions from engineer:\n{copilot_prompt_override[:4000]}\n\n" if copilot_prompt_override.strip() else "")
+        + "Return JSON only:\n"
         "{\n"
         '  "test_name": "TEST_F name suffix",\n'
         '  "spec_comment_block": "// ...",\n'
@@ -97,9 +98,30 @@ def run_code_write(
     cfg: dict[str, Any],
     *,
     engineer_note: str = "",
+    copilot_prompt_override: str = "",
+    reuse_conversation: bool = False,
 ) -> dict[str, Any]:
-    prompt = _writer_prompt(context_pack, engineer_note=engineer_note)
-    raw = run_copilot_chat(cfg, prompt)
+    prompt = _writer_prompt(
+        context_pack,
+        engineer_note=engineer_note,
+        copilot_prompt_override=copilot_prompt_override,
+    )
+    chat = run_copilot_chat_result(
+        cfg,
+        prompt,
+        reuse_session_conversation=reuse_conversation,
+    )
+    if not chat.get("ok"):
+        return {
+            "ok": False,
+            "error": chat.get("error") or "M365 Copilot request failed",
+            "error_category": chat.get("error_category") or "m365_copilot_api",
+            "graph_status": chat.get("graph_status"),
+            "raw_preview": chat.get("raw_preview") or "",
+            "user_action": chat.get("user_action"),
+            "provider": "m365_copilot",
+        }
+    raw = str(chat.get("reply") or "")
     parsed = _parse_json_response(raw)
     if not parsed.get("full_snippet") and parsed.get("code_body"):
         comments = str(parsed.get("spec_comment_block") or "").strip()

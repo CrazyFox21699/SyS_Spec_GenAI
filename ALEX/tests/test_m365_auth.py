@@ -83,7 +83,7 @@ def test_friendly_auth_error_expired_code() -> None:
     assert "Sign in once" in msg
 
 
-def test_device_login_uses_minimal_scopes(tmp_path, monkeypatch) -> None:
+def test_device_login_basic_scopes_only(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
     monkeypatch.setattr(m365_auth, "PENDING_LOGIN_FILE", tmp_path / "pending.json")
     cfg = {
@@ -121,6 +121,43 @@ def test_device_login_uses_minimal_scopes(tmp_path, monkeypatch) -> None:
     assert "User.Read" in captured["scope"]
     assert "Sites.Read.All" not in captured["scope"]
     assert "22222222-2222-2222-2222-222222222222" in captured["url"]
+
+
+def test_copilot_device_login_includes_copilot_scopes(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(m365_auth, "M365_DIR", tmp_path)
+    monkeypatch.setattr(m365_auth, "PENDING_LOGIN_FILE", tmp_path / "pending.json")
+    cfg = {
+        "assist": {
+            "m365": {
+                "client_id": "11111111-1111-1111-1111-111111111111",
+                "tenant_id": "22222222-2222-2222-2222-222222222222",
+            }
+        }
+    }
+    captured: dict[str, str] = {}
+
+    def fake_post(url, data=None, timeout=30, **kwargs):
+        captured["scope"] = data.get("scope", "")
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "user_code": "ABCD1234",
+            "device_code": "device-secret",
+            "verification_uri": "https://login.microsoft.com/device",
+            "expires_in": 900,
+            "interval": 5,
+        }
+        return resp
+
+    def fake_request(method, url, data=None, timeout=30, **kwargs):
+        if method.upper() == "POST":
+            return fake_post(url, data=data, timeout=timeout, **kwargs)
+        raise AssertionError(method)
+
+    monkeypatch.setattr("web.http_ssl.requests.request", fake_request)
+    m365_auth.start_copilot_device_login(cfg)
+    assert "Sites.Read.All" in captured["scope"]
+    assert "Mail.Read" in captured["scope"]
 
 
 def test_explicit_tenant_no_fallback_to_common(tmp_path, monkeypatch) -> None:

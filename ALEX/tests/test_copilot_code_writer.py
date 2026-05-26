@@ -18,7 +18,26 @@ def test_run_code_write_parses_json() -> None:
         "baseline_skeleton": {},
     }
     reply = '{"test_name": "TC1_test", "code_body": "TEST_F(T, TC1_test) { EXPECT_EQ(a,1); }", "full_snippet": "// c\\nTEST_F(T, TC1_test) { EXPECT_EQ(a,1); }"}'
-    with patch("web.copilot_code_writer.run_copilot_chat", return_value=reply):
+    with patch(
+        "web.copilot_code_writer.run_copilot_chat_result",
+        return_value={"ok": True, "reply": reply},
+    ):
         out = run_code_write(pack, {})
     assert out["ok"] is True
     assert "TC1_test" in out["draft"]["full_snippet"]
+
+
+def test_run_code_write_returns_structured_error() -> None:
+    pack = {"testcase": {"candidate_id": "TC1"}, "harness": {}, "io_variable_map": {}, "verification_patterns": [], "sibling_assertions": [], "logic": {}, "baseline_skeleton": {}}
+    with patch(
+        "web.copilot_code_writer.run_copilot_chat_result",
+        return_value={
+            "ok": False,
+            "error": "no license",
+            "error_category": "m365_not_entitled",
+            "graph_status": 403,
+        },
+    ):
+        out = run_code_write(pack, {})
+    assert out["ok"] is False
+    assert out["error_category"] == "m365_not_entitled"

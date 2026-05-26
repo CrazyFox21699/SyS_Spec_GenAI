@@ -36,7 +36,10 @@ def test_batch_skips_missing_io() -> None:
     bundle = _bundle_with_rows()
     gtest_state: dict = {"harness": {"fixture_class": "T"}, "drafts": {}}
     reply = '{"test_name": "t", "code_body": "TEST_F(T,t){ EXPECT_EQ(1,1); }", "full_snippet": "TEST_F(T,t){ EXPECT_EQ(1,1); }"}'
-    with patch("web.copilot_code_writer.run_copilot_chat", return_value=reply):
+    with patch(
+        "web.copilot_code_writer.run_copilot_chat_result",
+        return_value={"ok": True, "reply": reply},
+    ):
         out = run_copilot_code_generate_batch(
             bundle,
             gtest_state,

@@ -233,7 +233,10 @@ def test_improve_io_via_m365_mock() -> None:
     from web.m365_copilot import improve_io_via_m365
 
     cfg = {"assist": {"m365": {}}}
-    with patch("web.m365_copilot.run_copilot_chat", return_value='{"expected_input":"Given: X=1"}'):
+    with patch(
+        "web.m365_copilot.run_copilot_chat_result",
+        return_value={"ok": True, "reply": '{"expected_input":"Given: X=1"}'},
+    ):
         out = improve_io_via_m365(cfg, "Improve this I/O")
     assert out["ok"] is True
     assert out["result"]["expected_input"] == "Given: X=1"

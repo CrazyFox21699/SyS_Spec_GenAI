@@ -124,10 +124,21 @@ def build_code_context_pack(
             "control_name": lb.get("name") or row.get("control_name"),
             "raw_expression": str(lb.get("raw_expression") or lb.get("expression") or "")[:4000],
         }
-        try:
-            pack["logic_context"] = build_context_pack(bundle, logic_id, cfg=cfg)
-        except (KeyError, ValueError, TypeError):
-            pack["logic_context"] = {}
+        parse_status = str(lb.get("parse_status") or "")
+        bootstrap = str(bundle.get("bootstrap_source") or "")
+        skip_logic_tree = parse_status in {"imported", "partial"} or bootstrap.startswith("imported")
+        if not skip_logic_tree:
+            try:
+                pack["logic_context"] = build_context_pack(bundle, logic_id, cfg=cfg)
+            except (KeyError, ValueError, TypeError):
+                pack["logic_context"] = {}
+        else:
+            pack["logic_context"] = {
+                "schema_version": "1",
+                "logic_id": logic_id,
+                "logic": pack["logic"],
+                "import_mode": True,
+            }
 
     if include_baseline:
         try:

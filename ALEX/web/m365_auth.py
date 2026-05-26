@@ -334,7 +334,32 @@ def _is_explicit_tenant(tenant: str) -> bool:
     return bool(GUID_RE.match(str(tenant or "").strip()))
 
 
-def _scope_list(cfg: dict[str, Any], *, for_device_login: bool = False) -> list[str]:
+def _copilot_extra_scopes(cfg: dict[str, Any]) -> list[str]:
+    """Delegated scopes required by Graph Copilot Chat API (admin consent on Azure app)."""
+    extra = _m365_cfg(cfg).get("copilot_scopes")
+    if isinstance(extra, list) and extra:
+        return [str(s).strip() for s in extra if str(s).strip()]
+    # Empty/missing config → use Graph-required Copilot scopes (see COPILOT_API_SCOPES).
+    return COPILOT_API_SCOPES[:]
+
+
+def _merge_scope_lists(base: list[str], extra: list[str]) -> list[str]:
+    parts = base[:]
+    for scope in extra:
+        s = str(scope).strip()
+        if s and s not in parts:
+            parts.append(s)
+    if "offline_access" not in parts:
+        parts.append("offline_access")
+    return parts
+
+
+def _scope_list(
+    cfg: dict[str, Any],
+    *,
+    for_device_login: bool = False,
+    include_copilot_scopes: bool = False,
+) -> list[str]:
     raw = _m365_cfg(cfg).get("scopes")
     if isinstance(raw, list) and raw:
         parts = [str(s).strip() for s in raw if str(s).strip()]
@@ -344,26 +369,34 @@ def _scope_list(cfg: dict[str, Any], *, for_device_login: bool = False) -> list[
             parts = [str(s).strip() for s in login_raw if str(s).strip()]
         else:
             parts = DEVICE_LOGIN_SCOPES[:]
+        if include_copilot_scopes:
+            parts = _merge_scope_lists(parts, _copilot_extra_scopes(cfg))
     else:
-        # Token refresh: stay on IT-approved delegated login scopes unless config overrides.
         login_raw = _m365_cfg(cfg).get("login_scopes")
         if isinstance(login_raw, list) and login_raw:
             parts = [str(s).strip() for s in login_raw if str(s).strip()]
         else:
             parts = DEVICE_LOGIN_SCOPES[:]
-        extra = _m365_cfg(cfg).get("copilot_scopes")
-        if isinstance(extra, list) and extra:
-            for scope in extra:
-                s = str(scope).strip()
-                if s and s not in parts:
-                    parts.append(s)
+        if include_copilot_scopes or bool(_m365_cfg(cfg).get("copilot_scopes_at_refresh", True)):
+            parts = _merge_scope_lists(parts, _copilot_extra_scopes(cfg))
     if "offline_access" not in parts:
         parts.append("offline_access")
     return parts
 
 
-def _scopes(cfg: dict[str, Any], *, for_device_login: bool = False) -> str:
-    return " ".join(_scope_list(cfg, for_device_login=for_device_login))
+def _scopes(
+    cfg: dict[str, Any],
+    *,
+    for_device_login: bool = False,
+    include_copilot_scopes: bool = False,
+) -> str:
+    return " ".join(
+        _scope_list(
+            cfg,
+            for_device_login=for_device_login,
+            include_copilot_scopes=include_copilot_scopes,
+        )
+    )
 
 
 def _read_session(user_id: str | None = None) -> dict[str, Any]:
@@ -566,14 +599,18 @@ def _entitlement_note(sess: dict[str, Any]) -> str:
         return (
             "Signed in with a personal Microsoft account. "
             "Microsoft 365 Copilot Chat API requires a work/school account "
-            "with the Microsoft 365 Copilot add-on license. "
-            "Use GitHub Copilot CLI / Ollama, or open copilot.microsoft.com and paste the reply."
+            "with the Microsoft 365 Copilot add-on license."
         )
     if sess.get("copilot_license_checked") and not sess.get("has_copilot_license"):
         return (
             "Work/school account detected, but no Microsoft 365 Copilot license is assigned. "
-            "Ask IT to add the SKU `Microsoft_365_Copilot` (see README.md). "
-            "Falling back to GitHub Copilot CLI / Ollama for now."
+            "Ask IT to add the SKU `Microsoft_365_Copilot` (see README.md)."
+        )
+    if sess.get("copilot_api_probe_ok") is False:
+        err = str(sess.get("copilot_api_probe_error") or "").strip()
+        return (
+            f"Microsoft 365 Copilot API probe failed. {err}".strip()
+            + " Click Test Copilot API after sign-in, or contact IT."
         )
     if not sess.get("copilot_license_checked"):
         return (
@@ -609,7 +646,56 @@ def is_copilot_chat_entitled(sess: dict[str, Any] | None = None) -> bool:
         return False
     if sess.get("copilot_license_checked") and not sess.get("has_copilot_license"):
         return False
+    if sess.get("copilot_api_probe_ok") is False:
+        return False
     return True
+
+
+def record_copilot_api_probe(
+    cfg: dict[str, Any] | None,
+    *,
+    ok: bool,
+    error: str = "",
+    reason: str = "",
+    graph_status: int = 0,
+    user_id: str | None = None,
+) -> None:
+    """Persist Graph Copilot conversation probe result into the M365 session."""
+    sess = _read_session(user_id)
+    sess["copilot_api_probe_ok"] = bool(ok)
+    sess["copilot_api_probe_at"] = _now_iso()
+    sess["copilot_api_probe_error"] = str(error or "")
+    sess["copilot_api_probe_graph_status"] = int(graph_status or 0)
+    if not ok:
+        if reason == "msa":
+            sess["is_msa"] = True
+            sess["has_copilot_license"] = False
+            sess["copilot_license_checked"] = True
+            sess["copilot_license_error"] = error or "MSA account — Copilot Chat API not entitled."
+        elif reason in ("no_license", "unknown"):
+            if reason == "no_license":
+                sess["has_copilot_license"] = False
+                sess["copilot_license_checked"] = True
+                sess["copilot_license_error"] = error or "Copilot API probe failed — no license."
+    _write_session(sess, user_id=user_id)
+
+
+def get_copilot_conversation_id(*, user_id: str | None = None) -> str:
+    return str(_read_session(user_id).get("copilot_conversation_id") or "")
+
+
+def set_copilot_conversation_id(conversation_id: str, *, user_id: str | None = None) -> None:
+    sess = _read_session(user_id)
+    sess["copilot_conversation_id"] = str(conversation_id or "")
+    sess["copilot_conversation_at"] = _now_iso()
+    _write_session(sess, user_id=user_id)
+
+
+def clear_copilot_conversation_id(*, user_id: str | None = None) -> None:
+    sess = _read_session(user_id)
+    sess.pop("copilot_conversation_id", None)
+    sess.pop("copilot_conversation_at", None)
+    _write_session(sess, user_id=user_id)
 
 
 def refresh_access_token(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
@@ -618,11 +704,14 @@ def refresh_access_token(cfg: dict[str, Any], *, user_id: str | None = None) -> 
     if not refresh:
         raise PermissionError("M365 session expired. Sign in again.")
     tenant = _tenant_id(cfg)
+    scope = str(sess.get("scope_used") or "").strip()
+    if not scope:
+        scope = _scopes(cfg, include_copilot_scopes=bool(sess.get("copilot_scopes_granted")))
     data = {
         ** _oauth_client_fields(cfg),
         "grant_type": "refresh_token",
         "refresh_token": refresh,
-        "scope": _scopes(cfg),
+        "scope": scope,
     }
     r = requests_post(
         f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
@@ -701,10 +790,15 @@ def cancel_device_login(*, user_id: str | None = None) -> None:
         pending_file.unlink(missing_ok=True)
 
 
-def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+def start_device_login(
+    cfg: dict[str, Any],
+    *,
+    user_id: str | None = None,
+    include_copilot_scopes: bool = False,
+) -> dict[str, Any]:
     cancel_device_login(user_id=user_id)
     client_id = _client_id(cfg)
-    scope = _scopes(cfg, for_device_login=True)
+    scope = _scopes(cfg, for_device_login=True, include_copilot_scopes=include_copilot_scopes)
     tenant = _tenant_id(cfg)
     try:
         r = _device_code_request(tenant, client_id, scope, cfg)
@@ -739,6 +833,7 @@ def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> di
         "started_at": _now_iso(),
         "tenant_used": tenant,
         "scope_used": scope,
+        "include_copilot_scopes": bool(include_copilot_scopes),
     }
     base, _, pending_file = _m365_paths(user_id)
     try:
@@ -757,7 +852,13 @@ def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> di
         "message": payload.get("message"),
         "expires_in": expires_in,
         "interval": interval,
+        "include_copilot_scopes": bool(include_copilot_scopes),
     }
+
+
+def start_copilot_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
+    """Device login requesting Graph Copilot delegated scopes (after IT admin consent)."""
+    return start_device_login(cfg, user_id=user_id, include_copilot_scopes=True)
 
 
 def poll_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dict[str, Any]:
@@ -817,6 +918,14 @@ def poll_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dic
         return {"ok": False, "status": "failed", "error": _device_token_error(cfg, raw_err), "error_raw": raw_err[:500]}
     pending_file.unlink(missing_ok=True)
     sess = _save_tokens(body, user_id=user_id)
+    scope_used = str(pending.get("scope_used") or "")
+    if scope_used:
+        sess["scope_used"] = scope_used
+    sess["copilot_scopes_granted"] = bool(pending.get("include_copilot_scopes"))
+    if not sess.get("copilot_scopes_granted"):
+        sess.pop("copilot_api_probe_ok", None)
+        sess.pop("copilot_api_probe_at", None)
+        sess.pop("copilot_api_probe_error", None)
     prof = _fetch_profile(str(sess.get("access_token") or ""))
     sess["display_name"] = prof.get("displayName") or prof.get("userPrincipalName") or "M365 user"
     sess["user_principal"] = prof.get("userPrincipalName", "")
@@ -860,6 +969,10 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
         else:
             not_entitled_reason = "unknown"
     entitlement_note = _entitlement_note(sess) if api_ready else ""
+    probe_ok = sess.get("copilot_api_probe_ok")
+    probe_at = sess.get("copilot_api_probe_at")
+    probe_error = str(sess.get("copilot_api_probe_error") or "")
+    copilot_scopes_granted = bool(sess.get("copilot_scopes_granted"))
     return {
         "connected": api_ready,
         "mode": "api" if api_ready else (mode or "none"),
@@ -886,6 +999,10 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
         "copilot_license_skus": list(sess.get("copilot_license_skus") or []),
         "copilot_license_error": str(sess.get("copilot_license_error") or ""),
         "copilot_chat_entitled": copilot_chat_entitled,
+        "copilot_api_probe_ok": probe_ok,
+        "copilot_api_probe_at": probe_at,
+        "copilot_api_probe_error": probe_error,
+        "copilot_scopes_granted": copilot_scopes_granted,
         "not_entitled_reason": not_entitled_reason,
         "entitlement_note": entitlement_note,
         "client_id_preview": f"{resolved_cid[:8]}…" if len(resolved_cid) > 8 else "",

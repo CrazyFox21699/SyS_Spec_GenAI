@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 
-def feature_enabled(cfg: dict[str, Any], name: str, *, default: bool = False) -> bool:
+def feature_enabled(cfg: dict[str, Any] | None, name: str, *, default: bool = False) -> bool:
+    if not isinstance(cfg, dict):
+        return default
     features = cfg.get("features")
     if not isinstance(features, dict):
         return default

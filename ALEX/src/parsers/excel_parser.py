@@ -22,6 +22,37 @@ from src.parsers.two_column_table_parser import (
     parse_control_condition_grid,
     tables_to_dicts,
 )
+from src.utils.config_path import get_config_path
+from src.utils.yaml_utils import load_yaml
+
+
+def _excel_ingest_config() -> dict[str, Any]:
+    try:
+        cfg = load_yaml(get_config_path())
+    except OSError:
+        cfg = {}
+    excel = cfg.get("excel") or {}
+    return {
+        "max_sheets": int(excel.get("max_sheets") or 20),
+        "sheet_include_patterns": list(excel.get("sheet_include_patterns") or []),
+    }
+
+
+def _sheet_names_for_workbook(sheetnames: list[str]) -> list[str]:
+    cfg = _excel_ingest_config()
+    patterns = cfg.get("sheet_include_patterns") or []
+    max_sheets = int(cfg.get("max_sheets") or 20)
+    names = list(sheetnames)
+    if patterns:
+        compiled: list[re.Pattern[str]] = []
+        for pat in patterns:
+            try:
+                compiled.append(re.compile(str(pat), re.IGNORECASE))
+            except re.error:
+                continue
+        if compiled:
+            names = [n for n in names if any(rx.search(n) for rx in compiled)]
+    return names[:max_sheets]
 
 
 def peek_excel_text(path: Path, max_chars: int = 8000) -> tuple[str, list[str]]:
@@ -728,7 +759,8 @@ def extract_excel_workbook(
     signals: list[dict[str, Any]] = []
     tid = 0
     file_name = path.name
-    for sheet_name in wb.sheetnames[:20]:
+    selected_sheets = _sheet_names_for_workbook(list(wb.sheetnames))
+    for sheet_name in selected_sheets:
         ws = wb[sheet_name]
         merged_cell_evidence.extend(collect_merged_cell_evidence(ws, file_name, sheet_name))
         if include_comments:
@@ -909,12 +941,25 @@ def extract_excel_workbook(
                         }
                     )
 
+    all_sheet_names = list(wb.sheetnames)
     wb.close()
+    sheet_scan_summary = [
+        {
+            "name": name,
+            "selected": name in selected_sheets,
+            "logic_blocks": sum(
+                1 for b in logic_blocks if str((b.get("source") or {}).get("sheet") or "") == name
+            ),
+        }
+        for name in all_sheet_names
+    ]
     drawing = extract_excel_drawing_semantics(path)
     return {
         "file": str(path),
         "sheets": out_sheets,
         "sheet_regions": region_summaries,
+        "sheet_scan_summary": sheet_scan_summary,
+        "sheets_selected": selected_sheets,
         "logic_blocks": logic_blocks,
         "signals": signals,
         "condition_definitions": condition_definitions,

@@ -16,6 +16,7 @@ Hướng dẫn vận hành trong app: tab **Guide** (tiếng Việt).
 | [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md) | Chi tiết + xử lý lỗi nâng cao |
 | [docs/UBUNTU_UPDATE_POLICY.md](docs/UBUNTU_UPDATE_POLICY.md) | Cập nhật full release — không copy lẻ file |
 | [docs/IT_REQUEST_CHECKLIST.md](docs/IT_REQUEST_CHECKLIST.md) | Gửi IT: root CA + M365 + firewall |
+| [docs/M365_COPILOT_IT_REQUEST.md](docs/M365_COPILOT_IT_REQUEST.md) | 7 Graph permissions + email mẫu gửi IT |
 | [docs/M365_COPILOT_ACTIVATION_GUIDE.md](docs/M365_COPILOT_ACTIVATION_GUIDE.md) | Sign in M365 + license Copilot |
 | [config/testcase_style.yaml](config/testcase_style.yaml) | Quy tắc viết testcase cho Copilot |
 
@@ -315,10 +316,18 @@ assist:
       - email
       - offline_access
       - User.Read
-    copilot_scopes: []   # thêm sau nếu IT grant thêm delegated scopes cho Copilot
+    # 7 Copilot scopes — IT grant admin consent trước (xem docs/M365_COPILOT_IT_REQUEST.md)
+    copilot_scopes:
+      - Sites.Read.All
+      - Mail.Read
+      - People.Read.All
+      - Chat.Read
+      - ChannelMessage.Read.All
+      - ExternalItem.Read.All
+      - OnlineMeetingTranscript.Read.All
 ```
 
-**Không cần** Mail.Read, Sites.Read.All, … trừ khi IT đồng ý grant thêm (type **Delegated**) và thêm vào `copilot_scopes`.
+**Sign in 2 bước:** (1) **Sign in M365** — 5 quyền cơ bản; (2) **Authorize Copilot API** — 7 quyền trên + **Test Copilot API**. Microsoft **bắt buộc đủ 7 delegated scopes** cho Copilot Chat API — chi tiết và email IT: [`docs/M365_COPILOT_IT_REQUEST.md`](docs/M365_COPILOT_IT_REQUEST.md).
 
 **Resolve with Copilot (M365 Copilot Chat):** cần user có license **Microsoft 365 Copilot** trên work account. Graph Copilot API dùng **delegated user token** — không dùng Application permission.
 
@@ -328,10 +337,11 @@ Legacy **Resolve with Copilot** (Given-only patches) is superseded by this workf
 
 Checklist IT (app `FSO.FA.DF.AVE - ALEX_TMC_AI`):
 
-1. API permissions: 5 delegated scopes trên + admin consent ✅  
+1. API permissions: 5 delegated scopes cơ bản + **7 Copilot scopes** + admin consent ⬜  
 2. Authentication → **Allow public client flows: Yes** ⬜ (cần bật cho device sign-in)  
 3. Client secret Value → `.env` trên server (`M365_CLIENT_SECRET`)  
-4. **Không** thêm Application permissions trừ khi IT chính sách thay đổi
+4. **Không** thêm Application permissions trừ khi IT chính sách thay đổi  
+5. Gán license **Microsoft 365 Copilot** cho user pilot
 
 ALEX gọi Graph Copilot Chat API khi engineer có SKU **`Microsoft 365 Copilot`** (add-on trả phí).
 

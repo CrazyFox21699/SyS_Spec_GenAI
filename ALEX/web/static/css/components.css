@@ -1054,6 +1054,46 @@ textarea:focus-visible {
   vertical-align: middle;
 }
 
+.field-source-badge--copilot {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.field-source-badge--manual {
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.field-copilot-changed,
+textarea.field-copilot-changed,
+.workbook-grid td.field-copilot-changed {
+  box-shadow: inset 0 0 0 2px rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.field-manual-changed,
+textarea.field-manual-changed,
+.workbook-grid td.field-manual-changed {
+  box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.copilot-row-diff-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle, #334155);
+  border-radius: 8px;
+}
+
+.copilot-followup-box {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+}
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+}
+
 .copilot-plan-table input.gtest-input {
   width: 100%;
   min-width: 4rem;

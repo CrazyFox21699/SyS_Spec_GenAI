@@ -26,22 +26,37 @@ def run_copilot_code_generate(
     cfg: dict[str, Any],
     library_root: Path | None = None,
     engineer_note: str = "",
+    copilot_prompt_override: str = "",
     use_baseline: bool = True,
     language: str = "EN",
     reference_test_name: str = "",
     library_code_samples: list[dict[str, Any]] | None = None,
+    from_testcase_only: bool | None = None,
+    reuse_conversation: bool = False,
 ) -> dict[str, Any]:
-    pack = build_code_context_pack(
-        bundle,
-        gtest_state,
-        candidate_id=candidate_id,
-        library_root=library_root,
-        language=language,
-        include_baseline=use_baseline,
-        cfg=cfg,
-        reference_test_name=reference_test_name,
-        library_code_samples=library_code_samples,
-    )
+    bootstrap = str(bundle.get("bootstrap_source") or "")
+    testcase_only = from_testcase_only
+    if testcase_only is None:
+        testcase_only = bootstrap.startswith("imported")
+    try:
+        pack = build_code_context_pack(
+            bundle,
+            gtest_state,
+            candidate_id=candidate_id,
+            library_root=library_root,
+            language=language,
+            include_baseline=use_baseline,
+            cfg=cfg,
+            reference_test_name=reference_test_name,
+            library_code_samples=library_code_samples,
+        )
+    except KeyError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "error_category": "no_candidates",
+        }
+    pack["import_mode"] = bool(testcase_only)
     baseline = pack.get("baseline_skeleton") or {}
     if not baseline and use_baseline:
         baseline = generate_draft_for_request(
@@ -53,8 +68,45 @@ def run_copilot_code_generate(
         )
         pack["baseline_skeleton"] = baseline
 
-    copilot_result = run_code_write(pack, cfg, engineer_note=engineer_note)
+    copilot_result = run_code_write(
+        pack,
+        cfg,
+        engineer_note=engineer_note,
+        copilot_prompt_override=copilot_prompt_override,
+        reuse_conversation=reuse_conversation,
+    )
     copilot_draft = copilot_result.get("draft") or {}
+
+    if not copilot_result.get("ok"):
+        baseline_snippet = baseline.get("full_snippet") or baseline.get("code_body") or ""
+        if baseline_snippet:
+            fallback_draft = dict(baseline)
+            if not fallback_draft.get("full_snippet"):
+                fallback_draft["full_snippet"] = baseline_snippet
+            return {
+                "ok": True,
+                "copilot_fallback": True,
+                "copilot_unavailable": copilot_result.get("error"),
+                "error_category": copilot_result.get("error_category"),
+                "context_pack": pack,
+                "baseline": baseline,
+                "copilot_draft": fallback_draft,
+                "validation": {"ok": True, "quality": "baseline", "flags": ["copilot_fallback"]},
+                "provider": "offline_baseline",
+                "raw_preview": copilot_result.get("raw_preview"),
+            }
+        return {
+            "ok": False,
+            "context_pack": pack,
+            "baseline": baseline,
+            "copilot_draft": copilot_draft,
+            "validation": copilot_result.get("validation") or {},
+            "provider": copilot_result.get("provider"),
+            "error": copilot_result.get("error") or "Copilot did not return valid GTest JSON",
+            "error_category": copilot_result.get("error_category") or "m365_copilot_api",
+            "raw_preview": copilot_result.get("raw_preview"),
+            "user_action": copilot_result.get("user_action"),
+        }
 
     return {
         "ok": copilot_result.get("ok"),
@@ -76,6 +128,7 @@ def run_copilot_code_generate_batch(
     cfg: dict[str, Any],
     library_root: Path | None = None,
     engineer_note: str = "",
+    copilot_prompt_override: str = "",
     language: str = "EN",
     reference_test_name: str = "",
     library_code_samples: list[dict[str, Any]] | None = None,
@@ -112,6 +165,7 @@ def run_copilot_code_generate_batch(
                 cfg=cfg,
                 library_root=library_root,
                 engineer_note=engineer_note,
+                copilot_prompt_override=copilot_prompt_override,
                 language=language,
                 reference_test_name=reference_test_name,
                 library_code_samples=library_code_samples,

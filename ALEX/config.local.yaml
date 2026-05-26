@@ -29,6 +29,10 @@ test_generation:
   mode: legacy
   coverage: mcdc
   max_expansion_factor: 32
+excel:
+  max_sheets: 20
+  sheet_include_patterns: []
+
 deployment:
   mode: local
   host: 127.0.0.1
@@ -70,7 +74,8 @@ assist:
       - email
       - offline_access
       - User.Read
-    # Extra Copilot scopes — leave empty until IT grants more delegated permissions:
+    # Copilot Graph scopes — empty = built-in defaults (Sites.Read.All, Mail.Read, …).
+    # IT must admin-consent these delegated permissions on the Azure app registration.
     copilot_scopes: []
   copilot:
     enabled: false   # Tắt — chưa được phép dùng trên server multi-user
