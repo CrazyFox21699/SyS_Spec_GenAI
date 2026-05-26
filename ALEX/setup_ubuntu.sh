@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ALEX — Cai dat Ubuntu cong ty (CHAY 1 LAN DUY NHAT)
+# ALEX — Cai dat Ubuntu (CHAY 1 LAN DUY NHAT)
 #
-#   cd /home/tmc_ai_common/ALEX
-#   chmod +x setup_ubuntu.sh
-#   ./setup_ubuntu.sh
+# Lan dau (clone tu GitHub):
+#   git clone https://github.com/CrazyFox21699/SyS_Spec_GenAI.git
+#   cd SyS_Spec_GenAI/ALEX
+#   chmod +x setup_ubuntu.sh && ./setup_ubuntu.sh
 #
-# Sau do: sua .env + config/company-ca.pem → ./chay.sh
-# Huong dan ngan: docs/CAI_UBUNTU_DON_GIAN.md
+# Da co code — cap nhat:
+#   git pull origin main && ./setup_ubuntu.sh
+#
+# Huong dan day du: docs/CAI_UBUNTU_DON_GIAN.md
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
 
 echo ""
 echo "=============================================="
-echo "  ALEX — Setup Ubuntu (lan dau)"
-echo "  Thu muc: $(pwd)"
+echo "  ALEX — Setup Ubuntu"
+echo "  Folder: $(pwd)"
+echo "  Doc:    docs/CAI_UBUNTU_DON_GIAN.md"
 echo "=============================================="
 echo ""
 
@@ -23,11 +27,11 @@ echo ""
 echo "[1/6] Cai goi Ubuntu (can sudo)..."
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update -qq
-  sudo apt-get install -y python3 python3-venv python3-pip ca-certificates curl unzip
+  sudo apt-get install -y python3 python3-venv python3-pip ca-certificates curl unzip git
   sudo update-ca-certificates 2>/dev/null || true
   echo "      OK"
 else
-  echo "      Bo qua apt (khong phai Ubuntu?) — can python3 + venv"
+  echo "      Bo qua apt — can python3 + venv"
 fi
 
 # --- 2. Quyen script ---
@@ -40,60 +44,49 @@ echo "[3/6] Sua IP LAN trong config.yaml..."
 ./scripts/set_lan_ip.sh
 
 # --- 4. Thu muc runtime ---
-echo "[4/6] Tao thu muc web_data..."
+echo "[4/6] Tao thu muc web_data + config..."
 mkdir -p web_data/uploads web_data/output config
 echo "      OK"
 
 # --- 5. Cai Python venv ---
-echo "[5/6] Cai .venv + pip (co the mat 1-2 phut)..."
+echo "[5/6] Cai .venv + pip (1-2 phut)..."
 ./cai_dat.sh
 
 # --- 6. Kiem tra ---
 echo "[6/6] Kiem tra ban code day du..."
 if ./scripts/ubuntu_release_sync_check.sh; then
-  echo "      OK — du file M365/SSL"
+  echo "      OK"
 else
-  echo "      FAIL — thieu file. Lay FULL folder ALEX (git pull hoac ZIP), khong copy le."
+  echo "      FAIL — git pull full repo, khong copy le file"
   exit 1
 fi
 
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-ALEX_DIR=$(pwd)
 
 echo ""
 echo "=============================================="
-echo "  CAI DAT XONG — lam 3 viec sau:"
+echo "  CAI DAT XONG — 4 buoc tiep theo"
 echo "=============================================="
 echo ""
-echo "  A) SSL — thu KHONG can IT truoc:"
-echo "     ./scripts/ubuntu_m365_ssl_check.sh"
-echo "     Neu OK → bo qua buoc B"
+echo "  1) nano .env"
+echo "       M365_CLIENT_SECRET=<Value tu Azure>"
+echo "       chmod 600 .env"
 echo ""
-echo "  B) Neu script SSL FAIL — IT gui 1 file .pem, dat ten:"
-echo "     config/company-ca.pem"
-echo "     (KHONG bat buoc them gi vao .env)"
+echo "  2) nano config.yaml"
+echo "       assist.m365.client_id + tenant_id (IT cap)"
 echo ""
-echo "  C) Sua .env — thuong CHI 1 dong:"
-echo "     M365_CLIENT_SECRET=<Value tu Azure>"
-echo "     chmod 600 .env"
+echo "  3) ./scripts/ubuntu_m365_ssl_check.sh"
+echo "       OK → buoc 4"
+echo "       FAIL → dat file IT vao config/company-ca.pem, chay lai"
 echo ""
-echo "  D) Sua config.yaml — client_id + tenant_id (IT cap)"
-echo ""
-echo "  Kiem tra SSL (sau khi co company-ca.pem):"
-echo "     ./scripts/ubuntu_m365_ssl_check.sh"
-echo ""
-echo "  Chay server:"
-echo "     ./chay.sh"
-echo ""
-echo "  Mo browser:"
+echo "  4) ./chay.sh"
 if [ -n "$LAN_IP" ]; then
-  echo "     http://${LAN_IP}:8765/login"
+  echo "       Browser: http://${LAN_IP}:8765/login"
 else
-  echo "     http://<IP-may>:8765/login"
+  echo "       Browser: http://<IP-may>:8765/login"
 fi
-echo "     Dang nhap: admin / Alex@2025!"
+echo "       admin / Alex@2025!"
 echo ""
-echo "  Sign in Microsoft 365: tab Review (can work account + license Copilot)"
-echo ""
-echo "  VS Code: Remote SSH → mo folder $(pwd) (xem docs/CAI_UBUNTU_DON_GIAN.md)"
+echo "  VS Code: Remote SSH → Open Folder → $(pwd)"
+echo "  Chi tiet: docs/CAI_UBUNTU_DON_GIAN.md"
 echo ""

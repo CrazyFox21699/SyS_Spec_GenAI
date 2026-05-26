@@ -57,22 +57,27 @@ Không cần `power-spec-kit`, `power-mode-spec-pipeline`, hay folder cũ `pm_te
 
 ## Cài trên Ubuntu server (LAN team)
 
-**Đọc trước:** [docs/CAI_UBUNTU_DON_GIAN.md](docs/CAI_UBUNTU_DON_GIAN.md) — 3 bước, không cần hiểu hết Linux.
+**Hướng dẫn đầy đủ (clone → cài → chạy → VS Code):** [docs/CAI_UBUNTU_DON_GIAN.md](docs/CAI_UBUNTU_DON_GIAN.md)
 
 ```bash
-cd /home/tmc_ai_common/ALEX    # hoặc folder ALEX sau khi giải nén ZIP
-git pull origin main           # lấy code mới nhất
+# Lần đầu trên Ubuntu
+git clone https://github.com/CrazyFox21699/SyS_Spec_GenAI.git
+cd SyS_Spec_GenAI/ALEX
 chmod +x setup_ubuntu.sh
-./setup_ubuntu.sh              # cài 1 lần — tự sửa IP, venv, admin
-# điền .env + config/company-ca.pem (IT cấp)
-./chay.sh                      # chạy mỗi ngày
+./setup_ubuntu.sh
+
+nano .env              # M365_CLIENT_SECRET=
+nano config.yaml       # client_id, tenant_id
+./scripts/ubuntu_m365_ssl_check.sh
+./chay.sh
 ```
 
 | | |
 |---|---|
 | Link web | `http://<IP-LAN>:8765/login` |
 | Đăng nhập team | `admin` / `Alex@2025!` |
-| Sign in M365 | Tab Review (cần CA từ IT + secret trong `.env`) |
+| Cập nhật code | `git pull origin main` trong repo, rồi restart `./chay.sh` |
+| VS Code | Remote SSH → mở folder `ALEX` trên server (xem doc trên) |
 
 Không có M365 vẫn dùng được: upload spec, review logic, export Excel.
 
