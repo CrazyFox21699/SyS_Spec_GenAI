@@ -8,6 +8,7 @@ from typing import Any
 
 import requests
 
+from web.http_ssl import requests_post
 from web import m365_auth
 from web.m365_brief import build_copilot_brief, parse_knowledge_patches_payload
 
@@ -96,7 +97,7 @@ def _timezone(cfg: dict[str, Any]) -> str:
 
 
 def _create_conversation(access_token: str) -> str:
-    r = requests.post(
+    r = requests_post(
         f"{GRAPH}/copilot/conversations",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
         json={},
@@ -131,7 +132,7 @@ def _extract_assistant_text(response_json: dict[str, Any]) -> str:
 
 
 def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str) -> str:
-    r = requests.post(
+    r = requests_post(
         f"{GRAPH}/copilot/conversations/{conversation_id}/chat",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
         json={

@@ -96,7 +96,7 @@ def test_device_login_uses_minimal_scopes(tmp_path, monkeypatch) -> None:
     }
     captured: dict[str, str] = {}
 
-    def fake_post(url, data=None, timeout=30):
+    def fake_post(url, data=None, timeout=30, **kwargs):
         captured["url"] = url
         captured["scope"] = data.get("scope", "")
         resp = MagicMock()
@@ -110,7 +110,7 @@ def test_device_login_uses_minimal_scopes(tmp_path, monkeypatch) -> None:
         }
         return resp
 
-    monkeypatch.setattr(m365_auth.requests, "post", fake_post)
+    monkeypatch.setattr("web.http_ssl.requests.post", fake_post)
     out = m365_auth.start_device_login(cfg)
     assert out["user_code"] == "ABCD1234"
     assert "User.Read" in captured["scope"]
@@ -131,7 +131,7 @@ def test_explicit_tenant_no_fallback_to_common(tmp_path, monkeypatch) -> None:
     }
     calls: list[str] = []
 
-    def fake_post(url, data=None, timeout=30):
+    def fake_post(url, data=None, timeout=30, **kwargs):
         calls.append(url)
         resp = MagicMock()
         resp.status_code = 400
@@ -139,7 +139,7 @@ def test_explicit_tenant_no_fallback_to_common(tmp_path, monkeypatch) -> None:
         resp.text = "bad"
         return resp
 
-    monkeypatch.setattr(m365_auth.requests, "post", fake_post)
+    monkeypatch.setattr("web.http_ssl.requests.post", fake_post)
     try:
         m365_auth.start_device_login(cfg)
     except RuntimeError:
@@ -189,7 +189,7 @@ def test_persist_entitlement_metadata_msa(tmp_path, monkeypatch) -> None:
     def boom(*a, **k):  # /me/licenseDetails must not be called for MSA tokens
         raise AssertionError("licenseDetails should not be probed for MSA")
 
-    monkeypatch.setattr(m365_auth.requests, "get", boom)
+    monkeypatch.setattr("web.http_ssl.requests.get", boom)
     token_payload = {"id_token": _fake_jwt({"tid": m365_auth.MSA_TENANT_ID})}
     out = m365_auth._persist_entitlement_metadata(sess, token_payload)
     assert out["is_msa"] is True
@@ -203,7 +203,7 @@ def test_persist_entitlement_metadata_work_with_copilot(tmp_path, monkeypatch) -
     monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
     sess: dict = {"access_token": "work-token"}
 
-    def fake_get(url, headers=None, timeout=15):
+    def fake_get(url, headers=None, timeout=15, **kwargs):
         assert "licenseDetails" in url
         resp = MagicMock()
         resp.status_code = 200
@@ -215,7 +215,7 @@ def test_persist_entitlement_metadata_work_with_copilot(tmp_path, monkeypatch) -
         }
         return resp
 
-    monkeypatch.setattr(m365_auth.requests, "get", fake_get)
+    monkeypatch.setattr("web.http_ssl.requests.get", fake_get)
     token_payload = {"id_token": _fake_jwt({"tid": "22222222-2222-2222-2222-222222222222"})}
     out = m365_auth._persist_entitlement_metadata(sess, token_payload)
     assert out["is_msa"] is False
@@ -228,7 +228,7 @@ def test_persist_entitlement_metadata_work_without_copilot(tmp_path, monkeypatch
     monkeypatch.setattr(m365_auth, "SESSION_FILE", tmp_path / "session.json")
     sess: dict = {"access_token": "work-token"}
 
-    def fake_get(url, headers=None, timeout=15):
+    def fake_get(url, headers=None, timeout=15, **kwargs):
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = {
@@ -240,7 +240,7 @@ def test_persist_entitlement_metadata_work_without_copilot(tmp_path, monkeypatch
         }
         return resp
 
-    monkeypatch.setattr(m365_auth.requests, "get", fake_get)
+    monkeypatch.setattr("web.http_ssl.requests.get", fake_get)
     token_payload = {"id_token": _fake_jwt({"tid": "33333333-3333-3333-3333-333333333333"})}
     out = m365_auth._persist_entitlement_metadata(sess, token_payload)
     assert out["is_msa"] is False

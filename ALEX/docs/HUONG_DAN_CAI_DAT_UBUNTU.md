@@ -172,7 +172,28 @@ Cảnh báo `cache entry deserialization failed` — bỏ qua nếu cài vẫn x
 - `deployment.mode` phải là `production` trên Ubuntu team
 - Upload lại và bấm Review trên tab Spec review
 
-### Quyền ghi `web_data/`
+### M365 Sign in: SSL certificate verify failed
+
+Lỗi `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` khi bấm Sign in:
+
+```bash
+sudo apt install -y ca-certificates
+sudo update-ca-certificates
+cd /path/to/ALEX
+source .venv/bin/activate
+pip install -r requirements.txt   # cài certifi
+./chay.sh
+```
+
+Nếu công ty dùng HTTPS inspection (proxy), nhờ IT file root CA (`.pem`), thêm vào `.env`:
+
+```bash
+REQUESTS_CA_BUNDLE=/path/to/company-ca.pem
+```
+
+Restart `./chay.sh`. **Không** tắt SSL trừ khi IT yêu cầu tạm (`M365_SSL_VERIFY=false` — không khuyến nghị).
+
+---
 
 ```bash
 mkdir -p web_data/uploads web_data/output

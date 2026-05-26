@@ -14,6 +14,8 @@ from typing import Any
 
 import requests
 
+from web.http_ssl import requests_get, requests_post
+
 # Microsoft uses this well-known tenant id for personal Microsoft accounts
 # (outlook.com / hotmail.com / live.com / msn.com / xbox.com / etc.). Any
 # id_token whose ``tid`` claim equals this guid is an MSA — Microsoft 365
@@ -379,14 +381,14 @@ def _save_tokens(
 
 def _fetch_profile(access_token: str) -> dict[str, Any]:
     try:
-        r = requests.get(
+        r = requests_get(
             "https://graph.microsoft.com/v1.0/me",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=15,
         )
         if r.status_code == 200:
             return r.json()
-    except requests.RequestException:
+    except (requests.RequestException, RuntimeError):
         pass
     return {}
 
@@ -436,12 +438,12 @@ def _probe_copilot_license(access_token: str) -> dict[str, Any]:
         result["error"] = "Missing access token"
         return result
     try:
-        r = requests.get(
+        r = requests_get(
             "https://graph.microsoft.com/v1.0/me/licenseDetails",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=15,
         )
-    except requests.RequestException as exc:
+    except (requests.RequestException, RuntimeError) as exc:
         result["error"] = f"licenseDetails request failed: {exc}"
         return result
     if r.status_code == 403:
@@ -588,7 +590,7 @@ def refresh_access_token(cfg: dict[str, Any], *, user_id: str | None = None) -> 
         "refresh_token": refresh,
         "scope": _scopes(cfg),
     }
-    r = requests.post(
+    r = requests_post(
         f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
         data=data,
         timeout=30,
@@ -652,7 +654,7 @@ def _device_code_request(tenant: str, client_id: str, scope: str, cfg: dict[str,
     data: dict[str, str] = {"client_id": client_id, "scope": scope}
     if cfg and client_secret_configured(cfg):
         data.update(_oauth_client_fields(cfg))
-    return requests.post(
+    return requests_post(
         f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode",
         data=data,
         timeout=30,
@@ -731,15 +733,18 @@ def poll_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> dic
         pass
     device_code = pending.get("device_code")
     tenant = str(pending.get("tenant_used") or _tenant_id(cfg) or DEFAULT_TENANT)
-    r = requests.post(
-        f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
-        data={
-            ** _oauth_client_fields(cfg),
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "device_code": device_code,
-        },
-        timeout=30,
-    )
+    try:
+        r = requests_post(
+            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+            data={
+                ** _oauth_client_fields(cfg),
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": device_code,
+            },
+            timeout=30,
+        )
+    except RuntimeError as exc:
+        return {"ok": False, "status": "failed", "error": str(exc)}
     body = r.json() if r.text else {}
     err = body.get("error")
     if err == "authorization_pending":
