@@ -31,15 +31,6 @@ except Exception:
 
 URL = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
 
-
-def probe_plain_requests():
-    import requests
-
-    print("verify option: (system default — web/http_ssl.py not found)")
-    r = requests.get(URL, timeout=15)
-    return {"ok": r.status_code == 200, "status_code": r.status_code, "verify": "system", "url": URL}
-
-
 try:
     try:
         from web.http_ssl import requests_get, ssl_verify_option, ssl_verify_status
@@ -50,8 +41,8 @@ try:
         r_obj = requests_get(URL, timeout=15)
         r = {"ok": r_obj.status_code == 200, "status_code": r_obj.status_code, "verify": str(verify), "url": URL}
     except ImportError:
-        print("NOTE: copy ALEX/web/http_ssl.py for full SSL diagnostics.")
-        r = probe_plain_requests()
+        print("FAIL: web/http_ssl.py missing — redeploy full release (docs/UBUNTU_UPDATE_POLICY.md)")
+        r = {"ok": False, "error": "web/http_ssl.py not found", "url": URL}
     except RuntimeError as exc:
         r = {"ok": False, "error": str(exc), "url": URL}
         try:
@@ -66,15 +57,25 @@ except Exception as exc:
 print("probe:", r)
 if not r.get("ok"):
     print("")
-    print("FIX:")
-    print("  sudo apt install -y ca-certificates && sudo update-ca-certificates")
-    print("  pip install certifi")
-    print("  copy ALEX/web/http_ssl.py + ALEX/web/m365_auth.py + ALEX/web/main.py")
-    print("  company proxy: REQUESTS_CA_BUNDLE=/path/to/ca.pem in .env")
-    print("  temp test only: add to .env → M365_SSL_VERIFY=false")
-    print("  or config.yaml → assist.m365.ssl_verify: false")
-    print("  then: ./chay.sh")
+    print("FIX (ISMS-safe — không tắt SSL verify):")
+    print("  1. IT gửi root CA → config/company-ca.pem")
+    print("  2. .env: REQUESTS_CA_BUNDLE=/path/to/company-ca.pem")
+    print("  3. config.yaml: assist.m365.ssl_verify: true")
+    print("  4. sudo apt install -y ca-certificates && sudo update-ca-certificates")
+    print("  5. Redeploy full release nếu thiếu web/http_ssl.py")
+    print("  docs/IT_REQUEST_CHECKLIST.md  docs/HUONG_DAN_CAI_DAT_UBUNTU.md")
     raise SystemExit(1)
+
+# ISMS: cảnh báo nếu verify bị tắt
+try:
+    from web.http_ssl import ssl_verify_status
+    st = ssl_verify_status()
+    if st.get("ssl_verify_disabled"):
+        print("")
+        print("WARN: SSL verify DISABLED — không phù hợp ISMS. Dùng company-ca.pem + ssl_verify: true")
+        raise SystemExit(1)
+except ImportError:
+    pass
 
 print("")
 print("OK — Microsoft HTTPS reachable from this server.")

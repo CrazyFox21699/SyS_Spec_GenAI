@@ -107,6 +107,35 @@ else
   note "Could not detect LAN IP (hostname -I)"
 fi
 
+# Release sync — tránh copy lẻ file từ GitHub
+for f in web/http_ssl.py web/m365_auth.py web/m365_copilot.py; do
+  if [ -f "$f" ]; then
+    pass "release file: $f"
+  else
+    bad "missing $f — redeploy full ZIP/git, không copy lẻ (docs/UBUNTU_UPDATE_POLICY.md)"
+  fi
+done
+
+if [ -f config.yaml ] && grep -qE 'ssl_verify:[[:space:]]*false' config.yaml 2>/dev/null; then
+  note "assist.m365.ssl_verify: false — ISMS: dùng true + company-ca.pem từ IT"
+fi
+
+CA_OK=0
+for ca in config/company-ca.pem company-ca.pem; do
+  if [ -f "$ca" ]; then
+    pass "company CA: $ca"
+    CA_OK=1
+    break
+  fi
+done
+if [ "$CA_OK" -eq 0 ] && [ -f .env ] && grep -qE '^REQUESTS_CA_BUNDLE=.+' .env 2>/dev/null; then
+  pass "REQUESTS_CA_BUNDLE in .env"
+  CA_OK=1
+fi
+if [ "$CA_OK" -eq 0 ]; then
+  note "no company CA yet — gửi IT docs/IT_REQUEST_CHECKLIST.md trước Sign in M365"
+fi
+
 echo ""
 echo "Summary: $ok passed, $warn warnings, $fail failures"
 echo ""

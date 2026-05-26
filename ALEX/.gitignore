@@ -13,5 +13,9 @@
 *.log
 .env
 .env.*
+!.env.example
+config/company-ca.pem
+company-ca.pem
+web_data/company-ca.pem
 ~$*
 **/~$*

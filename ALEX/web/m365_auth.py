@@ -15,15 +15,40 @@ from typing import Any
 import requests
 
 try:
-    from web.http_ssl import requests_get, requests_post
+    from web.http_ssl import requests_get, requests_post, ssl_verify_option, ssl_verify_status
 except ImportError:
-    import requests as _requests
+    import logging as _logging
 
-    def requests_get(url: str, **kwargs):  # type: ignore[no-redef]
-        return _requests.get(url, **kwargs)
+    _ssl_log = _logging.getLogger(__name__)
 
-    def requests_post(url: str, **kwargs):  # type: ignore[no-redef]
-        return _requests.post(url, **kwargs)
+    def ssl_verify_option() -> bool:  # type: ignore[misc]
+        """Fallback when web/http_ssl.py missing on server — skip SSL verify."""
+        return False
+
+    def ssl_verify_status() -> dict[str, Any]:  # type: ignore[misc]
+        return {
+            "verify": "False",
+            "ssl_verify_disabled": True,
+            "note": "web/http_ssl.py not found — using verify=False (copy http_ssl.py optional)",
+        }
+
+    def _m365_request(method: str, url: str, **kwargs: Any):
+        verify = kwargs.pop("verify", False)
+        try:
+            return requests.request(method, url, verify=verify, **kwargs)
+        except requests.exceptions.SSLError as exc:
+            if verify is not False:
+                _ssl_log.warning("M365 SSL failed — retry without verify: %s", exc)
+                return requests.request(method, url, verify=False, **kwargs)
+            raise RuntimeError(f"Microsoft HTTPS SSL error: {exc}") from exc
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Microsoft network error: {exc}") from exc
+
+    def requests_get(url: str, **kwargs: Any):  # type: ignore[misc]
+        return _m365_request("GET", url, **kwargs)
+
+    def requests_post(url: str, **kwargs: Any):  # type: ignore[misc]
+        return _m365_request("POST", url, **kwargs)
 
 # Microsoft uses this well-known tenant id for personal Microsoft accounts
 # (outlook.com / hotmail.com / live.com / msn.com / xbox.com / etc.). Any
@@ -884,8 +909,6 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
 
 def probe_microsoft_connectivity() -> dict[str, Any]:
     """Test HTTPS to Microsoft — for Ubuntu SSL / firewall troubleshooting."""
-    from web.http_ssl import requests_get, ssl_verify_option, ssl_verify_status
-
     url = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
     verify = ssl_verify_option()
     meta = ssl_verify_status()

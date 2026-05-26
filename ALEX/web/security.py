@@ -23,6 +23,7 @@ _PUBLIC_API_PREFIXES = (
     "/api/auth/login",
     "/api/auth/me",
     "/api/auth/logout",
+    "/api/m365/connectivity",
 )
 
 

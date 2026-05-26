@@ -116,7 +116,7 @@ def _merge_ca_files(*paths: Path) -> str:
 
 
 def ssl_verify_option() -> bool | str:
-    """Ubuntu production (config.yaml): SSL verify OFF unless ssl_verify: true."""
+    """Return CA bundle path, True, or False. Production ISMS: ssl_verify: true + company-ca.pem."""
     if _env_ssl_verify_disabled():
         return False
     if _env_ssl_verify_required():

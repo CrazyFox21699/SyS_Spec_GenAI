@@ -63,8 +63,8 @@ assist:
     role: fallback_inference
   m365:
     enabled: true
-    # Ubuntu server công ty (proxy SSL): mặc định TẮT — không cần IT / .env
-    ssl_verify: false
+    # Ubuntu server công ty (ISMS): BẬT verify + file CA từ IT → config/company-ca.pem
+    ssl_verify: true
     # IT điền một lần — user chỉ bấm Sign in, không nhập lại Client ID / Tenant
     client_id: ""
     tenant_id: ""

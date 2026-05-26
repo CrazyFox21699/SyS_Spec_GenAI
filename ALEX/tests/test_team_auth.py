@@ -69,6 +69,17 @@ def test_protected_api_requires_login(team_client) -> None:
     assert client.get("/api/files").status_code == 401
 
 
+def test_m365_connectivity_public_without_login(team_client, monkeypatch) -> None:
+    client, _team_auth = team_client
+    monkeypatch.setattr(
+        "web.m365_auth.probe_microsoft_connectivity",
+        lambda: {"ok": True, "status_code": 200, "verify": "test"},
+    )
+    r = client.get("/api/m365/connectivity")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
 def test_change_password(team_client) -> None:
     client, team_auth = team_client
     client.post("/api/auth/login", json={"username": "alice", "password": "password123"})

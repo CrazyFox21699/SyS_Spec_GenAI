@@ -8,9 +8,10 @@ from typing import Any
 
 import requests
 
-from web.http_ssl import requests_post
 from web import m365_auth
 from web.m365_brief import build_copilot_brief, parse_knowledge_patches_payload
+
+requests_post = m365_auth.requests_post
 
 GRAPH = "https://graph.microsoft.com/beta"
 

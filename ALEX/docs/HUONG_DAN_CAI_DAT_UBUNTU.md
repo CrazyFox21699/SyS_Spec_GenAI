@@ -2,6 +2,11 @@
 
 Tài liệu chi tiết + xử lý lỗi thường gặp. Tóm tắt nhanh vẫn nằm ở [README.md](../README.md).
 
+**Triển khai ổn định (ISMS, không patch code lẻ):**
+
+- [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md) — chính sách cập nhật full release
+- [IT_REQUEST_CHECKLIST.md](./IT_REQUEST_CHECKLIST.md) — gửi IT (root CA + M365 + firewall)
+
 ---
 
 ## Checklist trước khi cài
@@ -12,30 +17,37 @@ Tài liệu chi tiết + xử lý lỗi thường gặp. Tóm tắt nhanh vẫn 
 | 2 | Mở port **8765** (firewall) | `sudo ufw allow 8765/tcp` |
 | 3 | Biết **IP LAN** máy server | `hostname -I` |
 | 4 | Sửa `config.yaml` → `deployment.lan_ipv4` + `public_url` | Khớp IP thật |
-| 5 | IT cấp **client_id**, **tenant_id**, **secret Value** | Secret vào `.env`, không ghi yaml |
+| 5 | IT cấp **client_id**, **tenant_id**, secret **Value** | Secret vào `.env`, không ghi yaml |
 | 6 | IT bật **Allow public client flows** | Azure → Authentication |
-| 7 | User có license **M365 Copilot** (nếu dùng AI) | Không bắt buộc cho review offline |
+| 7 | IT cấp **root CA** (`.pem`) cho proxy công ty | `config/company-ca.pem` — xem IT checklist |
+| 8 | User có license **M365 Copilot** (nếu dùng AI) | Không bắt buộc cho review offline |
 
 ---
 
-## Cài lần đầu (3 lệnh)
+## VS Code trên server (tránh lệch code)
+
+1. Extension **Remote - SSH** → SSH vào máy Ubuntu
+2. Open folder **`/home/tmc_ai_common/ALEX`** (path cố định)
+3. **Không** copy lẻ file từ GitHub vào Mac rồi paste — dùng ZIP/git full tree
+
+Chi tiết: [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md)
+
+---
+
+## Cài lần đầu
 
 ```bash
-cd /path/to/ALEX
-chmod +x cai_dat.sh chay.sh scripts/ubuntu_preflight.sh scripts/ubuntu_verify.sh
-./scripts/ubuntu_preflight.sh    # kiểm tra môi trường (không sửa gì)
-./cai_dat.sh                     # venv + pip + admin user
-cp .env.example .env && chmod 600 .env   # nếu chưa có — dán M365_CLIENT_SECRET
-./chay.sh                         # worker + web (giữ terminal mở)
+cd /home/tmc_ai_common/ALEX
+chmod +x cai_dat.sh chay.sh scripts/*.sh
+./scripts/ubuntu_preflight.sh
+./cai_dat.sh
+cp .env.example .env && chmod 600 .env   # nếu chưa có
+# IT: root CA → config/company-ca.pem + REQUESTS_CA_BUNDLE trong .env
+./scripts/ubuntu_deploy_gates.sh
+./chay.sh
 ```
 
 Mở browser: `http://<IP-LAN>:8765/login` — `admin` / `Alex@2025!`
-
-Sau khi server chạy, terminal khác:
-
-```bash
-./scripts/ubuntu_verify.sh
-```
 
 ---
 
@@ -45,31 +57,45 @@ Sau khi server chạy, terminal khác:
 
 ```yaml
 deployment:
-  mode: production      # bật worker nền — KHÔNG đổi thành local trên server team
-  host: 0.0.0.0         # lắng nghe mọi interface
+  mode: production
+  host: 0.0.0.0
   port: 8765
-  lan_ipv4: 192.168.x.x    # IP thật của máy (hostname -I)
+  lan_ipv4: 192.168.x.x
   public_url: http://192.168.x.x:8765
 ```
 
-**Lỗi thường gặp:** copy nguyên `10.88.152.11` từ repo mẫu → đồng nghiệp không vào được. Phải sửa đúng IP máy bạn.
-
-### 2. File `.env` (secret)
+### 2. SSL ISMS — company root CA
 
 ```bash
-M365_CLIENT_SECRET=<paste Value từ Azure, KHÔNG phải Secret ID>
-# Tuỳ chọn nếu không muốn sửa config.yaml:
-# M365_CLIENT_ID=...
-# M365_TENANT_ID=...
+mkdir -p config
+cp /path/from/it/root-ca.pem config/company-ca.pem
+chmod 644 config/company-ca.pem
 ```
 
+`.env`:
+
 ```bash
+M365_CLIENT_SECRET=<Value từ Azure>
+REQUESTS_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
+M365_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
 chmod 600 .env
 ```
 
-### 3. `assist` + `features` (M365-only)
+`config.yaml`:
 
-Giữ đồng bộ với repo:
+```yaml
+assist:
+  m365:
+    enabled: true
+    ssl_verify: true    # ISMS: KHÔNG đặt false
+    client_id: "..."
+    tenant_id: "..."
+    client_secret: ""
+```
+
+**Tại sao Mac OK mà Ubuntu lỗi?** Mac dev có thể đã tin CA công ty (Keychain) hoặc không qua proxy SSL inspection. Ubuntu server + Python `requests` cần file CA từ IT.
+
+### 3. `assist` + `features` (M365-only)
 
 ```yaml
 features:
@@ -81,51 +107,53 @@ assist:
   allow_ollama_fallback: false
   m365:
     enabled: true
-    client_id: "..."
-    tenant_id: "..."
-    client_secret: ""
   copilot:
     enabled: false
 ```
 
-**Ollama Unavailable** trên UI là **bình thường** — ALEX không cần Ollama khi dùng M365 Copilot.
+**Ollama Unavailable** trên UI là **bình thường**.
 
 ---
 
 ## Chạy hàng ngày
 
 ```bash
-cd /path/to/ALEX
+cd /home/tmc_ai_common/ALEX
 ./chay.sh
 ```
 
 - **Một terminal** — Ctrl+C dừng web + worker.
 - Log worker: `/tmp/alex-worker.log`
-- Không cần `python -m uvicorn ...` thủ công trừ khi debug.
+- Sau sửa config/.env: **restart** `./chay.sh` (không auto-reload)
 
-### Chạy nền với systemd (tuỳ chọn)
-
-Copy mẫu [deploy/alex.service.example](../deploy/alex.service.example), sửa `WorkingDirectory` và `User`, rồi:
+### Deploy gates (trước Sign in M365)
 
 ```bash
-sudo cp deploy/alex.service.example /etc/systemd/system/alex.service
-# sửa file service: đường dẫn ALEX + User
-sudo systemctl daemon-reload
-sudo systemctl enable --now alex
-journalctl -u alex -f
+./scripts/ubuntu_deploy_gates.sh
 ```
 
 ---
 
 ## Xử lý lỗi thường gặp
 
+### M365 Sign in: SSL certificate verify failed
+
+```bash
+cd /home/tmc_ai_common/ALEX
+./scripts/ubuntu_release_sync_check.sh   # đủ web/http_ssl.py?
+./scripts/ubuntu_m365_ssl_check.sh       # Microsoft HTTPS OK?
+```
+
+1. Có `config/company-ca.pem` từ IT?
+2. `.env` có `REQUESTS_CA_BUNDLE` đúng path?
+3. `ssl_verify: true` trong config (không dùng `M365_SSL_VERIFY=false`)
+4. Thiếu file → redeploy full release, không copy lẻ
+
 ### Không mở được trang từ máy khác trong LAN
 
-1. Server có chạy `./chay.sh` không? `ss -tlnp | grep 8765`
-2. `deployment.host` có phải `0.0.0.0`?
-3. Firewall: `sudo ufw status` — port 8765 ALLOW
-4. Ping IP server từ máy client
-5. Thử `curl http://127.0.0.1:8765/` trên chính server
+1. `./chay.sh` đang chạy? `ss -tlnp | grep 8765`
+2. `deployment.host: 0.0.0.0`
+3. Firewall port 8765
 
 ### Login admin không được
 
@@ -136,106 +164,32 @@ python scripts/reset_team_auth.py --yes --username admin --password 'Alex@2025!'
 
 Restart `./chay.sh`.
 
-### M365: "Sign in required" / Copilot nút disabled
+### M365: Sign in required
 
-1. `.env` có `M365_CLIENT_SECRET` (Value đúng)?
-2. `config.yaml`: `client_id`, `tenant_id` đúng app IT tạo?
-3. IT bật **Allow public client flows**
-4. User sign in bằng **work account** (không phải Microsoft cá nhân)
-5. Account có license **Microsoft 365 Copilot** — không có thì vẫn dùng **Apply locally** + **Regenerate** Test Code
+1. `M365_CLIENT_SECRET` trong `.env`
+2. `client_id` / `tenant_id` trong config
+3. Allow public client flows
+4. `./scripts/ubuntu_m365_ssl_check.sh` phải OK trước
 
-### M365 login OK nhưng Copilot Chat fail
+Chi tiết Copilot: [M365_COPILOT_ACTIVATION_GUIDE.md](./M365_COPILOT_ACTIVATION_GUIDE.md)
 
-- Kiểm tra SKU Copilot trên account
-- Xem banner trên tab Review / Logic (MSA vs no license)
-- Chi tiết: [M365_COPILOT_ACTIVATION_GUIDE.md](./M365_COPILOT_ACTIVATION_GUIDE.md)
+---
 
-### Review job / Test Code báo "Not Found" / API cũ
-
-- Hard refresh browser: **Cmd/Ctrl + Shift + R**
-- Restart `./chay.sh` sau khi cập nhật code
-- Kiểm tra `app.js?v=` trong `index.html` đã mới
-
-### `pip` / venv lỗi khi `./cai_dat.sh`
+## Backup và cập nhật
 
 ```bash
-sudo apt install -y python3-venv python3-pip
-rm -rf .venv
-./cai_dat.sh
-```
-
-Cảnh báo `cache entry deserialization failed` — bỏ qua nếu cài vẫn xong.
-
-### Phân tích spec treo / không xong
-
-- Xem `/tmp/alex-worker.log`
-- `deployment.mode` phải là `production` trên Ubuntu team
-- Upload lại và bấm Review trên tab Spec review
-
-### M365 Sign in: SSL certificate verify failed
-
-Lỗi `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` khi bấm Sign in:
-
-```bash
-sudo apt install -y ca-certificates
-sudo update-ca-certificates
-cd /path/to/ALEX
-source .venv/bin/activate
-pip install -r requirements.txt   # cài certifi
+./scripts/ubuntu_backup.sh
+# deploy full ZIP/git → pip install -r requirements.txt
+./scripts/ubuntu_deploy_gates.sh
 ./chay.sh
 ```
 
-Nếu công ty dùng HTTPS inspection (proxy), nhờ IT file root CA (`.pem`), thêm vào `.env`:
+Trước khi zip gửi công ty: `python scripts/sanitize_for_company_deploy.py`
 
-```bash
-REQUESTS_CA_BUNDLE=/path/to/company-ca.pem
-```
-
-Restart `./chay.sh`. **Không** tắt SSL trừ khi IT yêu cầu tạm (`M365_SSL_VERIFY=false` — không khuyến nghị).
+Chi tiết: [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md)
 
 ---
 
-```bash
-mkdir -p web_data/uploads web_data/output
-chmod -R u+rwX web_data
-```
+## Liên hệ IT
 
-User chạy `./chay.sh` phải sở hữu thư mục ALEX.
-
-### Folder `.alex` / dữ liệu runtime
-
-ALEX lưu cấu hình GTest + project memory trong **`ALEX/web_data/.alex/`** (không tạo `.alex` trong folder spec bên ngoài).
-
-```bash
-ls -la web_data/.alex/
-# gtest_harness_preset.yaml, project_memory.yaml, code_style_samples.yaml
-```
-
-Backup trước khi cập nhật: `tar czf alex-web_data-backup.tgz web_data/ .env`
-
-Nếu nâng cấp từ bản cũ trỏ `pm_test_spec_assistant`: khởi động server một lần — app tự migrate sang `web_data/.alex/`.
-
----
-
-## Cập nhật phiên bản mới
-
-1. Backup `web_data/` và `.env`
-2. Giải nén ZIP mới vào thư mục ALEX (hoặc merge)
-3. `source .venv/bin/activate && pip install -r requirements.txt`
-4. Giữ lại `.env` và `config.yaml` đã sửa IP
-5. `./chay.sh`
-
-Trước khi zip gửi đi: `python scripts/sanitize_for_company_deploy.py`
-
----
-
-## Liên hệ IT — checklist một trang
-
-Gửi IT khi cần bật Copilot:
-
-- [ ] App registration: client_id + tenant_id
-- [ ] Client secret **Value** → engineer đặt trong `.env`
-- [ ] Delegated: openid, profile, email, offline_access, User.Read + admin consent
-- [ ] Authentication → **Allow public client flows: Yes**
-- [ ] User test có license **Microsoft 365 Copilot**
-- [ ] Firewall nội bộ cho phép LAN → port **8765** TCP
+Gửi file [IT_REQUEST_CHECKLIST.md](./IT_REQUEST_CHECKLIST.md) — root CA, Azure app, firewall, Copilot license.

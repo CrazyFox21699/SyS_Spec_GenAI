@@ -12,7 +12,9 @@ Hướng dẫn vận hành trong app: tab **Guide** (tiếng Việt).
 
 | File | Nội dung |
 |------|----------|
-| [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md) | Cài Ubuntu, firewall, `.env`, xử lý lỗi |
+| [docs/HUONG_DAN_CAI_DAT_UBUNTU.md](docs/HUONG_DAN_CAI_DAT_UBUNTU.md) | Cài Ubuntu, firewall, `.env`, SSL ISMS |
+| [docs/UBUNTU_UPDATE_POLICY.md](docs/UBUNTU_UPDATE_POLICY.md) | Cập nhật full release — không copy lẻ file |
+| [docs/IT_REQUEST_CHECKLIST.md](docs/IT_REQUEST_CHECKLIST.md) | Gửi IT: root CA + M365 + firewall |
 | [docs/M365_COPILOT_ACTIVATION_GUIDE.md](docs/M365_COPILOT_ACTIVATION_GUIDE.md) | Sign in M365 + license Copilot |
 | [config/testcase_style.yaml](config/testcase_style.yaml) | Quy tắc viết testcase cho Copilot |
 
@@ -105,7 +107,7 @@ Sai IP → đồng nghiệp không mở được link LAN.
 ### Bước 4 — Kiểm tra môi trường (khuyến nghị)
 
 ```bash
-chmod +x cai_dat.sh chay.sh scripts/ubuntu_preflight.sh scripts/ubuntu_verify.sh
+chmod +x cai_dat.sh chay.sh scripts/ubuntu_preflight.sh scripts/ubuntu_verify.sh scripts/ubuntu_release_sync_check.sh scripts/ubuntu_deploy_gates.sh scripts/ubuntu_m365_ssl_check.sh scripts/ubuntu_backup.sh
 ./scripts/ubuntu_preflight.sh
 ```
 
