@@ -1,84 +1,103 @@
 # Cài ALEX trên Ubuntu — hướng dẫn ngắn
 
-**Đường dẫn cố định trên server:** `/home/tmc_ai_common/ALEX`
+Chỉ cần nhớ **một folder** trên server (ví dụ bạn đang dùng):
 
-**Quy tắc vàng:** Copy **cả folder ALEX** (git pull hoặc ZIP). **Không** copy lẻ 1–2 file từ GitHub.
+```text
+/home/tmc_ai_common/ALEX
+```
+
+Mọi lệnh đều chạy **trong folder đó**. Không cần nhớ thêm path dài trong `.env`.
 
 ---
 
-## Trước khi cài — nhờ IT (1 lần)
+## VS Code và Ubuntu — sync thế nào?
 
-| IT cấp | Bạn đặt ở đâu |
-|--------|----------------|
-| File **root CA** (`.pem`) | `config/company-ca.pem` |
-| **client_id**, **tenant_id** | `config.yaml` |
-| **Secret Value** (Azure) | `.env` → `M365_CLIENT_SECRET=` |
-| Mở port **8765** LAN | `sudo ufw allow 8765/tcp` |
+```text
+  SAI (hay bi lech code):
+  Mac: ~/TMC_Cursor/ALEX  --copy tay-->  Ubuntu: /home/.../ALEX
+         ^ VS Code mo folder Mac              server chay folder khac
 
-Mẫu email gửi IT: [IT_REQUEST_CHECKLIST.md](./IT_REQUEST_CHECKLIST.md)
+  DUNG (luon dong bo):
+  VS Code Remote SSH --> mo thang /home/tmc_ai_common/ALEX tren Ubuntu
+                         moi file Save = tren server, khong qua Mac
+```
+
+| Bạn đang làm gì | Cách làm |
+|-----------------|----------|
+| **Chạy server team** | Chỉ sửa file trên Ubuntu (Remote SSH hoặc terminal SSH) |
+| **Dev trên Mac** | Folder Mac riêng, `./dev.sh` — **không** tự sync lên server |
+| **Đưa code mới lên server** | Trên Ubuntu: `git pull` **hoặc** ZIP cả folder — **không** copy lẻ 1 file |
+
+**Kiểm tra nhanh bạn đang sửa đúng chỗ chưa:**
+
+```bash
+pwd
+# Phai in: /home/tmc_ai_common/ALEX (hoac folder ALEX tren server)
+
+ls web/http_ssl.py
+# Phai thay file — neu "No such file" = code lech, can git pull full
+```
+
+---
+
+## Nhờ IT — tối thiểu
+
+| Bắt buộc (M365) | Tuỳ chọn (chỉ khi lỗi SSL) |
+|-----------------|----------------------------|
+| `client_id`, `tenant_id`, secret **Value** | 1 file root CA (`.pem`) |
+| Allow public client flows (Azure) | |
+| Port **8765** mở trong LAN | |
+
+**Thử không xin CA trước:** sau `./setup_ubuntu.sh`, chạy `./scripts/ubuntu_m365_ssl_check.sh`.  
+- In **OK** → không cần file CA, không cần IT thêm gì cho SSL.  
+- In **FAIL** (certificate error) → nhờ IT 1 file `.pem`, đặt tên `config/company-ca.pem` — xong.
+
+---
+
+## `REQUESTS_CA_BUNDLE` / `M365_CA_BUNDLE` là gì?
+
+Hai dòng đó **chỉ** báo cho Python: “file chứng chỉ công ty nằm ở đâu”.
+
+- **Không bắt buộc** nếu bạn đặt file tại: **`config/company-ca.pem`** (ALEX tự tìm).
+- Chỉ thêm vào `.env` khi file CA nằm chỗ khác (ví dụ `/etc/ssl/corp.pem`).
+
+`.env` tối thiểu thường chỉ cần **một dòng**:
+
+```
+M365_CLIENT_SECRET=<Value tu Azure>
+```
 
 ---
 
 ## Cài lần đầu — 3 bước
 
-### Bước 1 — Đưa code lên server
+### 1. Lấy code (full folder)
 
-**Cách A — Git (khuyến nghị):**
 ```bash
 cd /home/tmc_ai_common/ALEX
 git pull origin main
 ```
 
-**Cách B — ZIP:**
-```bash
-cd /home/tmc_ai_common
-unzip -o ALEX.zip   # giải nén đè, giữ web_data/ và .env nếu đã có
-cd ALEX
-```
-
-### Bước 2 — Chạy 1 lệnh cài đặt
+### 2. Cài
 
 ```bash
-cd /home/tmc_ai_common/ALEX
 chmod +x setup_ubuntu.sh
 ./setup_ubuntu.sh
 ```
 
-Script tự: cài Python, sửa IP trong `config.yaml`, tạo `.venv`, tạo user `admin`.
-
-### Bước 3 — Điền secret + CA, rồi chạy
+### 3. Điền secret, thử SSL, chạy
 
 ```bash
-# 1) CA từ IT
-cp /path/from/it/root-ca.pem config/company-ca.pem
+nano .env          # chi M365_CLIENT_SECRET=
+nano config.yaml   # client_id + tenant_id (IT cap)
 
-# 2) Sửa .env
-nano .env
-```
-
-Nội dung `.env` tối thiểu:
-```
-M365_CLIENT_SECRET=paste-Value-tu-Azure-o-day
-REQUESTS_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
-M365_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
-```
-
-```bash
-chmod 600 .env
-
-# 3) Sửa config.yaml — client_id + tenant_id (IT cấp)
-nano config.yaml
-
-# 4) Kiểm tra SSL
 ./scripts/ubuntu_m365_ssl_check.sh
+# FAIL + loi SSL → cp file IT vao config/company-ca.pem roi chay lai script
 
-# 5) Chạy server (giữ terminal mở)
 ./chay.sh
 ```
 
-Mở browser: `http://<IP-may>:8765/login` → **admin** / **Alex@2025!**
-
-Tab **Review** → **Sign in to Microsoft 365**
+Browser: `http://<IP-may>:8765/login` → admin / Alex@2025!
 
 ---
 
@@ -89,7 +108,7 @@ cd /home/tmc_ai_common/ALEX
 ./chay.sh
 ```
 
-Ctrl+C để dừng.
+Sửa `.env` hoặc config → **Ctrl+C** rồi `./chay.sh` lại.
 
 ---
 
@@ -97,23 +116,8 @@ Ctrl+C để dừng.
 
 | Triệu chứng | Cách sửa |
 |-------------|----------|
-| Sign in M365 báo **SSL error** | Chưa có `config/company-ca.pem` → nhờ IT. Chạy `./scripts/ubuntu_m365_ssl_check.sh` |
-| Thiếu `web/http_ssl.py` | Code lệch — `git pull` full folder, không copy lẻ |
-| Đồng nghiệp không vào được web | Sửa IP: `./scripts/set_lan_ip.sh` rồi restart `./chay.sh` |
-| Quên pass admin | `source .venv/bin/activate && python scripts/reset_team_auth.py --yes --username admin --password 'Alex@2025!'` |
-| Sửa `.env` / config xong mà không đổi | **Restart** `./chay.sh` (server không tự reload) |
+| Code Mac khác Ubuntu | Dung VS Code Remote SSH vao server; `git pull` tren server |
+| SSL khi Sign in M365 | `./scripts/ubuntu_m365_ssl_check.sh` → neu FAIL thi `config/company-ca.pem` |
+| Sua file ma app khong doi | Restart `./chay.sh` |
 
----
-
-## Cập nhật phiên bản mới
-
-```bash
-cd /home/tmc_ai_common/ALEX
-./scripts/ubuntu_backup.sh          # backup web_data + .env
-git pull origin main                # hoặc giải nén ZIP mới
-source .venv/bin/activate && pip install -r requirements.txt
-./scripts/ubuntu_deploy_gates.sh
-./chay.sh
-```
-
-Chi tiết: [UBUNTU_UPDATE_POLICY.md](./UBUNTU_UPDATE_POLICY.md)
+Gửi IT (khi can): [IT_REQUEST_CHECKLIST.md](./IT_REQUEST_CHECKLIST.md)

@@ -10,23 +10,15 @@ Gửi email/ticket cho IT. Copy nội dung bên dưới.
 
 ---
 
-## 1. Root CA công ty (bắt buộc cho ISMS — không tắt SSL verify)
+## 1. Root CA công ty (chỉ khi Sign in M365 báo lỗi SSL)
 
-Server Ubuntu outbound HTTPS đi qua proxy công ty (SSL inspection). Python cần tin root CA nội bộ.
+**Thử trước không cần mục này** — chạy `./scripts/ubuntu_m365_ssl_check.sh` trên server. Nếu **OK**, bỏ qua.
 
-**Yêu cầu:**
+Nếu **FAIL** (`CERTIFICATE_VERIFY_FAILED`):
 
-- [ ] File **root CA** định dạng PEM (`.pem` hoặc `.crt`)
-- Engineer đặt tại: `/home/tmc_ai_common/ALEX/config/company-ca.pem`
-- Hoặc chỉ đường trong `.env`:
-  ```
-  REQUESTS_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
-  M365_CA_BUNDLE=/home/tmc_ai_common/ALEX/config/company-ca.pem
-  ```
-
-**Giải thích ngắn:** Trình duyệt trên máy Windows/Mac đã cài CA công ty nên web Microsoft mở bình thường. Ubuntu server + Python **không** tự có CA đó — cần file PEM từ IT.
-
-**Không yêu cầu:** Tắt SSL verify (`M365_SSL_VERIFY=false`) — vi phạm ISMS.
+- [ ] File **root CA** định dạng PEM (`.pem`)
+- Engineer đặt tên: `config/company-ca.pem` (trong folder ALEX)
+- **Không cần** thêm biến môi trường trong `.env` nếu đặt đúng tên trên
 
 ---
 
