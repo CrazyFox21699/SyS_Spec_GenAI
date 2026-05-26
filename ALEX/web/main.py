@@ -694,6 +694,24 @@ def _m365_user_id() -> str | None:
     return user.username if user else None
 
 
+def _m365_api_error(exc: Exception) -> HTTPException:
+    """Never leak raw 500 for known M365 login/network failures."""
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, ValueError):
+        return HTTPException(400, str(exc))
+    if isinstance(exc, RuntimeError):
+        return HTTPException(400, str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(403, str(exc))
+    if isinstance(exc, OSError):
+        return HTTPException(
+            500,
+            f"Server cannot write M365 session files. Check web_data permissions. Detail: {exc}",
+        )
+    return HTTPException(500, f"M365 error ({type(exc).__name__}): {exc}")
+
+
 def _llm_enabled_for_assist(cfg: dict[str, Any]) -> bool:
     return feature_enabled(cfg, "ollama_assist", default=False) or bool(cfg.get("llm", {}).get("enabled"))
 
@@ -2147,7 +2165,16 @@ def api_llm_status(light: bool = Query(False)) -> dict[str, Any]:
 
 @app.get("/api/m365/status")
 def api_m365_status() -> dict[str, Any]:
-    return m365_auth.m365_status(_cfg(), user_id=_m365_user_id())
+    try:
+        return m365_auth.m365_status(_cfg(), user_id=_m365_user_id())
+    except Exception as exc:
+        raise _m365_api_error(exc) from exc
+
+
+@app.get("/api/m365/connectivity")
+def api_m365_connectivity() -> dict[str, Any]:
+    """Ping Microsoft HTTPS — diagnose SSL/firewall on Ubuntu."""
+    return m365_auth.probe_microsoft_connectivity()
 
 
 @app.post("/api/m365/setup")
@@ -2171,16 +2198,16 @@ def api_m365_setup_reset() -> dict[str, Any]:
 def api_m365_login_start() -> dict[str, Any]:
     try:
         return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id())
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _m365_api_error(exc) from exc
 
 
 @app.post("/api/m365/login/poll")
 def api_m365_login_poll() -> dict[str, Any]:
     try:
         return m365_auth.poll_device_login(_cfg(), user_id=_m365_user_id())
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _m365_api_error(exc) from exc
 
 
 @app.post("/api/m365/login/cancel")

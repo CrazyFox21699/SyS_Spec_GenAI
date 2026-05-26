@@ -14,7 +14,16 @@ from typing import Any
 
 import requests
 
-from web.http_ssl import requests_get, requests_post
+try:
+    from web.http_ssl import requests_get, requests_post
+except ImportError:
+    import requests as _requests
+
+    def requests_get(url: str, **kwargs):  # type: ignore[no-redef]
+        return _requests.get(url, **kwargs)
+
+    def requests_post(url: str, **kwargs):  # type: ignore[no-redef]
+        return _requests.post(url, **kwargs)
 
 # Microsoft uses this well-known tenant id for personal Microsoft accounts
 # (outlook.com / hotmail.com / live.com / msn.com / xbox.com / etc.). Any
@@ -672,10 +681,18 @@ def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> di
     client_id = _client_id(cfg)
     scope = _scopes(cfg, for_device_login=True)
     tenant = _tenant_id(cfg)
-    r = _device_code_request(tenant, client_id, scope, cfg)
-    if r.status_code != 200 and not _is_explicit_tenant(tenant) and tenant != DEFAULT_TENANT:
-        r = _device_code_request(DEFAULT_TENANT, client_id, scope, cfg)
-        tenant = DEFAULT_TENANT
+    try:
+        r = _device_code_request(tenant, client_id, scope, cfg)
+        if r.status_code != 200 and not _is_explicit_tenant(tenant) and tenant != DEFAULT_TENANT:
+            r = _device_code_request(DEFAULT_TENANT, client_id, scope, cfg)
+            tenant = DEFAULT_TENANT
+    except RuntimeError:
+        raise
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Microsoft login network error: {exc}. "
+            "Check firewall/proxy or SSL CA (see README Ubuntu SSL section)."
+        ) from exc
     if r.status_code != 200:
         try:
             err_body = r.json()
@@ -699,8 +716,14 @@ def start_device_login(cfg: dict[str, Any], *, user_id: str | None = None) -> di
         "scope_used": scope,
     }
     base, _, pending_file = _m365_paths(user_id)
-    base.mkdir(parents=True, exist_ok=True)
-    pending_file.write_text(json.dumps(pending, indent=2), encoding="utf-8")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        pending_file.write_text(json.dumps(pending, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot write M365 login data to {base}. "
+            f"Run: chmod -R u+rwX web_data && chown -R $USER web_data. Detail: {exc}"
+        ) from exc
     return {
         "ok": True,
         "user_code": pending.get("user_code"),
@@ -789,7 +812,7 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
             sess = _read_session(user_id)
             api_ready = True
             session_expired = False
-        except (PermissionError, requests.RequestException, ValueError):
+        except (PermissionError, requests.RequestException, ValueError, RuntimeError):
             api_ready = False
             session_refresh_failed = True
     configured = client_id_configured(cfg) if cfg else bool(sess.get("access_token"))
@@ -857,6 +880,24 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
             else "Sign in with Microsoft 365 to apply Knowledge workbench via Copilot."
         ),
     }
+
+
+def probe_microsoft_connectivity() -> dict[str, Any]:
+    """Test HTTPS to Microsoft — for Ubuntu SSL / firewall troubleshooting."""
+    from web.http_ssl import ssl_verify_option
+
+    url = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
+    verify = ssl_verify_option()
+    try:
+        r = requests_get(url, timeout=15)
+        return {
+            "ok": r.status_code == 200,
+            "status_code": r.status_code,
+            "verify": str(verify),
+            "url": url,
+        }
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc), "verify": str(verify), "url": url}
 
 
 def disconnect(*, user_id: str | None = None) -> dict[str, Any]:
