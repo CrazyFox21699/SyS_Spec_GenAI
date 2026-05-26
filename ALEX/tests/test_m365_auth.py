@@ -314,3 +314,12 @@ def test_m365_session_path_per_user(tmp_path, monkeypatch) -> None:
     assert m365_auth._read_session("alice")["access_token"] == "alice-token"
     assert m365_auth._read_session("bob") == {}
     assert m365_auth.m365_status(user_id="alice")["mode"] in ("api", "none")
+
+
+def test_session_user_id_from_team_context(monkeypatch) -> None:
+    from web.team_auth import TeamUser
+
+    user = TeamUser(user_id=1, username="admin", role="admin")
+    monkeypatch.setattr("web.security.get_current_user", lambda: user)
+    assert m365_auth.session_user_id() == "admin"
+    assert m365_auth.session_user_id("alice") == "alice"

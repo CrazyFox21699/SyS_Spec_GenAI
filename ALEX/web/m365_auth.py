@@ -38,10 +38,25 @@ LOCAL_CONFIG_FILE = M365_DIR / "local_config.json"
 
 def _m365_paths(user_id: str | None = None) -> tuple[Path, Path, Path]:
     """Return (base_dir, session_file, pending_login_file) for a user or legacy global."""
-    if user_id:
-        base = WEB_DATA_ROOT / "users" / user_id / "m365"
+    uid = session_user_id(user_id)
+    if uid:
+        base = WEB_DATA_ROOT / "users" / uid / "m365"
         return base, base / "session.json", base / "pending_login.json"
     return M365_DIR, SESSION_FILE, PENDING_LOGIN_FILE
+
+
+def session_user_id(explicit: str | None = None) -> str | None:
+    """Ubuntu team server: map HTTP session → web_data/users/<username>/m365/."""
+    if explicit:
+        return explicit
+    try:
+        from web.security import get_current_user
+        from web.team_auth import TeamUser
+
+        user = get_current_user()
+        return user.username if isinstance(user, TeamUser) else None
+    except ImportError:
+        return None
 
 DEFAULT_TENANT = "common"
 GUID_RE = re.compile(

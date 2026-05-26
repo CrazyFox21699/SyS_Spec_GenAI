@@ -15,14 +15,7 @@ GRAPH = "https://graph.microsoft.com/beta"
 
 
 def _m365_user_id_from_context() -> str | None:
-    try:
-        from web.security import get_current_user
-        from web.team_auth import TeamUser
-
-        user = get_current_user()
-        return user.username if isinstance(user, TeamUser) else None
-    except ImportError:
-        return None
+    return m365_auth.session_user_id()
 
 # Substrings the Microsoft Graph error message uses when the signed-in
 # account cannot reach the Microsoft.CopilotChat service plan. Matched
