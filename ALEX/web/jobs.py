@@ -78,10 +78,7 @@ def create_job(*, created_by: str = "system") -> JobState:
 
 def get_job(job_id: str) -> JobState | None:
     _ensure_store()
-    with _lock:
-        job = _jobs.get(job_id)
-    if job:
-        return job
+    # Production: worker process updates SQLite only — prefer DB over stale in-memory copy.
     if _production_mode():
         from web.job_store import get_job_record
 
@@ -100,6 +97,10 @@ def get_job(job_id: str) -> JobState | None:
                 created_at=rec.created_at,
                 bundle_version=rec.bundle_version,
             )
+    with _lock:
+        job = _jobs.get(job_id)
+    if job:
+        return job
     return None
 
 

@@ -23,6 +23,30 @@ def test_job_store_roundtrip(prod_data: Path) -> None:
     assert rec.status == "queued"
 
 
+def test_get_job_prefers_sqlite_in_production(tmp_path: Path, monkeypatch) -> None:
+    from web import jobs as jobs_mod
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("deployment:\n  mode: production\n", encoding="utf-8")
+    monkeypatch.setattr(jobs_mod, "_CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(jobs_mod, "_WEB_DATA", tmp_path)
+    monkeypatch.setattr(jobs_mod, "_store_initialized", False)
+    monkeypatch.setattr("web.job_store._CONN", None)
+
+    job = jobs_mod.create_job(created_by="alice")
+    jobs_mod.update_job(job.job_id, status="queued", current_step="Queued for worker", progress=0)
+
+    from web.job_store import update_job_record
+
+    update_job_record(job.job_id, status="running", current_step="Extracting signals", progress=42)
+
+    fresh = jobs_mod.get_job(job.job_id)
+    assert fresh is not None
+    assert fresh.status == "running"
+    assert fresh.progress == 42
+    assert fresh.current_step == "Extracting signals"
+
+
 def test_logic_groups_upsert(prod_data: Path) -> None:
     upsert_logic_groups(
         "analysis_test_1",
