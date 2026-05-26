@@ -59,6 +59,7 @@ assist:
     role: fallback_inference
   m365:
     enabled: true
+    ssl_verify: true
     client_id: "325c9e27-c681-4869-ab33-bc423ddf5df9"
     tenant_id: "f01e930a-b52e-42b1-b70f-a8882b5d043b"
     timezone: Asia/Tokyo

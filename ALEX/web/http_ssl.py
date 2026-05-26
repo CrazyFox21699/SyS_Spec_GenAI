@@ -1,7 +1,8 @@
-"""HTTPS verify for outbound requests — Ubuntu ca-certificates and corporate CA bundles."""
+"""HTTPS verify for outbound requests — Ubuntu company server skips strict SSL by default."""
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 import requests
 
 from src.utils.config_path import ALEX_ROOT, get_config_path
+
+_LOG = logging.getLogger(__name__)
 
 _SYSTEM_CA_BUNDLES = (
     "/etc/ssl/certs/ca-certificates.crt",
@@ -25,26 +28,43 @@ _COMPANY_CA_CANDIDATES = (
 _MERGED_CA_CACHE = ALEX_ROOT / "web_data" / ".ssl" / "merged-ca.pem"
 
 
+def _load_config() -> dict[str, Any]:
+    try:
+        from src.utils.yaml_utils import load_yaml
+
+        path = get_config_path()
+        if path.is_file():
+            cfg = load_yaml(path)
+            return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError, TypeError, ImportError):
+        pass
+    return {}
+
+
 def _env_ssl_verify_disabled() -> bool:
     env = os.environ.get("M365_SSL_VERIFY", os.environ.get("ALEX_SSL_VERIFY", "")).strip().lower()
     return env in ("0", "false", "no", "off")
 
 
-def _config_ssl_verify_enabled() -> bool | None:
-    """None = not set in config; False = explicit disable (corporate proxy)."""
-    try:
-        from src.utils.yaml_utils import load_yaml
+def _env_ssl_verify_required() -> bool:
+    env = os.environ.get("M365_SSL_VERIFY", os.environ.get("ALEX_SSL_VERIFY", "")).strip().lower()
+    return env in ("1", "true", "yes", "on")
 
-        path = get_config_path()
-        if not path.is_file():
-            return None
-        cfg = load_yaml(path)
-        m365 = (cfg.get("assist") or {}).get("m365") or {}
-        if "ssl_verify" not in m365:
-            return None
+
+def _production_server(cfg: dict[str, Any]) -> bool:
+    mode = str((cfg.get("deployment") or {}).get("mode") or "").lower()
+    return mode == "production"
+
+
+def _config_ssl_verify_enabled() -> bool | None:
+    """None = use deployment default; False = off; True = strict."""
+    cfg = _load_config()
+    m365 = (cfg.get("assist") or {}).get("m365") or {}
+    if "ssl_verify" in m365:
         return bool(m365.get("ssl_verify"))
-    except (OSError, ValueError, TypeError, ImportError):
-        return None
+    if _production_server(cfg):
+        return False
+    return None
 
 
 def _company_ca_path() -> Path | None:
@@ -96,12 +116,15 @@ def _merge_ca_files(*paths: Path) -> str:
 
 
 def ssl_verify_option() -> bool | str:
-    """CA bundle for requests — env/config override, merged company CA, or disable."""
+    """Ubuntu production (config.yaml): SSL verify OFF unless ssl_verify: true."""
     if _env_ssl_verify_disabled():
         return False
-    cfg_verify = _config_ssl_verify_enabled()
-    if cfg_verify is False:
-        return False
+    if _env_ssl_verify_required():
+        pass  # fall through to strict bundle lookup
+    else:
+        cfg_verify = _config_ssl_verify_enabled()
+        if cfg_verify is False:
+            return False
 
     company = _company_ca_path()
     base = _base_ca_bundle()
@@ -115,11 +138,12 @@ def ssl_verify_option() -> bool | str:
 
 
 def ssl_verify_status() -> dict[str, Any]:
-    """Diagnostics for ubuntu_m365_ssl_check.sh and /api/m365/connectivity."""
+    cfg = _load_config()
     company = _company_ca_path()
     return {
         "verify": str(ssl_verify_option()),
         "ssl_verify_disabled": ssl_verify_option() is False,
+        "production_server": _production_server(cfg),
         "env_m365_ssl_verify": os.environ.get("M365_SSL_VERIFY", ""),
         "config_ssl_verify": _config_ssl_verify_enabled(),
         "company_ca": str(company) if company else None,
@@ -127,46 +151,30 @@ def ssl_verify_status() -> dict[str, Any]:
     }
 
 
-def ssl_error_message(exc: Exception) -> str:
-    return (
-        "SSL certificate verification failed when connecting to Microsoft "
-        "(unable to get local issuer certificate — common on company proxy). "
-        "Fix option 1 (fast): add M365_SSL_VERIFY=false to .env and restart ./chay.sh. "
-        "Fix option 2 (secure): ask IT for root CA, save as ALEX/config/company-ca.pem, restart. "
-        "Fix option 3: sudo apt install -y ca-certificates && sudo update-ca-certificates && pip install certifi. "
-        f"Technical detail: {exc}"
-    )
-
-
 def network_error_message(exc: Exception) -> str:
     return (
-        "Cannot reach Microsoft login (network/firewall/proxy). "
-        "Ask IT to allow HTTPS outbound to login.microsoftonline.com and graph.microsoft.com. "
-        f"Technical detail: {exc}"
+        "Cannot reach Microsoft login (network/firewall). "
+        "Check outbound HTTPS to login.microsoftonline.com. "
+        f"Detail: {exc}"
     )
 
 
-def _raise_friendly_request_error(exc: Exception) -> None:
-    if isinstance(exc, requests.exceptions.SSLError):
-        raise RuntimeError(ssl_error_message(exc)) from exc
-    if isinstance(exc, requests.exceptions.RequestException):
+def _request(method: str, url: str, **kwargs: Any) -> requests.Response:
+    verify = kwargs.pop("verify", ssl_verify_option())
+    try:
+        return requests.request(method, url, verify=verify, **kwargs)
+    except requests.exceptions.SSLError as exc:
+        if verify is not False:
+            _LOG.warning("M365 HTTPS SSL verify failed — retrying without verify (company server default)")
+            return requests.request(method, url, verify=False, **kwargs)
+        raise RuntimeError(f"Microsoft HTTPS SSL error: {exc}") from exc
+    except requests.exceptions.RequestException as exc:
         raise RuntimeError(network_error_message(exc)) from exc
-    raise exc
 
 
 def requests_get(url: str, **kwargs: Any) -> requests.Response:
-    kwargs.setdefault("verify", ssl_verify_option())
-    try:
-        return requests.get(url, **kwargs)
-    except Exception as exc:
-        _raise_friendly_request_error(exc)
-        raise AssertionError("unreachable")
+    return _request("GET", url, **kwargs)
 
 
 def requests_post(url: str, **kwargs: Any) -> requests.Response:
-    kwargs.setdefault("verify", ssl_verify_option())
-    try:
-        return requests.post(url, **kwargs)
-    except Exception as exc:
-        _raise_friendly_request_error(exc)
-        raise AssertionError("unreachable")
+    return _request("POST", url, **kwargs)
