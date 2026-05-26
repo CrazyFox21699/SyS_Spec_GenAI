@@ -6,6 +6,7 @@
 **/web_data/uploads/*
 **/web_data/output/*
 **/web_data/.alex/*
+**/web_data/.ssl/*
 !**/web_data/uploads/.gitkeep
 !**/web_data/output/.gitkeep
 !**/web_data/.alex/.gitkeep

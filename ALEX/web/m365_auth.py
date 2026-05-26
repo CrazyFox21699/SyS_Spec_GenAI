@@ -884,10 +884,11 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
 
 def probe_microsoft_connectivity() -> dict[str, Any]:
     """Test HTTPS to Microsoft — for Ubuntu SSL / firewall troubleshooting."""
-    from web.http_ssl import ssl_verify_option
+    from web.http_ssl import requests_get, ssl_verify_option, ssl_verify_status
 
     url = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
     verify = ssl_verify_option()
+    meta = ssl_verify_status()
     try:
         r = requests_get(url, timeout=15)
         return {
@@ -895,9 +896,10 @@ def probe_microsoft_connectivity() -> dict[str, Any]:
             "status_code": r.status_code,
             "verify": str(verify),
             "url": url,
+            **meta,
         }
     except RuntimeError as exc:
-        return {"ok": False, "error": str(exc), "verify": str(verify), "url": url}
+        return {"ok": False, "error": str(exc), "verify": str(verify), "url": url, **meta}
 
 
 def disconnect(*, user_id: str | None = None) -> dict[str, Any]:

@@ -63,6 +63,9 @@ assist:
     role: fallback_inference
   m365:
     enabled: true
+    # Corporate Ubuntu proxy: set ssl_verify: false OR M365_SSL_VERIFY=false in .env
+    # Better: save IT root CA as config/company-ca.pem
+    ssl_verify: true
     # IT điền một lần — user chỉ bấm Sign in, không nhập lại Client ID / Tenant
     client_id: ""
     tenant_id: ""

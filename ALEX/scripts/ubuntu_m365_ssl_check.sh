@@ -32,15 +32,6 @@ except Exception:
 URL = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
 
 
-def probe_with_http_ssl():
-    from web.http_ssl import requests_get, ssl_verify_option
-
-    verify = ssl_verify_option()
-    print("verify option:", verify)
-    r = requests_get(URL, timeout=15)
-    return {"ok": r.status_code == 200, "status_code": r.status_code, "verify": str(verify), "url": URL}
-
-
 def probe_plain_requests():
     import requests
 
@@ -51,15 +42,22 @@ def probe_plain_requests():
 
 try:
     try:
-        r = probe_with_http_ssl()
+        from web.http_ssl import requests_get, ssl_verify_option, ssl_verify_status
+
+        verify = ssl_verify_option()
+        print("verify option:", verify)
+        print("ssl status:", ssl_verify_status())
+        r_obj = requests_get(URL, timeout=15)
+        r = {"ok": r_obj.status_code == 200, "status_code": r_obj.status_code, "verify": str(verify), "url": URL}
     except ImportError:
         print("NOTE: copy ALEX/web/http_ssl.py for full SSL diagnostics.")
         r = probe_plain_requests()
     except RuntimeError as exc:
         r = {"ok": False, "error": str(exc), "url": URL}
         try:
-            from web.http_ssl import ssl_verify_option
+            from web.http_ssl import ssl_verify_option, ssl_verify_status
             r["verify"] = str(ssl_verify_option())
+            r.update(ssl_verify_status())
         except ImportError:
             r["verify"] = "unknown"
 except Exception as exc:
@@ -73,7 +71,8 @@ if not r.get("ok"):
     print("  pip install certifi")
     print("  copy ALEX/web/http_ssl.py + ALEX/web/m365_auth.py + ALEX/web/main.py")
     print("  company proxy: REQUESTS_CA_BUNDLE=/path/to/ca.pem in .env")
-    print("  temp test only: M365_SSL_VERIFY=false in .env")
+    print("  temp test only: add to .env → M365_SSL_VERIFY=false")
+    print("  or config.yaml → assist.m365.ssl_verify: false")
     print("  then: ./chay.sh")
     raise SystemExit(1)
 
