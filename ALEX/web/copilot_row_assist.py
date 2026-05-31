@@ -18,6 +18,7 @@ def _row_prompt(row: dict[str, Any], *, engineer_note: str = "") -> str:
         "- Expected input: line-oriented Given:/When:/Precondition: as in project style.\n"
         "- Expected output: line-oriented Then: assertions.\n"
         "- Do not invent signals not implied by the row.\n"
+        "- If Operation references (*n) footnotes or cross-spec sections, do NOT hardcode values — add open_questions.\n"
         f"Engineer note: {engineer_note[:1500]}\n\n"
         f"Current row:\n{json.dumps(row, ensure_ascii=False, indent=2)[:8000]}\n\n"
         "Return JSON only:\n"

@@ -97,6 +97,8 @@ def _writer_prompt(
         "- For add_new, set action=add_new and proposed_id from plan.\n"
         "- Use concrete Given:/Then: lines with signal=value.\n"
         "- Include test_function and event when plan supplies them.\n"
+        "- NEVER hardcode (*n) footnote expansions — use footnote_knowledge from Context Pack.\n"
+        "- If a footnote or cross-spec ref is unresolved, leave open_questions and skip guessing signal values.\n"
         f"{retry_block}\n"
         f"Current testcase snapshots:\n{snap_json}\n\n"
         f"Approved plan (this batch):\n{plan_json}\n\n"

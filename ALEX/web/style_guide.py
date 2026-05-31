@@ -12,8 +12,14 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STYLE_PATH = ROOT / "config" / "testcase_style.yaml"
 
 
-def load_testcase_style(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_testcase_style(cfg: dict[str, Any] | None = None, *, language: str = "EN") -> dict[str, Any]:
     del cfg
+    lang = str(language or "EN").upper()
+    path = ROOT / "config" / ("testcase_style_jp.yaml" if lang.startswith("J") else "testcase_style.yaml")
+    if path.exists():
+        data = load_yaml(path)
+        if isinstance(data, dict):
+            return data
     if DEFAULT_STYLE_PATH.exists():
         data = load_yaml(DEFAULT_STYLE_PATH)
         if isinstance(data, dict):
@@ -38,7 +44,13 @@ def style_reference_for_bundle(bundle: dict[str, Any], cfg: dict[str, Any] | Non
                 "expected_output": row.get("expected_output") or "",
             }
         )
-    template = load_testcase_style(cfg)
+    lang = str((bundle.get("export_language") or "EN")).upper()
+    if not lang.startswith("J"):
+        for ov in (ai.get("candidate_overlays") or {}).values():
+            if (ov.get("jp") or {}).get("expected_input"):
+                lang = "JP"
+                break
+    template = load_testcase_style(cfg, language=lang)
     return {
         "template": template,
         "golden_rows": golden_rows,

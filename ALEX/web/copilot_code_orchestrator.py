@@ -3,11 +3,62 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from time import monotonic
+from typing import Any, Callable
 
 from web.copilot_code_context_pack import build_code_context_pack
-from web.copilot_code_writer import code_write_batch_size, run_code_write
+from web.copilot_code_writer import code_write_batch_size, run_code_refine, run_code_write
 from web.gtest_workspace import generate_draft_for_request, save_draft
+
+_PACK_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PACK_CACHE_TTL_S = 300.0
+
+
+def _cache_key(job_id: str, candidate_id: str, bundle_version: int, language: str) -> str:
+    return f"{job_id}:{candidate_id}:{bundle_version}:{language}"
+
+
+def _cached_context_pack(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    *,
+    candidate_id: str,
+    library_root: Path | None,
+    language: str,
+    include_baseline: bool,
+    cfg: dict[str, Any],
+    reference_test_name: str,
+    library_code_samples: list[dict[str, Any]] | None,
+    job_id: str = "",
+    bundle_version: int = 0,
+) -> dict[str, Any]:
+    key = _cache_key(job_id, candidate_id, bundle_version, language) if job_id else ""
+    if key:
+        hit = _PACK_CACHE.get(key)
+        if hit and monotonic() - hit[0] < _PACK_CACHE_TTL_S and not include_baseline:
+            pack = dict(hit[1])
+            if include_baseline and not pack.get("baseline_skeleton"):
+                pass  # fall through to rebuild baseline only
+            elif not include_baseline or pack.get("baseline_skeleton"):
+                return pack
+
+    pack = build_code_context_pack(
+        bundle,
+        gtest_state,
+        candidate_id=candidate_id,
+        library_root=library_root,
+        language=language,
+        include_baseline=include_baseline,
+        cfg=cfg,
+        reference_test_name=reference_test_name,
+        library_code_samples=library_code_samples,
+    )
+    if key:
+        _PACK_CACHE[key] = (monotonic(), pack)
+        if len(_PACK_CACHE) > 64:
+            oldest = min(_PACK_CACHE.items(), key=lambda item: item[1][0])[0]
+            _PACK_CACHE.pop(oldest, None)
+    return pack
 
 
 def _candidate_has_io(row: dict[str, Any] | None) -> bool:
@@ -33,13 +84,16 @@ def run_copilot_code_generate(
     library_code_samples: list[dict[str, Any]] | None = None,
     from_testcase_only: bool | None = None,
     reuse_conversation: bool = False,
+    slim: bool = True,
+    job_id: str = "",
+    bundle_version: int = 0,
 ) -> dict[str, Any]:
     bootstrap = str(bundle.get("bootstrap_source") or "")
     testcase_only = from_testcase_only
     if testcase_only is None:
         testcase_only = bootstrap.startswith("imported")
     try:
-        pack = build_code_context_pack(
+        pack = _cached_context_pack(
             bundle,
             gtest_state,
             candidate_id=candidate_id,
@@ -49,6 +103,8 @@ def run_copilot_code_generate(
             cfg=cfg,
             reference_test_name=reference_test_name,
             library_code_samples=library_code_samples,
+            job_id=job_id,
+            bundle_version=bundle_version,
         )
     except KeyError as exc:
         return {
@@ -74,6 +130,7 @@ def run_copilot_code_generate(
         engineer_note=engineer_note,
         copilot_prompt_override=copilot_prompt_override,
         reuse_conversation=reuse_conversation,
+        slim=slim,
     )
     copilot_draft = copilot_result.get("draft") or {}
 
@@ -120,6 +177,50 @@ def run_copilot_code_generate(
     }
 
 
+def run_copilot_code_refine(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    *,
+    candidate_id: str,
+    existing_code: str,
+    instruction: str,
+    cfg: dict[str, Any],
+    library_root: Path | None = None,
+    language: str = "EN",
+    reference_test_name: str = "",
+    library_code_samples: list[dict[str, Any]] | None = None,
+    reuse_conversation: bool = False,
+    job_id: str = "",
+    bundle_version: int = 0,
+) -> dict[str, Any]:
+    try:
+        pack = _cached_context_pack(
+            bundle,
+            gtest_state,
+            candidate_id=candidate_id,
+            library_root=library_root,
+            language=language,
+            include_baseline=False,
+            cfg=cfg,
+            reference_test_name=reference_test_name,
+            library_code_samples=library_code_samples,
+            job_id=job_id,
+            bundle_version=bundle_version,
+        )
+    except KeyError as exc:
+        return {"ok": False, "error": str(exc), "error_category": "no_candidates"}
+    pack["existing_draft"] = str(existing_code or "").strip()
+    result = run_code_refine(
+        existing_code,
+        instruction,
+        cfg,
+        test_name=candidate_id,
+        context_pack=pack,
+        reuse_conversation=reuse_conversation,
+    )
+    return {"ok": bool(result.get("ok")), "context_pack": pack, **result}
+
+
 def run_copilot_code_generate_batch(
     bundle: dict[str, Any],
     gtest_state: dict[str, Any],
@@ -133,6 +234,11 @@ def run_copilot_code_generate_batch(
     reference_test_name: str = "",
     library_code_samples: list[dict[str, Any]] | None = None,
     persist_drafts: bool = False,
+    slim: bool = True,
+    job_id: str = "",
+    bundle_version: int = 0,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
 
@@ -143,7 +249,11 @@ def run_copilot_code_generate_batch(
     ok_count = 0
     skip_count = 0
 
-    for cid in candidate_ids:
+    for idx, cid in enumerate(candidate_ids):
+        if cancel_check and cancel_check():
+            break
+        if progress_callback:
+            progress_callback(idx, len(candidate_ids), f"Copilot batch {idx + 1}/{len(candidate_ids)}…")
         row = row_by_id.get(cid)
         if not _candidate_has_io(row):
             results.append(
@@ -169,6 +279,9 @@ def run_copilot_code_generate_batch(
                 language=language,
                 reference_test_name=reference_test_name,
                 library_code_samples=library_code_samples,
+                slim=slim,
+                job_id=job_id,
+                bundle_version=bundle_version,
             )
         except KeyError as exc:
             results.append({"candidate_id": cid, "ok": False, "error": str(exc)})

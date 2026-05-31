@@ -154,6 +154,65 @@ def _source_table_excerpt(item: dict[str, Any], limit: int = 20) -> list[dict[st
     return rows
 
 
+def _footnote_knowledge_for_logic(bundle: dict[str, Any], logic_id: str) -> dict[str, Any]:
+    """Footnotes / cross-spec refs for Copilot — never hardcode (*n) expansions."""
+    lb = _logic_block(bundle, logic_id) or {}
+    control = str(lb.get("name") or "")
+    expression = str(lb.get("raw_expression") or lb.get("expression") or "")
+    table_text = " ".join(
+        str(r.get("raw_condition") or "")
+        for r in (lb.get("table_rows") or [])
+        if isinstance(r, dict)
+    )
+    haystack = f"{control} {expression} {table_text}".upper()
+
+    footnotes: list[dict[str, Any]] = []
+    for foot in bundle.get("footnote_definitions") or []:
+        ref = str(foot.get("ref") or "")
+        cond = str(foot.get("condition_name") or "")
+        lid = str(foot.get("logic_id") or "")
+        marker = ref.upper().replace("(*", "").replace(")", "").strip()
+        mentioned = (
+            (lid and lid == logic_id)
+            or (ref and ref.upper() in haystack)
+            or (marker and f"(*{marker})" in haystack)
+            or (cond and cond.upper() in haystack)
+        )
+        if not mentioned and lid != logic_id:
+            continue
+        body = str(foot.get("definition") or foot.get("body") or "").strip()
+        cross = foot.get("cross_refs") or []
+        resolved = bool(body) or bool(foot.get("parsed_conditional"))
+        footnotes.append(
+            {
+                "ref": ref,
+                "condition_name": cond,
+                "definition": body[:800],
+                "resolved": resolved,
+                "cross_refs": cross[:6],
+                "needs_clarification": not resolved and not cross,
+            }
+        )
+
+    mat = bundle.get("footnote_materializations") or {}
+    attached = [
+        a
+        for a in (mat.get("attachments") or [])
+        if str(a.get("source_logic_id") or "") == logic_id
+    ]
+
+    spec_u = bundle.get("spec_understanding") or {}
+    overall = spec_u.get("overall") or {}
+
+    return {
+        "footnotes": footnotes[:24],
+        "attached_logic_blocks": attached[:12],
+        "unresolved_footnote_count": sum(1 for f in footnotes if f.get("needs_clarification")),
+        "understanding_percent": overall.get("understanding_percent"),
+        "understanding_status": overall.get("status"),
+    }
+
+
 def build_context_pack(
     bundle: dict[str, Any],
     logic_id: str,
@@ -228,6 +287,7 @@ def build_context_pack(
             "signal_roles": memory.get("signal_roles") or {},
         },
         "verification_matrix": verification,
+        "footnote_knowledge": _footnote_knowledge_for_logic(bundle, logic_id),
     }
     return pack
 

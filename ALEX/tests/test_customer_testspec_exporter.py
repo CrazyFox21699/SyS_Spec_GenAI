@@ -3,6 +3,7 @@ from __future__ import annotations
 from openpyxl import load_workbook
 
 from src.exporters.customer_testspec_exporter import (
+    CUSTOMER_TESTSPEC_JP_HEADERS,
     build_customer_testspec_preview,
     derive_module_name,
     export_customer_testspec,
@@ -25,8 +26,8 @@ def test_export_customer_testspec_uses_overlay_values(tmp_path) -> None:
         "test_candidates": [
             {
                 "id": "TC_PM_001",
-                "test_function": "Power mode / state behavior",
-                "event": "evaluate_shutdown",
+                "test_function": "PowerModeON**",
+                "event": "Auto P response within T7",
                 "use_case_description": "Base deterministic description",
                 "precondition": [{"current_state": "RUN"}],
                 "operation": {
@@ -47,6 +48,7 @@ def test_export_customer_testspec_uses_overlay_values(tmp_path) -> None:
                     "provider": "copilot_cli",
                     "logic_id": "LOGIC_001",
                     "control_name": "SHUTDOWN_DECISION",
+                    "test_group": "ADM1_ON state → ADM1_OFF state transition",
                     "updated_at": "2026-05-16T00:00:00Z",
                     "changed_fields": ["UseCase", "ExpectedOutput"],
                     "evidence_refs": ["spec.docx / table A / row 3"],
@@ -60,7 +62,7 @@ def test_export_customer_testspec_uses_overlay_values(tmp_path) -> None:
                         "expected_output": "Then: VMODE_STS=1",
                     },
                     "jp": {
-                        "use_case": "MODE_STS が成立したときのシャットダウン判定を確認する。",
+                        "use_case": "正常",
                         "operation": "RUN から OFF へのシャットダウン判定を評価する",
                         "expected_input": "Given: MODE_STS=1",
                         "expected_output": "Then: VMODE_STS=1",
@@ -73,13 +75,52 @@ def test_export_customer_testspec_uses_overlay_values(tmp_path) -> None:
     assert path.name == "TestSpec_Power_Mode_JP.xlsx"
 
     wb = load_workbook(path)
+    assert wb.sheetnames == ["PowerModeON"]
+    ws = wb["PowerModeON"]
+
+    assert ws["B2"].value == "PowerModeON"
+    assert [ws.cell(3, c).value for c in range(1, 10)] == CUSTOMER_TESTSPEC_JP_HEADERS
+    header = ws["A3"]
+    assert header.fill.fgColor.rgb.endswith("D9E1F2")
+    assert header.font.bold is True
+    assert header.font.color.rgb.endswith("000000")
+
+    assert ws["A4"].value == 1
+    assert ws["B4"].value == "PowerModeON**"
+    assert ws["C4"].value == "ADM1_ON state → ADM1_OFF state transition"
+    assert ws["D4"].value == "Auto P response within T7"
+    assert ws["E4"].value == "正常"
+    assert ws["F4"].value == "RUN から OFF へのシャットダウン判定を評価する"
+    assert ws["G4"].value == "Given: MODE_STS=1"
+    assert ws["H4"].value == "Then: VMODE_STS=1"
+    assert ws["I4"].value == "Confirm debounce timing"
+    assert ws["A4"].border.left.style == "thin"
+
+
+def test_export_customer_testspec_en_keeps_internal_columns(tmp_path) -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_EN_001",
+                "test_function": "Garage mode",
+                "event": "GRMD_EIG",
+                "use_case_description": "Verify garage",
+                "operation": {"given": [], "when": []},
+                "expectation": [],
+                "traceability": {},
+                "confidence": "medium",
+                "review_required": True,
+                "review_status": "pending",
+                "status": "candidate",
+            }
+        ],
+    }
+    path = export_customer_testspec(tmp_path, bundle, language="EN")
+    wb = load_workbook(path)
     assert wb.sheetnames == ["System Test Spec"]
     ws = wb["System Test Spec"]
-    assert ws["D2"].value == "MODE_STS が成立したときのシャットダウン判定を確認する。"
-    assert ws["E2"].value == "RUN から OFF へのシャットダウン判定を評価する"
-    assert ws["F2"].value == "Given: MODE_STS=1"
-    assert ws["G2"].value == "Then: VMODE_STS=1"
-    assert ws["J2"].value == "copilot_cli"
+    assert ws["A1"].value == "No"
+    assert ws["H1"].value == "Candidate ID"
 
 
 def test_preview_binds_logic_transition_and_outputs_into_final_evidence() -> None:

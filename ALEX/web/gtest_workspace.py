@@ -18,6 +18,12 @@ from src.engine.gtest_codegen import (
 )
 from src.engine.path_tc_matrix import _candidate_logic_id
 from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
+from src.importers.customer_testspec_importer import (
+    build_structured_io,
+    compute_body_hash,
+    compute_spec_hash,
+    structured_io_from_overlay,
+)
 from web.alex_storage import (
     code_style_samples_path,
     default_library_root,
@@ -27,6 +33,7 @@ from web.alex_storage import (
     project_memory_path,
 )
 from web.code_style_samples import load_code_style_samples
+from web.code_text_transform import delete_drafts, merge_drafts_to_monolith, wrap_draft_markers
 
 GTEST_ARTIFACT = "gtest.json"
 _PREVIEW_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -66,6 +73,7 @@ def default_gtest_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "harness": harness.to_dict(),
         "code_variable_map": {},
         "drafts": {},
+        "tc_code_index": {},
         "updated_at": _now_iso(),
     }
 
@@ -82,6 +90,7 @@ def load_gtest_state(job_output: Path, cfg: dict[str, Any] | None = None) -> dic
     base["harness"] = {**base["harness"], **(data.get("harness") or {})}
     base["code_variable_map"] = dict(data.get("code_variable_map") or {})
     base["drafts"] = dict(data.get("drafts") or {})
+    base["tc_code_index"] = dict(data.get("tc_code_index") or {})
     base["updated_at"] = data.get("updated_at") or base["updated_at"]
     return base
 
@@ -93,6 +102,7 @@ def save_gtest_state(job_output: Path, state: dict[str, Any]) -> None:
         "harness": state.get("harness") or {},
         "code_variable_map": state.get("code_variable_map") or {},
         "drafts": state.get("drafts") or {},
+        "tc_code_index": state.get("tc_code_index") or {},
         "updated_at": _now_iso(),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -153,6 +163,164 @@ def collect_signal_names(bundle: dict[str, Any]) -> list[str]:
     return sorted(names)
 
 
+def _overlay_for_candidate(bundle: dict[str, Any], candidate_id: str) -> dict[str, Any]:
+    ai = bundle.get("ai_assists") or {}
+    return dict((ai.get("candidate_overlays") or {}).get(candidate_id) or {})
+
+
+def _structured_io_for_candidate(
+    bundle: dict[str, Any],
+    candidate_id: str,
+    *,
+    language: str = "EN",
+) -> dict[str, Any]:
+    overlay = _overlay_for_candidate(bundle, candidate_id)
+    if overlay.get("structured_io"):
+        return dict(overlay["structured_io"])
+    wb = _workbench_row_for_candidate(bundle, candidate_id, language=language)
+    if wb:
+        return build_structured_io(
+            no=str(wb.get("no") or overlay.get("no") or ""),
+            operation=str(wb.get("operation") or ""),
+            expected_input=str(wb.get("expected_input") or ""),
+            expected_output=str(wb.get("expected_output") or ""),
+            remarks=str(overlay.get("remarks") or ""),
+        )
+    return structured_io_from_overlay(overlay, lang=language)
+
+
+def classify_sync_status(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    *,
+    language: str = "EN",
+) -> dict[str, Any]:
+    drafts = gtest_state.get("drafts") or {}
+    candidate_ids = {str(c.get("id") or "") for c in (bundle.get("test_candidates") or []) if c.get("id")}
+    rows: list[dict[str, Any]] = []
+    summary: dict[str, int] = {"ok": 0, "no_code": 0, "stale_comment": 0, "stale_body": 0, "orphan_code": 0}
+
+    for cid in sorted(candidate_ids):
+        structured = _structured_io_for_candidate(bundle, cid, language=language)
+        current_spec = compute_spec_hash(structured)
+        current_body = compute_body_hash(structured)
+        draft = drafts.get(cid) or {}
+        if not (draft.get("full_snippet") or draft.get("code_body")):
+            status = "no_code"
+        elif str(draft.get("spec_hash") or "") == current_spec:
+            status = "ok"
+        elif str(draft.get("body_hash") or "") == current_body and draft.get("body_hash"):
+            status = "stale_comment"
+        else:
+            status = "stale_body"
+        summary[status] = summary.get(status, 0) + 1
+        rows.append(
+            {
+                "candidate_id": cid,
+                "status": status,
+                "spec_hash": current_spec,
+                "body_hash": current_body,
+                "draft_spec_hash": draft.get("spec_hash"),
+                "draft_body_hash": draft.get("body_hash"),
+            }
+        )
+
+    for cid in sorted(set(drafts.keys()) - candidate_ids):
+        summary["orphan_code"] += 1
+        rows.append({"candidate_id": cid, "status": "orphan_code"})
+
+    return {"ok": True, "summary": summary, "rows": rows}
+
+
+def regen_comment_only_draft(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    candidate_id: str,
+    *,
+    language: str = "EN",
+) -> dict[str, Any]:
+    from src.engine.gtest_codegen import _build_spec_comments
+
+    cid = str(candidate_id or "").strip()
+    if not cid:
+        return {"ok": False, "error": "candidate_id required"}
+    draft = dict((gtest_state.get("drafts") or {}).get(cid) or {})
+    code_body = str(draft.get("code_body") or "").strip()
+    full = str(draft.get("full_snippet") or "").strip()
+    if not code_body and full:
+        idx = full.find("TEST_F(")
+        if idx >= 0:
+            code_body = full[idx:].strip()
+            end_marker = f"// @alex:end {cid}"
+            if end_marker in code_body:
+                code_body = code_body[: code_body.rfind(end_marker)].strip()
+    if not code_body and not full:
+        return {"ok": False, "error": f"No saved code for {cid}"}
+
+    structured = _structured_io_for_candidate(bundle, cid, language=language)
+    candidate = _candidate_by_id(bundle, cid)
+    logic_block = None
+    if candidate:
+        lid = _candidate_logic_id(candidate)
+        if lid:
+            logic_block = _logic_block_by_id(bundle, lid)
+    given_when = "\n".join((structured.get("given_lines") or []) + (structured.get("when_lines") or []))
+    then_text = "\n".join(structured.get("then_lines") or [])
+    spec_block = _build_spec_comments(
+        candidate=candidate,
+        logic_block=logic_block,
+        given_when_text=given_when,
+        then_text=then_text,
+    )
+    if structured.get("operation"):
+        spec_block = f"// Operation: {structured['operation'][:500]}\n{spec_block}".strip()
+    if structured.get("remarks"):
+        spec_block = f"{spec_block}\n// Remarks: {structured['remarks']}".strip()
+
+    spec_hash = compute_spec_hash(structured)
+    body_hash = compute_body_hash(structured)
+    updated = wrap_draft_markers(
+        cid,
+        {
+            "spec_comment_block": spec_block,
+            "code_body": code_body,
+            "spec_hash": spec_hash,
+            "body_hash": body_hash,
+            "source_kind": "regen_comment",
+        },
+        spec_hash=spec_hash,
+    )
+    updated["body_hash"] = body_hash
+    save_draft(gtest_state, draft_key=cid, draft=updated, engineer_edited=False)
+    return {"ok": True, "candidate_id": cid, "draft": updated}
+
+
+def bulk_regen_comments(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    candidate_ids: list[str],
+    *,
+    language: str = "EN",
+    stale_only: bool = False,
+) -> dict[str, Any]:
+    targets = list(candidate_ids)
+    if stale_only:
+        sync = classify_sync_status(bundle, gtest_state, language=language)
+        targets = [r["candidate_id"] for r in sync.get("rows") or [] if r.get("status") == "stale_comment"]
+    results: list[dict[str, Any]] = []
+    ok_count = 0
+    for cid in targets:
+        one = regen_comment_only_draft(bundle, gtest_state, cid, language=language)
+        results.append(one)
+        if one.get("ok"):
+            ok_count += 1
+    return {"ok": True, "regenerated": ok_count, "results": results}
+
+
+def bulk_delete_code(gtest_state: dict[str, Any], candidate_ids: list[str]) -> dict[str, Any]:
+    return delete_drafts(gtest_state, candidate_ids)
+
+
 def _workbench_row_for_candidate(
     bundle: dict[str, Any],
     candidate_id: str | None,
@@ -202,6 +370,7 @@ def build_workspace_payload(
         "harness": harness.to_dict(),
         "code_variable_map": variable_map,
         "drafts": gtest_state.get("drafts") or {},
+        "tc_code_index": gtest_state.get("tc_code_index") or {},
         "code_style_samples": load_code_style_samples(bundle),
         "copilot_batch": gtest_state.get("copilot_batch") or {},
         "logic_items": logic_items,
@@ -296,10 +465,22 @@ def save_draft(
     draft_key: str,
     draft: dict[str, Any],
     engineer_edited: bool = True,
+    wrap_markers: bool = True,
 ) -> dict[str, Any]:
+    payload = dict(draft)
+    cid = str(draft_key or "").strip()
+    full = str(payload.get("full_snippet") or "").strip()
+    if wrap_markers and cid and full and f"// @alex:begin {cid}" not in full:
+        payload = wrap_draft_markers(cid, payload, spec_hash=str(payload.get("spec_hash") or ""))
     drafts = dict(gtest_state.get("drafts") or {})
+    meta: dict[str, Any] = {}
+    for key in ("code_status", "generation_source", "last_saved_at"):
+        val = payload.get(key)
+        if val:
+            meta[key] = val
     drafts[draft_key] = {
-        **draft,
+        **payload,
+        **meta,
         "updated_at": _now_iso(),
         "engineer_edited": engineer_edited,
     }

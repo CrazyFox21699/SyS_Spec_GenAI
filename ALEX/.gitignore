@@ -9,6 +9,7 @@
 **/web_data/.ssl/*
 **/web_data/*.db
 **/web_data/m365/local_config.json
+**/web_data/m365/session.json
 !**/web_data/uploads/.gitkeep
 !**/web_data/output/.gitkeep
 !**/web_data/.alex/.gitkeep

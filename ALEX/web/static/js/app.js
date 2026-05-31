@@ -36,6 +36,7 @@ const DRAFT_STORAGE_VERSION = "v1";
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const THEME_STORAGE_KEY = "alex.theme";
 const AI_SIGNIN_OPEN_KEY = "alex.aiSigninOpen";
+const COPILOT_WEB_URL = "https://m365.cloud.microsoft/chat/";
 const _autosaveTimers = {};
 
 const API_CACHE_TTL = {
@@ -332,20 +333,54 @@ let state = {
     variableMapDraft: {},
     harnessDraft: {},
     codeStyleSamples: [],
-    engineerNote: "",
-    copilotPromptOverride: "",
+    userRequest: "",
     referenceTestName: "",
     batchResults: null,
     batchRunning: false,
     draftCache: {},
     status: "",
+    syncStatus: null,
+    showStaleOnly: false,
+    progressFilter: "all",
+    caseFilter: "all",
+    copilotWebFollowUp: false,
+    samplePasteDraft: "",
+    apiGenStatus: "idle",
+    dirtyMap: {},
+    stashedEdits: {},
+    savedSnapshot: {},
+    generationSource: {},
+    errorMap: {},
+    mergePreview: null,
   },
+  _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
   guideOpenSection: null,
+  m365Tasks: {
+    byId: {},
+    activeIds: [],
+    pollTimer: null,
+  },
 };
 
 const $ = (sel) => document.querySelector(sel);
 const content = () => $("#content");
+
+/** Safe event binding — avoids "Cannot set properties of null (setting 'onchange')". */
+function bindOnChange(sel, fn) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.onchange = fn;
+}
+
+function bindOnInput(sel, fn) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.oninput = fn;
+}
+
+function bindClick(sel, fn) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.onclick = fn;
+}
 
 function setJobId(id) {
   state.jobId = id;
@@ -975,6 +1010,16 @@ function renderM365KnowledgeBanner() {
       <span class="detail"> ${esc(st.copilot_api_probe_error || "Click Test Copilot API on Review tab or contact IT.")}</span>
     </div>`;
   }
+  if (m365ApiSignedIn() && st.copilot_api_probe_ok !== true) {
+    const extra =
+      st.copilot_scopes_granted === false
+        ? " Bấm <b>Authorize Copilot API</b> rồi <b>Test Copilot API</b> trên tab Review (AI sign-in)."
+        : " Bấm <b>Test Copilot API</b> trên tab Review (AI sign-in) — sign in một lần chưa đủ để bật Generate.";
+    return `<div class="m365-entitlement-banner m365-entitlement-banner--compact" role="status">
+      <strong>M365 đã sign in — cần xác nhận Copilot API.</strong>
+      <span class="detail">${extra}</span>
+    </div>`;
+  }
   const msg = st.client_id_configured
     ? "Sign in on the Review tab to use Resolve with Copilot. Apply locally works without AI for simple patterns."
     : "Microsoft 365 Copilot must be configured by IT before AI features are available. Use Apply locally for simple patterns.";
@@ -1294,6 +1339,383 @@ async function pollCopilotAssist(commandId, onDone) {
       refreshAssistContainers();
     }
   }, 1200);
+}
+
+const M365_TASK_STORAGE_PREFIX = "alex.m365Tasks.";
+
+function m365TaskStorageKey(jobId) {
+  return `${M365_TASK_STORAGE_PREFIX}${jobId || ""}`;
+}
+
+function persistM365TaskIds(jobId, ids) {
+  try {
+    sessionStorage.setItem(m365TaskStorageKey(jobId), JSON.stringify(ids));
+  } catch (_) {
+    /* private mode */
+  }
+}
+
+function readM365TaskIds(jobId) {
+  try {
+    const raw = sessionStorage.getItem(m365TaskStorageKey(jobId));
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function m365TaskLabel(task) {
+  return task?.label || task?.kind || "Copilot";
+}
+
+function hasRunningM365TaskForPage(pageId) {
+  return Object.values(state.m365Tasks.byId || {}).some(
+    (t) => t.status === "running" && (t.target_page === pageId || !t.target_page)
+  );
+}
+
+function m365TaskErrorDetail(t) {
+  const r = t.result || {};
+  const fromTask = String(t.error || "").trim();
+  if (fromTask && fromTask !== "Task failed") return fromTask;
+  const fromResult = String(r.error || "").trim();
+  if (fromResult) return fromResult;
+  const flags = r.validation?.flags || [];
+  if (flags.length) return `Validation: ${flags.join(", ")}`;
+  const raw = String(r.raw_preview || "").trim();
+  if (raw) return `Copilot reply: ${raw.slice(0, 160)}${raw.length > 160 ? "…" : ""}`;
+  return fromTask || "Task failed — thử Copilot web hoặc xem log.";
+}
+
+function refreshM365TaskBanner() {
+  const host = document.getElementById("m365-task-banner");
+  if (!host) return;
+  const tasks = Object.values(state.m365Tasks.byId || {});
+  const running = tasks.filter((t) => t.status === "running");
+  const done = tasks.filter((t) => t.status === "completed" && !t._seen);
+  const failed = tasks.filter((t) => (t.status === "failed" || t.status === "cancelled") && !t._seen);
+
+  if (!running.length && !done.length && !failed.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+
+  host.hidden = false;
+  const lines = [];
+  running.forEach((t) => {
+    const prog = t.progress || {};
+    const progTxt = prog.total ? ` (${prog.current || 0}/${prog.total})` : "";
+    const elapsed = t.elapsed_s || 0;
+    const codeTask = String(t.kind || "").startsWith("code_");
+    const slowHint =
+      codeTask && elapsed >= 15
+        ? `<span class="detail">API chậm (${elapsed}s) — <button type="button" class="btn secondary btn-inline" data-m365-copy-prompt>Hủy &amp; dùng Copilot web</button></span>`
+        : `<span class="detail">Bạn có thể chuyển tab</span>`;
+    lines.push(
+      `<div class="m365-task-banner__row m365-task-banner__row--running">
+        <span class="tag warning">Copilot</span>
+        <span>${esc(m365TaskLabel(t))}${progTxt} — ${elapsed}s</span>
+        ${slowHint}
+        <button type="button" class="btn secondary btn-inline" data-m365-cancel="${esc(t.task_id)}">Hủy</button>
+      </div>`
+    );
+  });
+  done.forEach((t) => {
+    lines.push(
+      `<div class="m365-task-banner__row m365-task-banner__row--done">
+        <span class="tag high">Xong</span>
+        <span>${esc(m365TaskLabel(t))}</span>
+        <button type="button" class="btn btn-inline" data-m365-view="${esc(t.task_id)}">Xem kết quả</button>
+        <button type="button" class="btn secondary btn-inline" data-m365-dismiss="${esc(t.task_id)}">Đóng</button>
+      </div>`
+    );
+  });
+  failed.forEach((t) => {
+    const detail = m365TaskErrorDetail(t);
+    const cat = t.error_category || t.result?.error_category || "";
+    const hasDraft = !!(t.result?.copilot_draft?.full_snippet || t.result?.copilot_draft?.code_body || t.result?.draft?.full_snippet || t.result?.draft?.code_body);
+    const viewBtn = hasDraft
+      ? `<button type="button" class="btn btn-inline" data-m365-view="${esc(t.task_id)}">Xem draft</button>`
+      : "";
+    lines.push(
+      `<div class="m365-task-banner__row m365-task-banner__row--failed">
+        <span class="tag error">Lỗi</span>
+        <span>${esc(m365TaskLabel(t))}${cat ? ` [${esc(cat)}]` : ""}: ${esc(detail)}</span>
+        ${viewBtn}
+        <button type="button" class="btn secondary btn-inline" data-m365-dismiss="${esc(t.task_id)}">Đóng</button>
+      </div>`
+    );
+  });
+  host.innerHTML = lines.join("");
+  host.querySelectorAll("[data-m365-cancel]").forEach((btn) => {
+    btn.onclick = () => cancelM365Task(btn.getAttribute("data-m365-cancel"));
+  });
+  host.querySelectorAll("[data-m365-copy-prompt]").forEach((btn) => {
+    btn.onclick = async () => {
+      const runningTask = tasks.find((t) => t.status === "running");
+      if (runningTask) await cancelM365Task(runningTask.task_id);
+      try {
+        await openTestCodeCopilotWeb(state.testCode.rows || []);
+      } catch (e) {
+        const statusEl = $("#testcode-status");
+        if (statusEl) statusEl.textContent = e.message || String(e);
+      }
+    };
+  });
+  host.querySelectorAll("[data-m365-view]").forEach((btn) => {
+    btn.onclick = () => viewM365TaskResult(btn.getAttribute("data-m365-view"));
+  });
+  host.querySelectorAll("[data-m365-dismiss]").forEach((btn) => {
+    btn.onclick = () => dismissM365Task(btn.getAttribute("data-m365-dismiss"));
+  });
+}
+
+function dismissM365Task(taskId) {
+  if (state.m365Tasks.byId[taskId]) state.m365Tasks.byId[taskId]._seen = true;
+  state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((id) => id !== taskId);
+  persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+  refreshM365TaskBanner();
+}
+
+async function cancelM365Task(taskId) {
+  if (!state.jobId || !taskId) return;
+  try {
+    await api(`/api/review/copilot/m365-tasks/${encodeURIComponent(taskId)}?job_id=${encodeURIComponent(state.jobId)}`, {
+      method: "DELETE",
+    });
+    dismissM365Task(taskId);
+  } catch (e) {
+    refreshM365TaskBanner();
+  }
+}
+
+function viewM365TaskResult(taskId) {
+  const task = state.m365Tasks.byId[taskId];
+  if (!task) return;
+  task._seen = true;
+  refreshM365TaskBanner();
+  const page = task.target_page || (task.kind?.startsWith("code_") ? "test-code" : "logic-review");
+  if (page) showPage(page);
+  const normalized = normalizeTestCodeTaskResult(task);
+  if (normalized.kind === "code_generate" || normalized.kind === "code_refine") {
+    applyTestCodeTaskResult(normalized);
+  }
+  if (task.status === "completed") handleM365TaskComplete(task, { fromView: true });
+}
+
+function applyTestCodeTaskResult(task) {
+  const tc = state.testCode;
+  const result = task.result || {};
+  const draft = result.copilot_draft || result.draft || null;
+  if (!draft?.full_snippet && !draft?.code_body) return;
+  tc.copilotDraft = draft;
+  tc.baselineDraft = result.baseline || null;
+  const cid = tc.selectedCandidateId;
+  if (cid) {
+    if (!tc.generationSource) tc.generationSource = {};
+    tc.generationSource[cid] = "API";
+  }
+  const row = (tc.rows || []).find((r) => r.candidate_id === tc.selectedCandidateId);
+  const merged = { ...draft, full_snippet: draft.full_snippet || draft.code_body, provider: "m365_copilot" };
+  applyTestCodeDraftToUi(merged, row);
+  if (cid) {
+    if (!tc.stashedEdits) tc.stashedEdits = {};
+    tc.stashedEdits[cid] = merged.full_snippet || "";
+    if (!tc.dirtyMap) tc.dirtyMap = {};
+    tc.dirtyMap[cid] = true;
+  }
+  const editor = $("#testcode-code-editor");
+  if (editor) editor.classList.add("field-copilot-changed");
+  const val = result.validation || {};
+  const valEl = document.getElementById("testcode-validation");
+  if (valEl) {
+    valEl.hidden = false;
+    valEl.innerHTML = renderTestCodeValidation(val);
+  }
+  const statusEl = $("#testcode-status");
+  if (statusEl) {
+    const notes = (val.warnings || []).slice(0, 2).join(", ");
+    statusEl.textContent = notes
+      ? `API done — review (${notes}) → Validate / Save Code.`
+      : "API done — review editor → Validate / Save Code.";
+  }
+  setTestCodeApiStatus("done");
+  patchTestCodeCaseStatusUi();
+}
+
+function normalizeTestCodeTaskResult(task) {
+  const result = task?.result || {};
+  const draft = result.copilot_draft || result.draft;
+  if (!draft?.full_snippet && !draft?.code_body) return task;
+  return {
+    ...task,
+    result: { ...result, copilot_draft: draft },
+  };
+}
+
+async function handleM365TaskComplete(task, { fromView = false } = {}) {
+  if (!task || task.status !== "completed") return;
+  const kind = task.kind;
+  const result = task.result || {};
+  const payload = task.payload || result.payload || {};
+
+  if (kind === "code_generate" || kind === "code_refine") {
+    applyTestCodeTaskResult(task);
+    if (payload.batch_all && state.testCode.rows?.length) {
+      const activeRow = state.testCode.rows.find((r) => r.candidate_id === state.testCode.selectedCandidateId);
+      const req = payload.user_request || "";
+      const runBatchAll = () =>
+        startM365Task({
+          kind: "code_batch",
+          label: `Batch GTest (${state.testCode.rows.length} TC)`,
+          targetPage: "test-code",
+          payload: {
+            candidate_ids: state.testCode.rows
+              .filter((r) => r.candidate_id !== state.testCode.selectedCandidateId)
+              .map((r) => r.candidate_id),
+            engineer_note: req,
+            copilot_prompt_override: req,
+            persist_drafts: true,
+            language: state.exportLanguage || "EN",
+            slim: true,
+          },
+        });
+      if (fromView || state.currentPageId === "test-code") {
+        showTestCodeApplyAllBanner(state.testCode.rows, activeRow, runBatchAll, {
+          allJob: true,
+          userRequest: req,
+        });
+      }
+    }
+  }
+
+  if (kind === "code_batch") {
+    invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+    state.testCode.workspace = await fetchGtestWorkspace(true);
+    const statusEl = $("#testcode-status");
+    if (statusEl) {
+      statusEl.textContent = `Batch xong: ${result.generated || 0} ok — mở từng TC → Save.`;
+    }
+  }
+
+  if (kind === "copilot_context_plan" || kind === "copilot_plan") {
+    const logicId = task.logic_id || payload.logic_id;
+    if (logicId) {
+      state.copilotStep[logicId] = "plan";
+      invalidateApiCache(`copilot-session:${state.jobId}:${logicId}`);
+    }
+    if (fromView || state.currentPageId === "logic-review") {
+      await renderLogicReview({ skipSummary: true, force: true });
+    }
+  }
+
+  if (kind === "copilot_write") {
+    const logicId = task.logic_id || payload.logic_id;
+    if (logicId) {
+      state.copilotStep[logicId] = "review";
+      invalidateApiCache(`copilot-session:${state.jobId}:${logicId}`);
+    }
+    if (fromView || state.currentPageId === "logic-review") {
+      await renderLogicReview({ skipSummary: true, force: true });
+    }
+  }
+
+  if (kind === "write_from_row") {
+    const scope = payload.scope || "export";
+    const cid = task.candidate_id || payload.candidate_id;
+    state.copilotRowDraft = state.copilotRowDraft || {};
+    state.copilotRowDraft[scope] = {
+      candidate_id: cid,
+      draft: result.draft || {},
+      diffs: result.diffs || [],
+    };
+    if (fromView || state.currentPageId === "export" || state.currentPageId === "logic-review") {
+      if (state.currentPageId === "export") await renderExport({ preserveSelection: true });
+      else await renderLogicReview({ skipSummary: true, force: true });
+    }
+  }
+}
+
+async function startM365Task({ kind, payload = {}, label = "", logicId = "", candidateId = "", targetPage = "" }) {
+  if (!state.jobId) throw new Error("No active job");
+  const res = await api(`/api/review/copilot/m365-tasks?job_id=${encodeURIComponent(state.jobId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind,
+      payload,
+      label,
+      logic_id: logicId,
+      candidate_id: candidateId,
+      target_page: targetPage,
+    }),
+  });
+  if (res.ok === false) throw new Error(res.error || "Could not start Copilot task");
+  const taskId = res.task_id;
+  state.m365Tasks.byId[taskId] = { ...res, kind, payload, logic_id: logicId, candidate_id: candidateId, target_page: targetPage };
+  state.m365Tasks.activeIds = [...new Set([...(state.m365Tasks.activeIds || []), taskId])];
+  persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+  refreshM365TaskBanner();
+  pollM365Tasks();
+  return res;
+}
+
+function pollM365Tasks() {
+  if (state.m365Tasks.pollTimer) clearInterval(state.m365Tasks.pollTimer);
+  state.m365Tasks.pollTimer = setInterval(async () => {
+    const ids = (state.m365Tasks.activeIds || []).filter((id) => {
+      const t = state.m365Tasks.byId[id];
+      return !t || t.status === "running";
+    });
+    if (!ids.length) {
+      clearInterval(state.m365Tasks.pollTimer);
+      state.m365Tasks.pollTimer = null;
+      return;
+    }
+    for (const id of ids) {
+      try {
+        const st = await api(
+          `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`
+        );
+        const prev = state.m365Tasks.byId[id] || {};
+        state.m365Tasks.byId[id] = { ...prev, ...st, kind: prev.kind || st.kind, payload: prev.payload || st.payload };
+        if (st.status === "completed" || st.status === "failed" || st.status === "cancelled") {
+          state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
+          persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+          if (st.status === "completed") await handleM365TaskComplete(state.m365Tasks.byId[id]);
+          else if (st.status === "failed" && (st.kind === "code_generate" || st.kind === "code_refine")) {
+            setTestCodeApiStatus("failed", st.error || st.result?.error || "Generation failed");
+            const normalized = normalizeTestCodeTaskResult(state.m365Tasks.byId[id]);
+            if (normalized.result?.copilot_draft) applyTestCodeTaskResult(normalized);
+          }
+        }
+      } catch (_) {
+        /* keep polling */
+      }
+    }
+    refreshM365TaskBanner();
+  }, 1500);
+}
+
+async function resumeM365Tasks() {
+  if (!state.jobId) return;
+  const ids = readM365TaskIds(state.jobId);
+  if (!ids.length) return;
+  state.m365Tasks.activeIds = ids;
+  for (const id of ids) {
+    try {
+      const st = await api(
+        `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`
+      );
+      state.m365Tasks.byId[id] = st;
+      if (st.status === "completed") await handleM365TaskComplete(st);
+    } catch (_) {
+      /* task may be gone */
+    }
+  }
+  refreshM365TaskBanner();
+  pollM365Tasks();
 }
 
 function updateSelectedCount() {
@@ -1705,6 +2127,7 @@ function showPage(id, opts = {}) {
   }
   persistCurrentPage(pageId);
   updatePageChrome(pageId);
+  refreshM365TaskBanner();
   $("#nav").querySelectorAll("button").forEach((b) => {
     b.classList.toggle("active", b.dataset.page === pageId);
   });
@@ -1718,7 +2141,13 @@ function showPage(id, opts = {}) {
     guide: renderGuide,
   };
   const render = map[pageId] || renderReview;
-  render();
+  if (pageId === "test-code" && hasRunningM365TaskForPage("test-code")) {
+    render({ ...opts, skipShell: true, preserveSelection: true });
+  } else if (pageId === "logic-review" && hasRunningM365TaskForPage("logic-review")) {
+    render({ ...opts, skipShell: true, skipSummary: true });
+  } else {
+    render(opts);
+  }
 }
 
 async function saveFileSelection() {
@@ -2020,9 +2449,16 @@ async function renderReview() {
       ${renderReviewLoginHub(copilot)}
       <section class="card">
         <h3 class="section-kicker">Import existing TestSpec (Excel)</h3>
-        <p class="detail">Chỉ cần file <b>.xlsx</b> — không cần bundle. Tool đọc sheet có header giống export <b>Final TestSpec</b> của ALEX (Test Function, UseCase, Operation, Expected value for input/output, …).</p>
-        <p class="detail">Nếu file Excel công ty dùng tên cột khác, cần đổi header cho khớp hoặc báo team thêm mapping — import sẽ báo lỗi preview trước khi tạo job.</p>
+        <p class="detail">Upload file <b>.xlsx</b> TestSpec thực tế — hỗ trợ template <b>JP</b> (機能テスト, 手順, 入力/出力に対する期待値) và export EN của ALEX.</p>
+        <p class="detail">Cột <b>手順</b> = mô tả thao tác; <b>Given/When/Then</b> đọc từ cột input/output. Tool tự nhận JP/EN từ header.</p>
         <div class="toolbar-row">
+          <label class="detail">Ngôn ngữ import
+            <select id="import-testspec-language" class="gtest-input gtest-select">
+              <option value="">Tự nhận (JP/EN)</option>
+              <option value="JP">JP — 日本語 TestSpec</option>
+              <option value="EN">EN</option>
+            </select>
+          </label>
           <label class="btn secondary btn-with-icon upload-label">${icon("upload", "alex-icon--btn")} Import TestSpec (.xlsx)<input type="file" id="import-testspec-file" accept=".xlsx,.xlsm" hidden /></label>
           <label class="btn secondary btn-with-icon upload-label" title="Chỉ dùng khi restore job từ máy khác">${icon("upload", "alex-icon--btn")} Restore ui_bundle.yaml (advanced)<input type="file" id="import-bundle-file" accept=".yaml,.yml" hidden /></label>
         </div>
@@ -2063,7 +2499,7 @@ async function renderReview() {
       <p id="review-run-status" class="detail"></p>
       <div id="review-results" style="display:none;margin-top:0.75rem"></div>`;
 
-    $("#file-upload").onchange = async () => {
+    bindOnChange("#file-upload", async () => {
       const inp = $("#file-upload");
       if (!inp.files.length) return;
       const fd = new FormData();
@@ -2083,19 +2519,21 @@ async function renderReview() {
         $("#src-status").textContent = e.message;
       }
       inp.value = "";
-    };
+    });
     $("#btn-review-guide").onclick = () => openGuideSection("guide-start");
     bindTabHelpLinks();
 
-    async function importJobFromFile(inputId, endpoint) {
+    async function importJobFromFile(inputId, endpoint, { language = "" } = {}) {
       const inp = $(inputId);
       if (!inp?.files?.length) return;
       const statusEl = $("#import-status");
       statusEl.textContent = "Importing…";
       const fd = new FormData();
       fd.append("file", inp.files[0]);
+      const lang = language || $("#import-testspec-language")?.value || "";
+      const url = lang && endpoint.includes("import-testspec") ? `${endpoint}?language=${encodeURIComponent(lang)}` : endpoint;
       try {
-        const r = await fetch(endpoint, { method: "POST", body: fd });
+        const r = await fetch(url, { method: "POST", body: fd });
         const text = await r.text();
         let data = {};
         try {
@@ -2111,6 +2549,7 @@ async function renderReview() {
           throw new Error(msg);
         }
         setJobId(data.job_id);
+        if (data.export_language) state.exportLanguage = data.export_language;
         invalidateApiCache();
         await refreshJobSummary(true);
         const sheets = (data.sheet_summary || [])
@@ -2124,10 +2563,10 @@ async function renderReview() {
       inp.value = "";
     }
 
-    $("#import-testspec-file").onchange = () =>
-      importJobFromFile("#import-testspec-file", "/api/jobs/import-testspec");
-    $("#import-bundle-file").onchange = () =>
-      importJobFromFile("#import-bundle-file", "/api/jobs/import-bundle");
+    bindOnChange("#import-testspec-file", () =>
+      importJobFromFile("#import-testspec-file", "/api/jobs/import-testspec"));
+    bindOnChange("#import-bundle-file", () =>
+      importJobFromFile("#import-bundle-file", "/api/jobs/import-bundle"));
 
     $("#btn-clear-files").onclick = async () => {
       $("#src-status").textContent = "Clearing uploaded files…";
@@ -2146,13 +2585,13 @@ async function renderReview() {
       }
     };
 
-    $("#chk-all").onchange = () => {
+    bindOnChange("#chk-all", () => {
       const on = $("#chk-all").checked;
       state.files.forEach((f) => (f.selected = on));
       scheduleSaveSelection();
       renderSourcesTable();
       updateReviewButton();
-    };
+    });
 
     $("#btn-review").onclick = async () => {
       $("#progress-area").style.display = "block";
@@ -2650,11 +3089,34 @@ function renderIssueList(issues) {
     .join("")}</div>`;
 }
 
+function renderCopilotUnderstandingBanner(pack, plan) {
+  const fk = pack?.footnote_knowledge || {};
+  const openQs = [
+    ...(plan?.open_questions || []).map((q) => (typeof q === "string" ? q : q.question || q.text || "")),
+    ...(pack?.logic?.missing_definitions || []).map((d) => `Thiếu định nghĩa: ${d}`),
+  ].filter(Boolean);
+  const unresolved = (fk.footnotes || []).filter((f) => f.needs_clarification || !f.resolved);
+  unresolved.forEach((f) => {
+    openQs.push(`Footnote ${f.ref || "?"} chưa rõ — ${f.condition_name || "cross-spec ref"}`);
+  });
+  if (!openQs.length) return "";
+  const pct = fk.understanding_percent != null ? `${fk.understanding_percent}%` : "—";
+  return `<div class="copilot-clarify-banner">
+    <p><b>Copilot cần làm rõ trước khi viết testcase</b> <span class="detail">(hiểu spec: ${esc(pct)})</span></p>
+    <ul class="copilot-clarify-list">${openQs
+      .slice(0, 8)
+      .map((q) => `<li>${esc(q)}</li>`)
+      .join("")}</ul>
+    <p class="detail">Trả lời ngắn trong ô Engineer note bên dưới, hoặc bấm <b>Send follow-up</b>. Không đoán giá trị cho (*n).</p>
+  </div>`;
+}
+
 function renderCopilotContextSummary(pack) {
-  if (!pack) return "<p class='detail'>Build context to see logic summary, signals, and coverage gaps.</p>";
+  if (!pack) return "<p class='detail'>Bấm <b>Hiểu spec</b> để Copilot đọc logic, footnote (*n) và gap coverage.</p>";
   const gaps = pack.coverage_gaps || {};
   const vm = pack.verification_matrix || {};
   const logic = pack.logic || {};
+  const fk = pack.footnote_knowledge || {};
   const constraints = pack.engineer_input?.parsed_constraints || {};
   const constraintLines = Object.entries(constraints)
     .map(([sig, def]) => `<li><code>${esc(sig)}</code> → ${esc(def)}</li>`)
@@ -2663,9 +3125,16 @@ function renderCopilotContextSummary(pack) {
     vm.one_to_many_count || vm.many_to_one_count || vm.partial_assert_count
       ? `<p class="detail">Verify matrix: ${vm.one_to_many_count || 0} same-input variants · ${vm.many_to_one_count || 0} same-output variants · ${vm.partial_assert_count || 0} partial assert</p>`
       : "";
+  const footLine =
+    fk.unresolved_footnote_count > 0
+      ? `<p class="detail warn">Footnote chưa resolve: ${fk.unresolved_footnote_count} — Copilot sẽ hỏi thay vì hardcode.</p>`
+      : fk.footnotes?.length
+        ? `<p class="detail">Footnotes linked: ${fk.footnotes.length}</p>`
+        : "";
   return `<div class="copilot-context-summary">
     <p><b>${esc(logic.control_name || pack.logic_id)}</b> · parse <code>${esc(logic.parse_status || "—")}</code></p>
     <p class="detail">Test cases: ${(pack.testcases || []).length} · Paths: ${(pack.paths || []).length} · Missing paths: ${gaps.missing_path_count ?? 0} · Compliance fails: ${gaps.compliance_fail_count ?? 0} · Boundary gaps: ${gaps.boundary_gap_count ?? 0}</p>
+    ${footLine}
     ${vmLine}
     ${constraintLines ? `<ul class="detail">${constraintLines}</ul>` : ""}
     ${(pack.evidence?.attachments || []).length ? `<p class="detail">Attachments: ${pack.evidence.attachments.map((a) => esc(a.name)).join(", ")}</p>` : ""}
@@ -2798,19 +3267,17 @@ function renderCopilotWorkbench(inbox, { engineerNote = "", attachments = [], lo
       <b>Copilot testcase session</b>
       <span class="detail">Focus term: <code>${esc(inboxFocusTerm(inbox)?.term || "—")}</code></span>
     </div>
-    <p class="detail">ALEX builds structured context → Copilot plans → you adjust → Copilot writes full testcase rows → review &amp; apply.</p>
+    <p class="detail">ALEX đọc spec → Copilot hiểu footnote (*n) → plan → viết testcase → bạn review &amp; apply.</p>
     ${renderM365KnowledgeBanner()}
     ${renderM365EntitlementBanner(state.m365Status, { compact: true })}
+    ${renderCopilotUnderstandingBanner(pack, plan)}
     <div class="copilot-stepper">${stepper}</div>
-    <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Engineer knowledge: ranges, rules, signal meanings…">${esc(engineerNote)}</textarea>
+    <textarea id="definition-workbench-note" class="clarify-box definition-query-box" placeholder="Ghi chú / trả lời câu hỏi Copilot (range, ý nghĩa signal, footnote *1…)">${esc(engineerNote)}</textarea>
     <div class="definition-workbench-actions">
-      <button class="btn secondary" id="btn-definition-local-apply" type="button">Apply locally</button>
-      <button class="btn secondary" id="btn-copilot-build-context" type="button">Build context</button>
-      <button class="btn secondary" id="btn-copilot-generate-plan" type="button" ${m365KnowledgeReady() ? "" : "disabled"}>Generate plan</button>
-      <button class="btn secondary" id="btn-copilot-write-drafts" type="button" ${m365KnowledgeReady() ? "" : "disabled"}>Write test cases</button>
-      <button class="btn" id="btn-copilot-apply-selected" type="button" ${diffs.length ? "" : "disabled"}>Apply selected</button>
-      <label class="btn secondary upload-label">Attach / screenshot<input type="file" id="logic-attachment-upload" multiple accept="image/*,.pdf,.docx,.txt,.xlsx" hidden /></label>
-      <label class="btn secondary upload-label">Style samples<input type="file" id="style-sample-upload" accept=".json,.txt,.csv" hidden /></label>
+      <button class="btn secondary" id="btn-copilot-understand-spec" type="button">Hiểu spec (Copilot)</button>
+      <button class="btn secondary" id="btn-copilot-write-drafts" type="button" ${m365KnowledgeReady() && step !== "context" ? "" : "disabled"}>Viết testcase</button>
+      <button class="btn" id="btn-copilot-apply-selected" type="button" ${diffs.length ? "" : "disabled"}>Apply đã chọn</button>
+      <label class="btn secondary upload-label">Ảnh spec<input type="file" id="logic-attachment-upload" multiple accept="image/*,.pdf,.docx,.txt,.xlsx" hidden /></label>
     </div>
     ${attachments.length ? `<div class="definition-attachments detail">${attachments.map((a) => `<div><b>${esc(a.name)}</b> · ${esc(a.kind || "file")}${a.definition_count ? ` · ${esc(String(a.definition_count))} def(s)` : ""}</div>`).join("")}</div>` : ""}
     <div data-copilot-panel="context" ${step === "context" ? "" : "hidden"}>${renderCopilotContextSummary(pack)}</div>
@@ -3229,6 +3696,50 @@ function m365KnowledgeReady() {
   return st.copilot_api_probe_ok === true;
 }
 
+function m365KnowledgeBlockReason() {
+  const st = state.m365Status || {};
+  if (!m365ApiSignedIn()) {
+    if (st.client_id_configured) return "Chưa sign in M365 — mở tab Review → AI sign-in → Sign in.";
+    return "Chưa cấu hình M365 Client ID — liên hệ IT hoặc nhập trên tab Review.";
+  }
+  if (st.copilot_chat_entitled === false) {
+    if (st.not_entitled_reason === "msa") {
+      return "Tài khoản Microsoft cá nhân — Copilot API không khả dụng. Dùng tài khoản công ty có license Copilot.";
+    }
+    return "Tài khoản chưa có license Microsoft 365 Copilot — liên hệ IT.";
+  }
+  if (st.copilot_api_probe_ok === false) {
+    return (
+      st.copilot_api_probe_error ||
+      "Copilot API probe thất bại — tab Review → Test Copilot API (hoặc Authorize Copilot API nếu chưa authorize)."
+    );
+  }
+  if (st.copilot_scopes_granted === false) {
+    return "Đã sign in nhưng chưa authorize Copilot API — tab Review → Authorize Copilot API.";
+  }
+  if (st.copilot_api_probe_ok !== true) {
+    return "Đang chờ xác nhận Copilot API — tab Review → Test Copilot API (hoặc đợi vài giây sau sign in).";
+  }
+  return "";
+}
+
+function syncTestCodeCopilotControls() {
+  const btn = $("#btn-testcode-copilot");
+  if (!btn || btn.dataset.busy === "1") return;
+  const ready = m365KnowledgeReady();
+  btn.disabled = !ready;
+  btn.title = ready ? "Gọi M365 Copilot tự động" : m365KnowledgeBlockReason();
+  const hint = $("#testcode-copilot-hint");
+  if (!hint) return;
+  if (ready) {
+    hint.hidden = true;
+    hint.textContent = "";
+  } else {
+    hint.hidden = false;
+    hint.textContent = m365KnowledgeBlockReason();
+  }
+}
+
 async function runM365CopilotProbe() {
   setM365AuthMessage("Testing Copilot API (Graph conversation)…");
   const res = await api("/api/m365/copilot-probe", { method: "POST" });
@@ -3513,6 +4024,7 @@ async function loadM365Status() {
   }
   refreshReviewM365Tile();
   populateM365SetupForm();
+  syncTestCodeCopilotControls();
 }
 
 function populateM365SetupForm() {
@@ -3905,8 +4417,18 @@ async function signInM365() {
     if (poll.ok && poll.status === "completed") {
       hideM365LoginPanel();
       await loadM365Status();
-      pollStatus(`Signed in: ${poll.display_name || "M365 user"}.`);
+      pollStatus(`Signed in: ${poll.display_name || "M365 user"}. Đang kiểm tra Copilot API…`);
       refreshReviewM365Tile();
+      if (!m365KnowledgeReady()) {
+        try {
+          await runM365CopilotProbe();
+        } catch (_) {
+          pollStatus(
+            `Signed in: ${poll.display_name || "M365 user"}. Probe chưa OK — tab Review → Test Copilot API.`
+          );
+        }
+      }
+      syncTestCodeCopilotControls();
       return poll;
     }
     if (poll.status === "failed") {
@@ -4514,35 +5036,24 @@ function bindWorkbookFocusEditor(rows, language, scope, onReload, statusElSelect
       const focusRow = currentFocusRow(rows, scope);
       if (!focusRow?.candidate_id) return;
       const statusEl = statusElSelector ? document.querySelector(statusElSelector) : null;
-      if (statusEl) statusEl.textContent = "M365 Copilot improving row…";
+      if (!m365KnowledgeReady()) {
+        if (statusEl) statusEl.textContent = "Authorize Copilot API trước.";
+        return;
+      }
       try {
-        const res = await api(
-          `/api/review/copilot/write-from-row?job_id=${encodeURIComponent(state.jobId)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              candidate_id: focusRow.candidate_id,
-              engineer_note: "",
-              language: state.exportLanguage || language || "EN",
-            }),
-          }
-        );
-        if (!res.ok) {
-          const action = res.user_action ? ` — ${res.user_action}` : "";
-          if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Copilot row improve failed"}${action}`;
-          return;
-        }
-        const draft = res.draft || {};
-        state.copilotRowDraft = state.copilotRowDraft || {};
-        state.copilotRowDraft[scope] = {
-          candidate_id: focusRow.candidate_id,
-          draft,
-          diffs: res.diffs || [],
-        };
-        if (statusEl) statusEl.textContent = "Copilot row preview ready — review diff below, then Apply.";
-        onReload();
-        document.getElementById(`${scope}-workbook-anchor`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        await startM365Task({
+          kind: "write_from_row",
+          label: `Row ${focusRow.candidate_id}`,
+          candidateId: focusRow.candidate_id,
+          targetPage: scope === "logic" ? "logic-review" : "export",
+          payload: {
+            candidate_id: focusRow.candidate_id,
+            engineer_note: "",
+            language: state.exportLanguage || language || "EN",
+            scope,
+          },
+        });
+        if (statusEl) statusEl.textContent = "Copilot row chạy nền — xem banner trên cùng.";
       } catch (e) {
         if (statusEl) statusEl.textContent = e.message;
       }
@@ -5688,6 +6199,10 @@ async function renderLogicReview(opts = {}) {
     bindNoJob();
     return;
   }
+  if (opts.skipShell && document.querySelector(".alex-layout-logic")) {
+    refreshM365TaskBanner();
+    return;
+  }
   const loading = !document.querySelector(".alex-layout-logic");
   if (loading) {
     content().innerHTML = `<p class="detail">Loading logic review…</p>`;
@@ -6044,7 +6559,7 @@ async function renderLogicReview(opts = {}) {
         }),
       });
     };
-    $("#logic-attachment-upload").onchange = async () => {
+    bindOnChange("#logic-attachment-upload", async () => {
       const inp = $("#logic-attachment-upload");
       if (!inp.files.length) return;
       const fd = new FormData();
@@ -6067,7 +6582,7 @@ async function renderLogicReview(opts = {}) {
         if (attachStatus) attachStatus.textContent = e.message;
       }
       inp.value = "";
-    };
+    });
     const localApplyBtn = $("#btn-definition-local-apply");
     if (localApplyBtn) {
       localApplyBtn.onclick = async () => {
@@ -6088,6 +6603,33 @@ async function renderLogicReview(opts = {}) {
           if (statusEl) statusEl.textContent = e.message;
         } finally {
           localApplyBtn.disabled = false;
+        }
+      };
+    }
+    const understandSpecBtn = $("#btn-copilot-understand-spec");
+    if (understandSpecBtn) {
+      understandSpecBtn.onclick = async () => {
+        const note = $("#definition-workbench-note")?.value || "";
+        const term = inboxFocusTerm(inbox)?.term || "";
+        const statusEl = document.querySelector("[data-definition-query-status]");
+        if (!m365KnowledgeReady()) {
+          if (statusEl) statusEl.textContent = "Authorize Copilot API trước (Review → Test Copilot API).";
+          return;
+        }
+        understandSpecBtn.disabled = true;
+        try {
+          await startM365Task({
+            kind: "copilot_context_plan",
+            label: `Hiểu spec ${item.logic_id}`,
+            logicId: item.logic_id,
+            targetPage: "logic-review",
+            payload: { logic_id: item.logic_id, note, term },
+          });
+          if (statusEl) statusEl.textContent = "Copilot chạy nền (context + plan) — xem banner trên cùng.";
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e.message;
+        } finally {
+          understandSpecBtn.disabled = !m365KnowledgeReady();
         }
       };
     }
@@ -6132,23 +6674,16 @@ async function renderLogicReview(opts = {}) {
           if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
           return;
         }
-        if (statusEl) statusEl.textContent = "Generating plan via Copilot…";
         generatePlanBtn.disabled = true;
         try {
-          const res = await api(`/api/review/copilot/plan?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, note, term }),
+          await startM365Task({
+            kind: "copilot_plan",
+            label: `Plan ${item.logic_id}`,
+            logicId: item.logic_id,
+            targetPage: "logic-review",
+            payload: { logic_id: item.logic_id, note, term },
           });
-          if (res.ok === false) {
-            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Plan failed"}`;
-            return;
-          }
-          state.copilotStep[item.logic_id] = "plan";
-          invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
-          const count = (res.plan?.plan_items || []).length;
-          if (statusEl) statusEl.textContent = `Plan ready: ${count} item(s). Review, then Write test cases.`;
-          await renderLogicReview({ skipSummary: true });
+          if (statusEl) statusEl.textContent = "Copilot plan chạy nền — xem banner trên cùng.";
         } catch (e) {
           if (statusEl) statusEl.textContent = e.message;
         } finally {
@@ -6193,24 +6728,16 @@ async function renderLogicReview(opts = {}) {
           if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
           return;
         }
-        if (statusEl) statusEl.textContent = "Writing testcase drafts via Copilot…";
         writeDraftsBtn.disabled = true;
         try {
-          const res = await api(`/api/review/copilot/write?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id }),
+          await startM365Task({
+            kind: "copilot_write",
+            label: `Viết testcase ${item.logic_id}`,
+            logicId: item.logic_id,
+            targetPage: "logic-review",
+            payload: { logic_id: item.logic_id },
           });
-          if (!res.ok) throw new Error(res.error || "Write failed");
-          state.copilotStep[item.logic_id] = "review";
-          invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
-          const noop = res.noop_count || 0;
-          const batch = res.batch_count || 1;
-          const retry = res.retry_count || 0;
-          if (statusEl) {
-            statusEl.textContent = `Drafts ready: ${(res.drafts || []).length} row(s) · ${batch} batch(es)${retry ? ` · ${retry} NO-OP retry` : ""}${noop ? ` · ${noop} no-op still flagged` : ""}. Review and Apply selected.`;
-          }
-          await renderLogicReview({ skipSummary: true });
+          if (statusEl) statusEl.textContent = "Copilot viết testcase chạy nền — xem banner trên cùng.";
         } catch (e) {
           if (statusEl) statusEl.textContent = e.message;
         } finally {
@@ -6568,10 +7095,10 @@ async function renderExport() {
       }
     };
   });
-  $("#export-draft-language").onchange = (e) => {
+  bindOnChange("#export-draft-language", (e) => {
     state.exportLanguage = e.target.value;
     renderExport();
-  };
+  });
   const translateBtn = $("#btn-translate-workbook-jp");
   if (translateBtn) {
     translateBtn.onclick = async () => {
@@ -6636,9 +7163,13 @@ function applyTestCodeDraftToUi(draft, row) {
   const commentEl = $("#testcode-spec-comments");
   const codeEl = $("#testcode-code-editor");
   if (commentEl && draft) commentEl.value = draft.spec_comment_block || "";
-  if (codeEl && draft) codeEl.value = draft.full_snippet || draft.code_body || "";
-  const strip = document.getElementById("testcode-io-strip");
-  if (strip && row) strip.outerHTML = renderTestCodeIoStrip(row);
+  if (codeEl && draft) {
+    state._suppressTestCodeEditorInput = true;
+    codeEl.value = draft.full_snippet || draft.code_body || "";
+    state._suppressTestCodeEditorInput = false;
+  }
+  const strip = document.getElementById("testcode-io-context");
+  if (strip && row) strip.outerHTML = renderTestCodeIoContext(row);
   const logicSel = $("#testcode-logic-select");
   if (logicSel && state.testCode.selectedLogicId) logicSel.value = state.testCode.selectedLogicId;
   const headName = document.querySelector(".alex-testcode-editor__head > .detail");
@@ -6652,11 +7183,22 @@ function applyTestCodeDraftToUi(draft, row) {
       `<span class="tag warning">Unmapped: ${draft.unmapped_signals.map((s) => esc(s)).join(", ")}</span>`
     );
   }
+  patchTestCodeCaseStatusUi();
 }
 
 async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows || []) {
   if (!candidateId || state.testCode.switching) return;
-  if (candidateId === state.testCode.selectedCandidateId && state.testCode.draft?.full_snippet) {
+  const prevId = state.testCode.selectedCandidateId;
+  if (prevId && prevId !== candidateId) {
+    stashTestCodeEditor(prevId);
+    if (state.testCode.dirtyMap?.[prevId]) {
+      const ok = window.confirm(
+        `Unsaved changes on ${prevId}. Switch testcase anyway? Edits stay stashed for that testcase.`
+      );
+      if (!ok) return;
+    }
+  }
+  if (candidateId === prevId && state.testCode.draft != null && !state.testCode.dirtyMap?.[prevId]) {
     return;
   }
   state.testCode.switching = true;
@@ -6667,21 +7209,15 @@ async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows |
   const statusEl = $("#testcode-status");
   if (statusEl) statusEl.textContent = "Loading…";
   try {
-    const draftKey = candidateId;
-    const saved = (state.testCode.workspace?.drafts || {})[draftKey];
-    const cacheKey = `${candidateId}:${state.testCode.selectedLogicId || ""}:${JSON.stringify(state.testCode.variableMapDraft || {})}`;
-    let draft = state.testCode.draftCache[cacheKey];
-    if (saved?.full_snippet) {
-      draft = saved;
-      if (saved.source_kind === "copilot") state.testCode.copilotDraft = saved;
-    } else if (!draft) {
-      draft = await regenerateGtestDraft();
-    }
+    const draft = resolveDraftForCandidate(candidateId);
     state.testCode.draft = draft;
-    state.testCode.lastDraftKey = draftKey;
+    state.testCode.lastDraftKey = candidateId;
     applyTestCodeDraftToUi(draft, row);
+    patchTestCodeCaseStatusUi();
+    refreshTestCodePromptPreview(rows);
     if (statusEl) {
-      statusEl.textContent = "Ready — edit code, then Copy.";
+      const wf = computeTestCodeWorkflowStatus(candidateId);
+      statusEl.textContent = `Selected ${candidateId} [${wf}]. Steps 2–3 → generate → Step 4 Save.`;
     }
   } catch (e) {
     if (statusEl) statusEl.textContent = e.message;
@@ -6770,6 +7306,917 @@ function pickPreferredTestCodeRow(rows) {
     rows.find((r) => r.review_status === "ready") ||
     rows[0]
   );
+}
+
+const TC_WF = {
+  NO_CODE: "NO_CODE",
+  DRAFT: "DRAFT",
+  SAVED: "SAVED",
+  MODIFIED_UNSAVED: "MODIFIED_UNSAVED",
+  NEEDS_REVIEW: "NEEDS_REVIEW",
+  ERROR: "ERROR",
+};
+
+function getTestCodeDraftRecord(cid) {
+  return (state.testCode.workspace?.drafts || {})[cid] || {};
+}
+
+function isLegacyTestCodeDraft(cid) {
+  const draft = getTestCodeDraftRecord(cid);
+  const has = String(draft.full_snippet || draft.code_body || "").trim().length > 0;
+  return has && !String(draft.code_status || "").trim();
+}
+
+function formatTestCodeTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function hydrateTestCodeWorkflowFromWorkspace(ws, { fullReset = false } = {}) {
+  const tc = state.testCode;
+  if (fullReset) {
+    tc.dirtyMap = {};
+    tc.stashedEdits = {};
+    tc.savedSnapshot = {};
+    tc.generationSource = {};
+  }
+  if (!tc.generationSource) tc.generationSource = {};
+  if (!tc.savedSnapshot) tc.savedSnapshot = {};
+  for (const [cid, draft] of Object.entries(ws?.drafts || {})) {
+    if (draft?.generation_source) tc.generationSource[cid] = draft.generation_source;
+    const text = String(draft?.full_snippet || draft?.code_body || "");
+    if (text && fullReset) tc.savedSnapshot[cid] = text;
+  }
+}
+
+function renderTestCodeCaseMeta(cid, row) {
+  if (!cid) return "";
+  const draft = getTestCodeDraftRecord(cid);
+  const wf = computeTestCodeWorkflowStatus(cid);
+  const event = row?.event || row?.test_function || "";
+  const parts = [
+    `<p class="alex-testcode-case-title"><code>${esc(cid)}</code> ${esc(event)} <span class="tag ${testCodeWorkflowTagClass(wf)} testcode-wf-badge">[${esc(testCodeWorkflowLabel(wf))}]</span></p>`,
+  ];
+  if (draft.last_saved_at) {
+    parts.push(`<p class="detail testcode-case-meta-line">Last saved: ${esc(formatTestCodeTimestamp(draft.last_saved_at))}</p>`);
+  }
+  if (draft.generation_source) {
+    parts.push(`<p class="detail testcode-case-meta-line">Source: ${esc(draft.generation_source)}</p>`);
+  }
+  if (isLegacyTestCodeDraft(cid) && !state.testCode.dirtyMap?.[cid]) {
+    parts.push(`<p class="detail testcode-legacy-hint">Legacy draft — click Save Code to mark as SAVED.</p>`);
+  }
+  return `<div class="alex-testcode-case-meta" id="testcode-case-meta">${parts.join("")}</div>`;
+}
+
+function mergedExportFilename(preview) {
+  const job = String(state.jobId || "job").replace(/[^\w.-]+/g, "_");
+  const ts = String(preview?.timestamp || new Date().toISOString()).replace(/[:.]/g, "-").slice(0, 19);
+  return `ALEX_GTest_${job}_${ts}.cpp`;
+}
+
+function getTestCodeEditorContent(cid) {
+  if (!cid) return "";
+  const tc = state.testCode;
+  if (cid === tc.selectedCandidateId) {
+    return String($("#testcode-code-editor")?.value || "").trim();
+  }
+  if (tc.stashedEdits && tc.stashedEdits[cid] != null) {
+    return String(tc.stashedEdits[cid]).trim();
+  }
+  const draft = getTestCodeDraftRecord(cid);
+  return String(draft.full_snippet || draft.code_body || "").trim();
+}
+
+function computeTestCodeWorkflowStatus(cid) {
+  if (!cid) return TC_WF.NO_CODE;
+  const tc = state.testCode;
+  if (tc.errorMap?.[cid]?.length) return TC_WF.ERROR;
+  if (tc.dirtyMap?.[cid]) {
+    const codeStatus = String(getTestCodeDraftRecord(cid).code_status || "").toUpperCase();
+    return codeStatus === "SAVED" ? TC_WF.MODIFIED_UNSAVED : TC_WF.DRAFT;
+  }
+
+  const content = getTestCodeEditorContent(cid);
+  const draft = getTestCodeDraftRecord(cid);
+  const persisted = String(draft.full_snippet || draft.code_body || "").trim();
+  const codeStatus = String(draft.code_status || "").toUpperCase();
+
+  if (!content && !persisted) return TC_WF.NO_CODE;
+
+  const syncSt = testCodeSyncStatusFor(cid);
+  if (codeStatus === "SAVED") {
+    if (syncSt === "stale_comment" || syncSt === "stale_body" || syncSt === "orphan_code") {
+      return TC_WF.NEEDS_REVIEW;
+    }
+    return TC_WF.SAVED;
+  }
+  if (syncSt === "stale_comment" || syncSt === "stale_body") return TC_WF.NEEDS_REVIEW;
+  if (isLegacyTestCodeDraft(cid)) return TC_WF.DRAFT;
+  if (content || persisted) return TC_WF.DRAFT;
+  return TC_WF.NO_CODE;
+}
+
+function testCodeWorkflowLabel(wf) {
+  return wf || TC_WF.NO_CODE;
+}
+
+function testCodeWorkflowTagClass(wf) {
+  if (wf === TC_WF.SAVED) return "ok";
+  if (wf === TC_WF.MODIFIED_UNSAVED || wf === TC_WF.NEEDS_REVIEW) return "warning";
+  if (wf === TC_WF.ERROR) return "error";
+  return "testcode-wf-neutral";
+}
+
+function testCodeFilterMatches(wf, filter) {
+  if (filter === "all") return true;
+  if (filter === "no_code") return wf === TC_WF.NO_CODE;
+  if (filter === "has_code") return [TC_WF.SAVED, TC_WF.DRAFT, TC_WF.MODIFIED_UNSAVED].includes(wf);
+  if (filter === "needs_review") return wf === TC_WF.NEEDS_REVIEW;
+  if (filter === "unsaved") return wf === TC_WF.MODIFIED_UNSAVED;
+  return true;
+}
+
+function computeTestCodeProgress(rows) {
+  const c = { total: rows.length, saved: 0, draft: 0, no_code: 0, unsaved: 0, review: 0 };
+  for (const row of rows || []) {
+    const wf = computeTestCodeWorkflowStatus(row.candidate_id);
+    if (wf === TC_WF.SAVED) c.saved++;
+    else if (wf === TC_WF.DRAFT) c.draft++;
+    else if (wf === TC_WF.NO_CODE) c.no_code++;
+    else if (wf === TC_WF.MODIFIED_UNSAVED) c.unsaved++;
+    else if (wf === TC_WF.NEEDS_REVIEW) c.review++;
+  }
+  return c;
+}
+
+function renderTestCodeProgressSummaryText(rows) {
+  const c = computeTestCodeProgress(rows);
+  return `Code progress: Total: ${c.total} | Saved: ${c.saved} | Draft: ${c.draft} | No code: ${c.no_code} | Unsaved: ${c.unsaved} | Review: ${c.review}`;
+}
+
+function stashTestCodeEditor(cid) {
+  if (!cid) return;
+  const text = $("#testcode-code-editor")?.value ?? "";
+  if (!state.testCode.stashedEdits) state.testCode.stashedEdits = {};
+  state.testCode.stashedEdits[cid] = text;
+}
+
+function markTestCodeDirty() {
+  if (state._suppressTestCodeEditorInput) return;
+  const cid = state.testCode.selectedCandidateId;
+  if (!cid) return;
+  if (!state.testCode.dirtyMap) state.testCode.dirtyMap = {};
+  state.testCode.dirtyMap[cid] = true;
+  stashTestCodeEditor(cid);
+  patchTestCodeCaseStatusUi();
+}
+
+function clearTestCodeDirty(cid, savedText) {
+  if (!state.testCode.dirtyMap) state.testCode.dirtyMap = {};
+  state.testCode.dirtyMap[cid] = false;
+  if (!state.testCode.stashedEdits) state.testCode.stashedEdits = {};
+  state.testCode.stashedEdits[cid] = savedText;
+  if (!state.testCode.savedSnapshot) state.testCode.savedSnapshot = {};
+  state.testCode.savedSnapshot[cid] = savedText;
+  patchTestCodeCaseStatusUi();
+}
+
+function resolveDraftForCandidate(cid) {
+  const saved = getTestCodeDraftRecord(cid);
+  const stashed = state.testCode.stashedEdits?.[cid];
+  const full = stashed != null ? stashed : String(saved.full_snippet || saved.code_body || "");
+  const bodyStart = full.indexOf("TEST_F(");
+  const testStart = full.indexOf("TEST(");
+  const idx = bodyStart >= 0 ? bodyStart : testStart >= 0 ? testStart : -1;
+  return {
+    ...saved,
+    test_name: saved.test_name || cid,
+    full_snippet: full,
+    code_body: idx >= 0 ? full.slice(idx) : full,
+  };
+}
+
+function inferGenerationSourceForSave(key) {
+  const tc = state.testCode;
+  if (tc.generationSource?.[key]) return tc.generationSource[key];
+  if (tc.copilotDraft?.full_snippet && $("#testcode-code-editor")?.value === tc.copilotDraft.full_snippet) {
+    return "COPILOT_WEB";
+  }
+  if (tc.apiGenStatus === "done") return "API";
+  return "MANUAL";
+}
+
+function testCodeStatusIcon(status) {
+  const wf = typeof status === "string" && status.includes("_") ? status : computeTestCodeWorkflowStatus(status);
+  if (wf === TC_WF.SAVED) return "✓";
+  if (wf === TC_WF.NEEDS_REVIEW) return "⚠";
+  if (wf === TC_WF.MODIFIED_UNSAVED) return "●";
+  if (wf === TC_WF.DRAFT) return "◐";
+  if (wf === TC_WF.ERROR) return "!";
+  return "○";
+}
+
+function testCodeStatusKind(status) {
+  const wf = typeof status === "string" && Object.values(TC_WF).includes(status) ? status : computeTestCodeWorkflowStatus(status);
+  if (wf === TC_WF.NO_CODE) return "no_code";
+  if (wf === TC_WF.NEEDS_REVIEW) return "needs_review";
+  if (wf === TC_WF.MODIFIED_UNSAVED) return "unsaved";
+  if ([TC_WF.SAVED, TC_WF.DRAFT, TC_WF.MODIFIED_UNSAVED].includes(wf)) return "has_code";
+  return "no_code";
+}
+
+function testCodeStatusLabel(status) {
+  const wf = typeof status === "string" && Object.values(TC_WF).includes(status) ? status : computeTestCodeWorkflowStatus(status);
+  return testCodeWorkflowLabel(wf);
+}
+
+function testCodeStatusTagClass(status) {
+  const wf = typeof status === "string" && Object.values(TC_WF).includes(status) ? status : computeTestCodeWorkflowStatus(status);
+  return testCodeWorkflowTagClass(wf);
+}
+
+function testCodeRowsForFilter(rows) {
+  const filter = state.testCode.caseFilter || "all";
+  const ordered = testCodeRowOrder(rows);
+  if (filter === "all") return ordered;
+  return ordered.filter((row) => testCodeFilterMatches(computeTestCodeWorkflowStatus(row.candidate_id), filter));
+}
+
+function navigateTestCodeCase(rows, delta) {
+  const pool = testCodeRowsForFilter(rows);
+  const cid = state.testCode.selectedCandidateId;
+  const idx = pool.findIndex((r) => r.candidate_id === cid);
+  if (idx < 0 && pool.length) {
+    switchTestCodeCandidate(pool[0].candidate_id, rows);
+    return;
+  }
+  const next = pool[idx + delta];
+  if (next?.candidate_id) switchTestCodeCandidate(next.candidate_id, rows);
+}
+
+function showTestCodeValidationResult(val) {
+  const valEl = document.getElementById("testcode-validation");
+  if (!valEl) return;
+  valEl.hidden = false;
+  valEl.innerHTML = renderTestCodeValidation(val);
+}
+
+function applyImportedCopilotToEditor(rows) {
+  const tc = state.testCode;
+  const statusEl = $("#testcode-status");
+  const paste = $("#testcode-copilot-import")?.value || "";
+  const { code, assumptions } = parseCopilotCppPaste(paste);
+  if (!code) {
+    if (statusEl) statusEl.textContent = "Paste a Copilot cpp block in Step 3 first.";
+    return;
+  }
+  const cid = tc.selectedCandidateId;
+  const editor = $("#testcode-code-editor");
+  if (editor) {
+    editor.value = code;
+    editor.classList.add("field-copilot-changed");
+  }
+  if (cid) {
+    if (!tc.generationSource) tc.generationSource = {};
+    tc.generationSource[cid] = "COPILOT_WEB";
+    if (!tc.stashedEdits) tc.stashedEdits = {};
+    tc.stashedEdits[cid] = code;
+    if (!tc.dirtyMap) tc.dirtyMap = {};
+    tc.dirtyMap[cid] = true;
+  }
+  tc.copilotDraft = { full_snippet: code, assumptions, provider: "manual_import" };
+  const sampleSnippet = tc.codeStyleSamples?.[0]?.snippet || tc.workspace?.code_style_samples?.[0]?.snippet || "";
+  showTestCodeValidationResult(validateGtestBeforeSave(code, tc.selectedCandidateId, sampleSnippet));
+  const assumeNote = assumptions.length ? ` Assumptions: ${assumptions.slice(0, 2).join("; ")}` : "";
+  if (statusEl) statusEl.textContent = `Imported to editor.${assumeNote} Review in Step 4 → Save Code.`;
+  patchTestCodeCaseStatusUi();
+}
+
+function setTestCodeApiStatus(status, message = "") {
+  state.testCode.apiGenStatus = status;
+  const el = $("#testcode-api-status");
+  if (!el) return;
+  const labels = { idle: "Idle", running: "Running…", failed: "Failed", done: "Done" };
+  const cls = { idle: "", running: "warning", failed: "error", done: "ok" };
+  el.innerHTML = `<span class="tag ${cls[status] || ""}">${esc(labels[status] || status)}</span>${message ? ` <span class="detail">${esc(message)}</span>` : ""}`;
+}
+
+function renderTestCodeEditorStatusBadge(candidateId) {
+  const wf = computeTestCodeWorkflowStatus(candidateId);
+  const label = testCodeWorkflowLabel(wf);
+  const cls = testCodeWorkflowTagClass(wf);
+  const dirty = state.testCode.dirtyMap?.[candidateId];
+  const unsavedNote = dirty ? `<span class="tag warning testcode-unsaved-hint">Unsaved changes</span>` : "";
+  return `<span class="testcode-editor-status-wrap" id="testcode-editor-status-wrap"><span class="tag ${cls} testcode-editor-status testcode-wf-badge" id="testcode-editor-status">[${esc(label)}]</span>${unsavedNote}</span>`;
+}
+
+function renderTestCodeCaseBar(rows) {
+  if (!rows?.length) return "";
+  const activeId = state.testCode.selectedCandidateId || currentFocusRow(rows, "testcode")?.candidate_id;
+  const activeWf = computeTestCodeWorkflowStatus(activeId);
+  const caseFilter = state.testCode.caseFilter || "all";
+  const dirty = state.testCode.dirtyMap?.[activeId];
+  return `<p class="detail alex-testcode-progress" id="testcode-code-progress">${esc(renderTestCodeProgressSummaryText(rows))}</p>
+  <div class="alex-testcode-step1-controls" data-tcase-scope="testcode">
+    <label class="tcase-select-label">Test case
+      <select class="clarify-box tcase-select" data-tcase-select="testcode">
+        ${rows
+          .map((row) => {
+            const cid = row.candidate_id || "";
+            const wf = computeTestCodeWorkflowStatus(cid);
+            const event = row.event || row.test_function || "";
+            const label = `${cid} ${event} [${wf}]`.trim();
+            return `<option value="${esc(cid)}" ${cid === activeId ? "selected" : ""}>${esc(label)}</option>`;
+          })
+          .join("")}
+      </select>
+    </label>
+    <span class="tag ${testCodeWorkflowTagClass(activeWf)} testcode-wf-badge" id="testcode-case-status-badge">[${esc(testCodeWorkflowLabel(activeWf))}]</span>
+    ${dirty ? `<span class="tag warning testcode-unsaved-hint" id="testcode-unsaved-hint">Unsaved changes</span>` : `<span id="testcode-unsaved-hint" hidden></span>`}
+  </div>
+  ${renderTestCodeCaseMeta(activeId, rows.find((r) => r.candidate_id === activeId))}
+  <div class="alex-testcode-step1-nav">
+    <button type="button" class="btn secondary btn-inline" id="btn-testcode-prev-case">Previous case</button>
+    <button type="button" class="btn secondary btn-inline" id="btn-testcode-next-case">Next case</button>
+    <div class="alex-testcode-filters">
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "all" ? "active" : ""}" data-case-filter="all">All</button>
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "no_code" ? "active" : ""}" data-case-filter="no_code">No code</button>
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "has_code" ? "active" : ""}" data-case-filter="has_code">Has code</button>
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "unsaved" ? "active" : ""}" data-case-filter="unsaved">Unsaved</button>
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "needs_review" ? "active" : ""}" data-case-filter="needs_review">Needs review</button>
+    </div>
+  </div>`;
+}
+
+function renderTestCodeIoContext(row) {
+  if (!row) {
+    return `<p class="detail">Select a test case to view Before / After context.</p>`;
+  }
+  return `<div class="alex-testcode-io-context" id="testcode-io-context">
+    <label class="alex-testcode-io-block">Before (expected input)
+      <textarea class="gtest-input alex-testcode-io-readonly" rows="10" readonly spellcheck="false">${esc(row.expected_input || "")}</textarea>
+    </label>
+    <label class="alex-testcode-io-block">After (expected output)
+      <textarea class="gtest-input alex-testcode-io-readonly" rows="8" readonly spellcheck="false">${esc(row.expected_output || "")}</textarea>
+    </label>
+  </div>`;
+}
+
+function renderTestCodeSamplePanel(samples) {
+  const list = samples || [];
+  const first = list[0] || {};
+  const loaded = list.length > 0;
+  const snippet = String(first.snippet || state.testCode.samplePasteDraft || "").trim();
+  const statusText = loaded
+    ? `Sample loaded: ${first.label || first.source_file || first.test_name || "sample.cpp"}`
+    : "Sample not loaded";
+  return `<div class="alex-testcode-context-panel alex-testcode-context-panel--sample">
+    <h4 class="alex-testcode-panel-title">Sample C++ Style</h4>
+    <p class="detail gtest-sample-status">${esc(statusText)}</p>
+    <div class="alex-testcode-sample-actions">
+      <label class="btn secondary btn-inline upload-label">Load Sample .cpp<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+    </div>
+    <label class="detail">Paste sample code (optional)
+      <textarea id="testcode-sample-paste" class="gtest-input gtest-note" rows="6" placeholder="Paste a reference TEST_F snippet…">${esc(state.testCode.samplePasteDraft || "")}</textarea>
+    </label>
+    <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-sample-paste">Use pasted sample</button>
+    ${
+      snippet
+        ? `<details class="alex-testcode-sample-preview">
+            <summary>Preview sample code</summary>
+            <pre class="alex-testcode-sample-pre">${esc(snippet.slice(0, 4000))}${snippet.length > 4000 ? "\n…" : ""}</pre>
+          </details>`
+        : ""
+    }
+  </div>`;
+}
+
+function renderTestCodePromptPreviewPlaceholder() {
+  return `<p class="detail">Open to see the exact context package sent to Copilot / API.</p>`;
+}
+
+function renderTestCodePromptPreviewBody(summary, row) {
+  const s = summary || {};
+  const clip = (text, max = 2000) => {
+    const flat = String(text || "").trim();
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat || "—";
+  };
+  return `<dl class="alex-testcode-context-dl">
+    <dt>Testcase ID</dt><dd><code>${esc(s.candidate_id || row?.candidate_id || "—")}</code></dd>
+    <dt>Before</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_input || row?.expected_input))}</pre></dd>
+    <dt>After</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_output || row?.expected_output))}</pre></dd>
+    <dt>Coding rule</dt><dd><pre class="alex-testcode-context-pre">${esc(s.code_rule || "—")}</pre></dd>
+    <dt>Sample C++</dt><dd>${s.sample_loaded ? esc(s.sample_label || "loaded") : "Not loaded"}${s.fixture_class ? ` · fixture: ${esc(s.fixture_class)}` : ""}</dd>
+    <dt>Output format</dt><dd><pre class="alex-testcode-context-pre">Return one complete GTest (spec comments + TEST/TEST_F).
+After code: ASSUMPTIONS section (max 5 bullets).
+Use \`\`\`cpp fence. Include testcase ID in comments.</pre></dd>
+  </dl>`;
+}
+
+function patchTestCodeCaseStatusUi() {
+  const rows = state.testCode.rows || [];
+  const cid = state.testCode.selectedCandidateId;
+  const wf = computeTestCodeWorkflowStatus(cid);
+  const dirty = state.testCode.dirtyMap?.[cid];
+
+  const progressEl = $("#testcode-code-progress");
+  if (progressEl) progressEl.textContent = renderTestCodeProgressSummaryText(rows);
+
+  const caseBadge = $("#testcode-case-status-badge");
+  if (caseBadge) {
+    caseBadge.className = `tag ${testCodeWorkflowTagClass(wf)} testcode-wf-badge`;
+    caseBadge.textContent = `[${testCodeWorkflowLabel(wf)}]`;
+  }
+
+  const unsavedHint = $("#testcode-unsaved-hint");
+  if (unsavedHint) {
+    if (dirty) {
+      unsavedHint.hidden = false;
+      unsavedHint.className = "tag warning testcode-unsaved-hint";
+      unsavedHint.textContent = "Unsaved changes";
+    } else {
+      unsavedHint.hidden = true;
+    }
+  }
+
+  const sel = document.querySelector('[data-tcase-select="testcode"]');
+  if (sel) {
+    [...sel.options].forEach((opt) => {
+      const id = opt.value;
+      const row = rows.find((r) => r.candidate_id === id);
+      const status = computeTestCodeWorkflowStatus(id);
+      const event = row?.event || row?.test_function || "";
+      opt.textContent = `${id} ${event} [${status}]`.trim();
+    });
+  }
+  const badgeWrap = $("#testcode-editor-status-wrap");
+  if (badgeWrap) badgeWrap.outerHTML = renderTestCodeEditorStatusBadge(cid);
+
+  const metaEl = $("#testcode-case-meta");
+  if (metaEl) {
+    const row = rows.find((r) => r.candidate_id === cid);
+    metaEl.outerHTML = renderTestCodeCaseMeta(cid, row);
+  }
+}
+
+function testCodeRowOrder(rows) {
+  return [...(rows || [])].sort((a, b) => {
+    const na = parseInt(String(a.no || ""), 10);
+    const nb = parseInt(String(b.no || ""), 10);
+    if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb;
+    return String(a.candidate_id || "").localeCompare(String(b.candidate_id || ""));
+  });
+}
+
+function nextTestCodeMissingId(rows) {
+  const ordered = testCodeRowOrder(rows);
+  const hit = ordered.find((r) => {
+    const wf = computeTestCodeWorkflowStatus(r.candidate_id);
+    return wf === TC_WF.NO_CODE || wf === TC_WF.NEEDS_REVIEW || wf === TC_WF.DRAFT;
+  });
+  return hit?.candidate_id || null;
+}
+
+function renderTestCodePageBody(rows, activeRow, draft, samples) {
+  const apiDisabled = !m365KnowledgeReady();
+  const cid = activeRow?.candidate_id || "";
+  const apiStatus = state.testCode.apiGenStatus || "idle";
+  return `<div class="alex-testcode-steps">
+    <section class="card alex-testcode-step">
+      <header class="alex-testcode-step__header">
+        <span class="alex-testcode-step__num">1</span>
+        <h3 class="alex-testcode-step__title">Select Test Case</h3>
+      </header>
+      <div class="alex-testcode-step__body">
+        ${renderTestCodeCaseBar(rows)}
+        ${renderTestCodeIoContext(activeRow)}
+      </div>
+    </section>
+
+    <section class="card alex-testcode-step">
+      <header class="alex-testcode-step__header">
+        <span class="alex-testcode-step__num">2</span>
+        <h3 class="alex-testcode-step__title">Coding Context</h3>
+      </header>
+      <div class="alex-testcode-step__body alex-testcode-context-split">
+        <div class="alex-testcode-context-panel">
+          <h4 class="alex-testcode-panel-title">Coding Rules / Change Request</h4>
+          <textarea id="testcode-user-request" class="gtest-input gtest-note alex-testcode-rules" rows="8" placeholder="Example: use TEST_F, fixture PowerModeTest, use SetInput() for inputs, assert PMODE_STS only, add WaitMs(50), do not access internal variables.">${esc(state.testCode.userRequest || "")}</textarea>
+        </div>
+        ${renderTestCodeSamplePanel(samples)}
+      </div>
+    </section>
+
+    <section class="card alex-testcode-step">
+      <header class="alex-testcode-step__header">
+        <span class="alex-testcode-step__num">3</span>
+        <h3 class="alex-testcode-step__title">Generate Code</h3>
+      </header>
+      <div class="alex-testcode-step__body">
+        <div class="alex-testcode-gen-panels">
+          <div class="alex-testcode-gen-option card">
+            <h4 class="alex-testcode-panel-title">Option A — Copilot Web</h4>
+            <p class="detail">Use this when M365 API is slow or failed.</p>
+            <button type="button" class="btn" id="btn-testcode-copy-prompt">Copy Copilot Prompt</button>
+            <label class="detail">Paste Copilot Result Here
+              <textarea id="testcode-copilot-import" class="gtest-input gtest-note" rows="6" placeholder="Paste Copilot cpp block (+ ASSUMPTIONS optional)…"></textarea>
+            </label>
+            <button type="button" class="btn secondary" id="btn-testcode-import-copilot">Import to Editor</button>
+          </div>
+          <div class="alex-testcode-gen-option card">
+            <h4 class="alex-testcode-panel-title">Option B — Generate API</h4>
+            <p class="detail">Same context package — result goes to the editor when done.</p>
+            <button type="button" class="btn secondary" id="btn-testcode-copilot" ${apiDisabled ? "disabled" : ""} title="${esc(apiDisabled ? m365KnowledgeBlockReason() : "")}">Generate by API</button>
+            <div id="testcode-api-status" class="alex-testcode-api-status">${apiStatus === "idle" ? '<span class="detail">Status: Idle</span>' : ""}</div>
+            ${apiDisabled ? `<p class="detail testcode-copilot-hint">${esc(m365KnowledgeBlockReason())}</p>` : ""}
+          </div>
+        </div>
+        <details class="alex-testcode-prompt-preview" id="testcode-prompt-preview">
+          <summary>Prompt Preview — context sent to Copilot / API</summary>
+          <div class="alex-testcode-prompt-preview__body" id="testcode-prompt-preview-body">${renderTestCodePromptPreviewPlaceholder()}</div>
+          <button type="button" class="btn secondary btn-inline" id="btn-testcode-refresh-prompt">Refresh preview</button>
+        </details>
+      </div>
+    </section>
+
+    <section class="card alex-testcode-step alex-testcode-step--review">
+      <header class="alex-testcode-step__header">
+        <span class="alex-testcode-step__num">4</span>
+        <h3 class="alex-testcode-step__title">Review &amp; Save Code</h3>
+        <span class="detail">${esc(draft?.test_name || cid || "")}</span>
+        ${renderTestCodeEditorStatusBadge(cid)}
+      </header>
+      <div class="alex-testcode-step__body">
+        <div id="testcode-validation" class="alex-testcode-validation" hidden></div>
+        <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main gtest-editor--tall" spellcheck="false" placeholder="// Generated GTest code appears here…">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
+        <div class="alex-testcode-editor__foot">
+          <p class="detail testcode-flow-hint" id="testcode-status">Review generated code, validate, then Save Code.</p>
+          <div class="alex-testcode-editor__actions">
+            <button type="button" class="btn secondary" id="btn-testcode-validate">Validate Code</button>
+            <button type="button" class="btn secondary" id="btn-testcode-apply-imported">Apply Imported Code</button>
+            <button type="button" class="btn secondary" id="btn-testcode-export-cpp">Export .cpp</button>
+            <button type="button" class="btn secondary" id="btn-testcode-merge-saved">Merge Saved Code</button>
+            <button type="button" class="btn" id="btn-testcode-save-draft">Save Code</button>
+          </div>
+        </div>
+        <div id="testcode-merge-panel" class="alex-testcode-merge-panel" hidden></div>
+      </div>
+    </section>
+
+    <details class="alex-testcode-advanced card">
+      <summary>Advanced</summary>
+      <div class="alex-testcode-advanced__body">
+        <label class="detail testcode-followup-label">
+          <input type="checkbox" id="testcode-copilot-followup" ${state.testCode.copilotWebFollowUp ? "checked" : ""} />
+          Shorter Copilot prompt for next testcase (same web chat)
+        </label>
+        <p class="detail">Workflow badges: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR]</p>
+      </div>
+    </details>
+  </div>`;
+}
+
+function userRequestImpliesAllTestcases(req) {
+  const t = String(req || "").toLowerCase();
+  return /\b(toàn bộ|tất cả|all test|every testcase|các testcase|mọi testcase|all tc|every tc)\b/.test(t);
+}
+
+function renderTestCodeSyncSummaryText(sync) {
+  if (!sync?.summary) return "Chưa sync — bấm Refresh sync";
+  const s = sync.summary;
+  const parts = [];
+  if (s.ok) parts.push(`${s.ok} ok`);
+  if (s.no_code) parts.push(`${s.no_code} chưa có code`);
+  if (s.stale_comment) parts.push(`${s.stale_comment} stale comment`);
+  if (s.stale_body) parts.push(`${s.stale_body} stale body`);
+  if (s.orphan_code) parts.push(`${s.orphan_code} orphan`);
+  return parts.join(" · ") || "—";
+}
+
+function testCodeSyncStatusFor(candidateId) {
+  const rows = state.testCode.syncStatus?.rows || [];
+  return rows.find((r) => r.candidate_id === candidateId)?.status || "";
+}
+
+async function refreshTestCodeSyncStatus() {
+  if (!state.jobId) return null;
+  try {
+    const lang = state.exportLanguage || "EN";
+    const data = await api(`/api/review/gtest-sync-status?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(lang)}`);
+    state.testCode.syncStatus = data;
+    patchTestCodeCaseStatusUi();
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function runTestCodeBulk(action, candidateIds = null) {
+  const lang = state.exportLanguage || "EN";
+  const body = {
+    action,
+    candidate_ids: candidateIds || (state.testCode.selectedCandidateId ? [state.testCode.selectedCandidateId] : []),
+    language: lang,
+    stale_only: action === "regen_comment_stale",
+    persist: true,
+  };
+  return api(`/api/review/gtest-bulk?job_id=${encodeURIComponent(state.jobId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function renderTestCodeContextPreviewBody(summary, row) {
+  if (!summary && !row) {
+    return `<p class="detail">Chọn testcase và nhập Code Rule để xem preview.</p>`;
+  }
+  const s = summary || {};
+  const clip = (text, max = 280) => {
+    const flat = String(text || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join("\n");
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat || "—";
+  };
+  return `<dl class="alex-testcode-context-dl">
+    <dt>Testcase</dt><dd><code>${esc(s.candidate_id || row?.candidate_id || "—")}</code>${s.test_function ? ` · ${esc(s.test_function)}` : ""}</dd>
+    <dt>BEFORE (input)</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_input || row?.expected_input))}</pre></dd>
+    <dt>AFTER (output)</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_output || row?.expected_output))}</pre></dd>
+    <dt>Sample .cpp</dt><dd>${s.sample_loaded ? esc(s.sample_label || "loaded") : "— chưa load"}${s.fixture_class ? ` · fixture: ${esc(s.fixture_class)}` : ""}</dd>
+    <dt>Code Rule</dt><dd><pre class="alex-testcode-context-pre">${esc(s.code_rule || "—")}</pre></dd>
+  </dl>`;
+}
+
+async function copyTestCodeCopilotPrompt(rows) {
+  const tc = state.testCode;
+  if (!tc.selectedCandidateId) throw new Error("Chọn testcase trước.");
+  const codeRule = $("#testcode-user-request")?.value || tc.userRequest || "";
+  const followUp = $("#testcode-copilot-followup")?.checked ?? tc.copilotWebFollowUp;
+  tc.copilotWebFollowUp = followUp;
+  const editorCode = $("#testcode-code-editor")?.value || "";
+  const q = new URLSearchParams({
+    candidate_id: tc.selectedCandidateId,
+    language: state.exportLanguage || "EN",
+    code_rule: codeRule,
+    existing_code: editorCode.slice(0, 12000),
+    prompt_mode: followUp ? "followup" : "full",
+    slim: "1",
+  });
+  const data = await api(`/api/review/copilot/code/prompt?job_id=${encodeURIComponent(state.jobId)}&${q}`);
+  const prompt = data.prompt || "";
+  if (!prompt) throw new Error("Không lấy được prompt.");
+  tc.copilotPromptText = prompt;
+  await navigator.clipboard.writeText(prompt);
+  return prompt;
+}
+
+async function openTestCodeCopilotWeb(rows) {
+  await copyTestCodeCopilotPrompt(rows);
+  window.open(COPILOT_WEB_URL, "_blank", "noopener,noreferrer");
+  const statusEl = $("#testcode-status");
+  if (statusEl) {
+    const followUp = state.testCode.copilotWebFollowUp;
+    statusEl.textContent = followUp
+      ? "Đã copy prompt ngắn (cùng chat) — dán vào Copilot → dán cpp về bước 3."
+      : "Đã copy prompt đầy đủ — dán vào Copilot. TC tiếp: tick「Cùng chat」để prompt ngắn hơn.";
+  }
+}
+
+function parseCopilotCppPaste(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return { code: "", assumptions: [] };
+  let body = raw;
+  let assumptions = [];
+  const assumeMatch = raw.match(/(?:^|\n)\s*ASSUMPTIONS?\s*:\s*\n([\s\S]*)$/i);
+  if (assumeMatch) {
+    body = raw.slice(0, assumeMatch.index).trim();
+    assumptions = assumeMatch[1]
+      .split("\n")
+      .map((l) => l.replace(/^[\s\-*•]+/, "").trim())
+      .filter(Boolean);
+  }
+  const fence = body.match(/```(?:cpp|c\+\+)?\s*\n?([\s\S]*?)```/i);
+  let code = fence ? fence[1].trim() : body.replace(/^```(?:cpp|c\+\+)?\s*/i, "").replace(/\s*```$/, "").trim();
+  return { code, assumptions };
+}
+
+function validateGtestBeforeSave(code, candidateId, sampleSnippet) {
+  const body = String(code || "").trim();
+  const warnings = [];
+  const issueLabels = {
+    empty: "Empty code",
+    markdown_fence: "Contains markdown fence (```)",
+    todo: "Contains TODO",
+    missing_TEST: "Missing TEST or TEST_F",
+    missing_EXPECT: "Missing EXPECT or ASSERT",
+    missing_candidate_id: "Testcase ID not found in code comments",
+  };
+
+  if (!body) warnings.push(issueLabels.empty);
+  if (body.includes("```")) warnings.push(issueLabels.markdown_fence);
+  if (/\bTODO\b/i.test(body)) warnings.push(issueLabels.todo);
+  if (!/\bTEST(?:_F)?\s*\(/.test(body)) warnings.push(issueLabels.missing_TEST);
+  if (
+    !/\bEXPECT_(EQ|NE|TRUE|FALSE|THAT)\b/.test(body) &&
+    !/\bASSERT_(EQ|NE|TRUE|FALSE|THAT)\b/.test(body)
+  ) {
+    warnings.push(issueLabels.missing_EXPECT);
+  }
+  const cid = String(candidateId || "").trim();
+  if (cid && !body.includes(cid)) warnings.push(issueLabels.missing_candidate_id);
+
+  const callRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  const builtins = new Set([
+    "TEST", "TEST_F", "EXPECT_EQ", "EXPECT_NE", "EXPECT_TRUE", "EXPECT_FALSE", "EXPECT_THAT",
+    "ASSERT_EQ", "ASSERT_NE", "ASSERT_TRUE", "ASSERT_FALSE", "if", "for", "while", "return", "sizeof",
+  ]);
+  const sampleCalls = new Set();
+  let m;
+  while ((m = callRe.exec(String(sampleSnippet || "")))) {
+    if (!builtins.has(m[1])) sampleCalls.add(m[1]);
+  }
+  if (sampleCalls.size) {
+    const codeCalls = new Set();
+    callRe.lastIndex = 0;
+    while ((m = callRe.exec(body))) {
+      if (!builtins.has(m[1]) && !m[1].startsWith("EXPECT") && !m[1].startsWith("ASSERT")) codeCalls.add(m[1]);
+    }
+    const unknown = [...codeCalls].filter((c) => !sampleCalls.has(c));
+    if (unknown.length) warnings.push(`API not in sample: ${unknown.slice(0, 6).join(", ")}`);
+  }
+
+  return { ok: true, flags: [], warnings };
+}
+
+function codeLikelyMatchesTestcase(code, candidateId) {
+  const cid = String(candidateId || "").trim();
+  if (!cid) return true;
+  return String(code || "").includes(cid);
+}
+
+function confirmTestCodeSave(val, code, candidateId) {
+  const lines = [...(val?.warnings || [])];
+  if (!codeLikelyMatchesTestcase(code, candidateId)) {
+    lines.push("Generated code may not match selected testcase_id.");
+  }
+  if (!lines.length) return true;
+  return window.confirm(`Validation warnings:\n\n${lines.map((l) => `• ${l}`).join("\n")}\n\nSave anyway?`);
+}
+
+async function refreshTestCodePromptPreview(rows) {
+  const host = document.getElementById("testcode-prompt-preview-body");
+  if (!host || !state.jobId) return;
+  const tc = state.testCode;
+  const row = (rows || tc.rows || []).find((r) => r.candidate_id === tc.selectedCandidateId);
+  const codeRule = $("#testcode-user-request")?.value || tc.userRequest || "";
+  if (!tc.selectedCandidateId) {
+    host.innerHTML = renderTestCodePromptPreviewPlaceholder();
+    return;
+  }
+  host.innerHTML = `<p class="detail">Loading prompt preview…</p>`;
+  try {
+    const editorCode = $("#testcode-code-editor")?.value || "";
+    const followUp = $("#testcode-copilot-followup")?.checked ?? tc.copilotWebFollowUp;
+    const q = new URLSearchParams({
+      candidate_id: tc.selectedCandidateId,
+      language: state.exportLanguage || "EN",
+      code_rule: codeRule,
+      existing_code: editorCode.slice(0, 12000),
+      prompt_mode: followUp ? "followup" : "full",
+      slim: "1",
+    });
+    const data = await api(`/api/review/copilot/code/prompt?job_id=${encodeURIComponent(state.jobId)}&${q}`);
+    tc.copilotPromptText = data.prompt || "";
+    tc.contextSummary = data.context_summary || {};
+    host.innerHTML = renderTestCodePromptPreviewBody(data.context_summary, row);
+  } catch (e) {
+    host.innerHTML = renderTestCodePromptPreviewBody(
+      {
+        candidate_id: row?.candidate_id,
+        expected_input: row?.expected_input,
+        expected_output: row?.expected_output,
+        code_rule: codeRule,
+        sample_loaded: !!(tc.codeStyleSamples || []).length,
+        sample_label: tc.codeStyleSamples?.[0]?.label || tc.codeStyleSamples?.[0]?.source_file,
+      },
+      row
+    );
+    host.insertAdjacentHTML("beforeend", `<p class="detail warn">Preview partial: ${esc(e.message)}</p>`);
+  }
+}
+
+/** @deprecated use refreshTestCodePromptPreview */
+async function refreshTestCodeContextPreview(rows) {
+  return refreshTestCodePromptPreview(rows);
+}
+
+function editorHasGtestCode() {
+  const code = $("#testcode-code-editor")?.value || "";
+  return code.includes("TEST_F(") && code.trim().length > 80;
+}
+
+function startTestCodeCopilotProgress({ steps = [] } = {}) {
+  const host = document.getElementById("testcode-copilot-progress");
+  if (!host) return { stop: () => {}, tick: () => {} };
+  const started = Date.now();
+  const defaultSteps = steps.length
+    ? steps
+    : [
+        "1/4 Chuẩn bị context (I/O + code mẫu)…",
+        "2/4 Gọi Microsoft 365 Copilot API…",
+        "3/4 Copilot đang viết GTest (thường 30s–2 phút)…",
+        "4/4 Nhận và parse kết quả…",
+      ];
+  let stepIdx = 0;
+  host.hidden = false;
+  host.innerHTML = `<div class="copilot-progress card">
+    <div class="copilot-progress__head">
+      <span class="tag warning" id="testcode-copilot-badge">Copilot running</span>
+      <span id="testcode-copilot-elapsed" class="detail">0s</span>
+    </div>
+    <div class="progress-bar progress-bar--indeterminate" id="testcode-copilot-bar"><div></div></div>
+    <p id="testcode-copilot-step" class="detail">${esc(defaultSteps[0])}</p>
+    <p class="detail copilot-progress__hint">M365 Copilot không stream realtime — bar chạy theo bước ước lượng, không treo.</p>
+  </div>`;
+  const btn = $("#btn-testcode-copilot");
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.busy = "1";
+  }
+  const editor = $("#testcode-code-editor");
+  editor?.classList.add("gtest-editor--busy");
+  const timer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - started) / 1000);
+    const el = document.getElementById("testcode-copilot-elapsed");
+    if (el) el.textContent = `${elapsed}s`;
+    stepIdx = Math.min(defaultSteps.length - 1, Math.floor(elapsed / 12));
+    const stepEl = document.getElementById("testcode-copilot-step");
+    if (stepEl) stepEl.textContent = defaultSteps[stepIdx];
+  }, 400);
+  return {
+    tick(label) {
+      const stepEl = document.getElementById("testcode-copilot-step");
+      if (stepEl && label) stepEl.textContent = label;
+    },
+    stop(ok, msg) {
+      clearInterval(timer);
+      if (btn) {
+        btn.disabled = !m365KnowledgeReady();
+        delete btn.dataset.busy;
+      }
+      editor?.classList.remove("gtest-editor--busy");
+      const badge = document.getElementById("testcode-copilot-badge");
+      const bar = document.getElementById("testcode-copilot-bar");
+      if (badge) {
+        badge.textContent = ok ? "Done" : "Failed";
+        badge.className = `tag ${ok ? "high" : "error"}`;
+      }
+      if (bar) bar.classList.remove("progress-bar--indeterminate");
+      const stepEl = document.getElementById("testcode-copilot-step");
+      if (stepEl && msg) stepEl.textContent = msg;
+      if (ok) {
+        setTimeout(() => {
+          host.hidden = true;
+          host.innerHTML = "";
+        }, 2500);
+      }
+    },
+  };
+}
+
+function showTestCodeApplyAllBanner(rows, activeRow, onApplyAll, { allJob = false, userRequest = "" } = {}) {
+  const banner = document.getElementById("testcode-apply-all-banner");
+  if (!banner || !activeRow) return;
+  const batchAll = allJob || userRequestImpliesAllTestcases(userRequest);
+  const siblings = batchAll
+    ? rows.filter((r) => r.candidate_id !== activeRow.candidate_id)
+    : rows.filter((r) => r.logic_id === activeRow.logic_id && r.candidate_id !== activeRow.candidate_id);
+  if (!siblings.length) {
+    banner.hidden = true;
+    banner.innerHTML = "";
+    return;
+  }
+  const scope = batchAll ? "toàn bộ job" : `nhóm ${activeRow.logic_id || "logic"}`;
+  banner.hidden = false;
+  banner.innerHTML = `<div class="copilot-apply-all-banner field-copilot-changed">
+    <p><b>Yêu cầu áp dụng nhiều testcase</b> — Copilot đã xử lý <code>${esc(activeRow.candidate_id)}</code>.
+    Apply cùng pattern cho <b>${siblings.length}</b> TC còn lại (${esc(scope)})?</p>
+    <div class="review-actions">
+      <button type="button" class="btn" id="btn-testcode-apply-all">Apply tất cả (${siblings.length})</button>
+      <button type="button" class="btn secondary" id="btn-testcode-apply-all-skip">Chỉ TC này</button>
+    </div>
+  </div>`;
+  bindClick("#btn-testcode-apply-all", onApplyAll);
+  bindClick("#btn-testcode-apply-all-skip", () => {
+    banner.hidden = true;
+    banner.innerHTML = "";
+  });
 }
 
 function renderTestCodeIoStrip(row) {
@@ -6914,139 +8361,15 @@ async function onTestCodeBatchApply() {
   if (statusEl) statusEl.textContent = "Select a test case with a generated draft to preview in editor.";
 }
 
-function bindTestCodeHandlers(rows, logicItems) {
+function bindTestCodeHandlers(rows) {
   const tc = state.testCode;
   const statusEl = $("#testcode-status");
 
-  const applyDraftToEditor = (draft, row) => applyTestCodeDraftToUi(draft, row);
-
-  const runGenerate = async () => {
-    if (statusEl) statusEl.textContent = "Generating…";
-    try {
-      const draft = await regenerateGtestDraft(true);
-      const row = rows.find((r) => r.candidate_id === tc.selectedCandidateId);
-      applyDraftToEditor(draft, row);
-      if (statusEl) {
-        statusEl.textContent = draft?.unmapped_signals?.length
-          ? `${draft.unmapped_signals.length} need custom rename — edit map then Apply.`
-          : "Ready — edit code, then Copy.";
-      }
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
-    }
+  const userRequest = () => {
+    const v = $("#testcode-user-request")?.value || "";
+    tc.userRequest = v;
+    return v;
   };
-
-  $("#testcode-logic-select")?.addEventListener("change", async (ev) => {
-    tc.selectedLogicId = ev.target.value || null;
-    if (!tc.selectedCandidateId) await runGenerate();
-  });
-
-  $("#btn-testcode-regenerate")?.addEventListener("click", runGenerate);
-
-  $("#btn-testcode-copilot")?.addEventListener("click", async () => {
-    if (!tc.selectedCandidateId) {
-      if (statusEl) statusEl.textContent = "Select a test case first.";
-      return;
-    }
-    if (!m365KnowledgeReady()) {
-      if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
-      return;
-    }
-    tc.engineerNote = $("#testcode-engineer-note")?.value || "";
-    tc.copilotPromptOverride = $("#testcode-copilot-prompt")?.value || "";
-    tc.referenceTestName = $("#testcode-ref-select")?.value || "";
-    if (statusEl) statusEl.textContent = "Copilot generating GTest…";
-    try {
-      const importedMode = jobBootstrapSource(state._summaryCache?.summary).startsWith("imported");
-      const res = await api(`/api/review/copilot/code/generate?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          candidate_id: tc.selectedCandidateId,
-          use_baseline: true,
-          language: state.exportLanguage || "EN",
-          engineer_note: tc.engineerNote,
-          copilot_prompt_override: tc.copilotPromptOverride,
-          reference_test_name: tc.referenceTestName,
-          from_testcase_only: importedMode ? true : null,
-          reuse_conversation: true,
-        }),
-      });
-      if (res.ok === false) {
-        const action = res.user_action ? ` — ${res.user_action}` : "";
-        if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Copilot code generation failed"}${action}`;
-        return;
-      }
-      if (!res.ok) throw new Error(res.error || "Copilot code generation failed");
-      tc.baselineDraft = res.baseline || null;
-      tc.copilotDraft = res.copilot_draft || null;
-      const diffEl = $("#testcode-copilot-diff");
-      const applyBtn = $("#btn-testcode-apply-copilot");
-      const val = res.validation || {};
-      if (diffEl) {
-        diffEl.hidden = false;
-        const fallbackNote = res.copilot_fallback
-          ? `<p class="detail warn">Copilot unavailable — showing offline baseline only.</p>`
-          : "";
-        diffEl.innerHTML = `${fallbackNote}<p><b>${res.copilot_fallback ? "Baseline draft" : "Copilot draft ready"}</b> — quality: ${esc(val.quality || "?")}${val.flags?.length ? ` · ${esc(val.flags.join(", "))}` : ""}</p>`;
-      }
-      if (applyBtn) applyBtn.hidden = false;
-      if (statusEl) {
-        statusEl.textContent = res.copilot_fallback
-          ? "Baseline only (Copilot unavailable) — click Apply or edit manually."
-          : "Copilot draft ready — click Apply Copilot or edit manually.";
-      }
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
-    }
-  });
-
-  $("#btn-testcode-batch")?.addEventListener("click", async () => {
-    if (!m365KnowledgeReady()) {
-      if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
-      return;
-    }
-    tc.engineerNote = $("#testcode-engineer-note")?.value || "";
-    tc.copilotPromptOverride = $("#testcode-copilot-prompt")?.value || "";
-    tc.referenceTestName = $("#testcode-ref-select")?.value || "";
-    const logicId = tc.selectedLogicId || "";
-    if (statusEl) statusEl.textContent = "Batch Copilot running…";
-    tc.batchRunning = true;
-    try {
-      const res = await api(`/api/review/copilot/code/generate-batch?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          logic_id: logicId,
-          engineer_note: tc.engineerNote,
-          copilot_prompt_override: tc.copilotPromptOverride,
-          reference_test_name: tc.referenceTestName,
-          persist_drafts: true,
-          language: state.exportLanguage || "EN",
-        }),
-      });
-      tc.batchResults = res.results || [];
-      if (res.ok === false) {
-        const action = res.user_action ? ` — ${res.user_action}` : "";
-        if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Batch failed"}${action}`;
-        return;
-      }
-      if (statusEl) {
-        statusEl.textContent = `Batch done: ${res.generated || 0} ok, ${res.skipped || 0} skipped, ${res.failed || 0} failed.`;
-      }
-      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
-      const ws = await fetchGtestWorkspace(true);
-      tc.workspace = ws;
-      tc.draftCache = {};
-      updateTestCodeBatchPanel(tc.batchResults);
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
-    } finally {
-      tc.batchRunning = false;
-    }
-  });
-
-  $("#btn-testcode-batch-apply")?.addEventListener("click", onTestCodeBatchApply);
 
   const handleCppUpload = async (ev) => {
     const file = ev.target.files?.[0];
@@ -7067,215 +8390,352 @@ function bindTestCodeHandlers(rows, logicItems) {
       const ws = await fetchGtestWorkspace(true);
       tc.workspace = ws;
       tc.codeStyleSamples = ws.code_style_samples || tc.codeStyleSamples;
-      const panel = $("#testcode-samples-panel");
-      if (panel) panel.innerHTML = renderTestCodeSamplesPanel(tc.codeStyleSamples, tc.referenceTestName);
-      bindTestCodeSampleControls(handleCppUpload);
-      if (statusEl) statusEl.textContent = `Saved ${tc.codeStyleSamples.length} code sample(s).`;
+      const statusSample = document.querySelector(".gtest-sample-status");
+      if (statusSample && tc.codeStyleSamples[0]) {
+        const s = tc.codeStyleSamples[0];
+        statusSample.textContent = `Sample loaded: ${s.label || s.source_file || "sample.cpp"}`;
+      }
+      if (statusEl) statusEl.textContent = `Sample loaded (${tc.codeStyleSamples.length}).`;
+      refreshTestCodePromptPreview(rows);
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
     ev.target.value = "";
   };
 
-  bindTestCodeSampleControls(handleCppUpload);
-
-  $("#btn-testcode-apply-copilot")?.addEventListener("click", () => {
-    const draft = tc.copilotDraft;
-    if (!draft?.full_snippet && !draft?.code_body) {
-      if (statusEl) statusEl.textContent = "No Copilot draft to apply.";
-      return;
-    }
-    const row = rows.find((r) => r.candidate_id === tc.selectedCandidateId);
-    applyDraftToEditor(
-      {
-        ...draft,
-        full_snippet: draft.full_snippet || draft.code_body,
-        provider: "m365_copilot",
-      },
-      row
-    );
-    if (statusEl) statusEl.textContent = "Copilot code applied — Save to keep edits.";
+  bindOnChange("#testcode-cpp-upload", handleCppUpload);
+  bindOnChange("#testcode-user-request", () => {
+    tc.userRequest = $("#testcode-user-request")?.value || "";
+    refreshTestCodePromptPreview(rows);
+  });
+  bindOnChange("#testcode-sample-paste", (ev) => {
+    tc.samplePasteDraft = ev.target.value || "";
   });
 
-  $("#btn-testcode-suggest-map")?.addEventListener("click", async () => {
-    if (!tc.selectedCandidateId) {
-      if (statusEl) statusEl.textContent = "Select a test case first.";
+  refreshTestCodeSyncStatus().then(() => refreshTestCodePromptPreview(rows));
+
+  bindOnChange("#testcode-copilot-followup", (ev) => {
+    state.testCode.copilotWebFollowUp = !!ev.target.checked;
+  });
+
+  bindClick("#btn-testcode-prev-case", () => navigateTestCodeCase(rows, -1));
+  bindClick("#btn-testcode-next-case", () => navigateTestCodeCase(rows, 1));
+
+  document.querySelectorAll("[data-case-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      state.testCode.caseFilter = btn.dataset.caseFilter || "all";
+      document.querySelectorAll("[data-case-filter]").forEach((b) => b.classList.toggle("active", b === btn));
+      patchTestCodeCaseStatusUi();
+    };
+  });
+
+  bindClick("#btn-testcode-save-sample-paste", async () => {
+    const text = ($("#testcode-sample-paste")?.value || "").trim();
+    if (!text) {
+      if (statusEl) statusEl.textContent = "Paste sample code first.";
       return;
     }
-    if (statusEl) statusEl.textContent = "Suggesting renames for this case…";
     try {
-      const res = await api(`/api/review/gtest-suggest-map?job_id=${encodeURIComponent(state.jobId)}`, {
+      await api(`/api/review/code-style-samples?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          candidate_id: tc.selectedCandidateId,
-          language: state.exportLanguage || "EN",
+          replace: true,
+          samples: [{ label: "pasted_sample", source_file: "paste.cpp", snippet: text }],
         }),
       });
-      tc.variableMapDraft = { ...(res.code_variable_map || {}) };
-      const tbody = $("#testcode-var-map tbody");
-      if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(tc.variableMapDraft);
-      bindTestCodeHandlers(rows, logicItems);
-      await runGenerate();
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      tc.codeStyleSamples = tc.workspace.code_style_samples || [];
+      if (statusEl) statusEl.textContent = "Pasted sample saved.";
+      refreshTestCodePromptPreview(rows);
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
   });
 
-  $("#btn-testcode-add-var")?.addEventListener("click", () => {
-    tc.variableMapDraft = { ...(tc.variableMapDraft || {}), "": "" };
-    const tbody = $("#testcode-var-map tbody");
-    if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(tc.variableMapDraft);
-    bindTestCodeHandlers(rows, logicItems);
+  bindClick("#btn-testcode-copy-prompt", async () => {
+    try {
+      await copyTestCodeCopilotPrompt(rows);
+      if (statusEl) statusEl.textContent = "Copilot prompt copied — paste into M365 Copilot web, then paste result in Step 3.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message || "Copy failed.";
+    }
   });
 
-  document.querySelectorAll("[data-var-remove]").forEach((btn) => {
-    btn.onclick = () => {
-      const idx = Number(btn.dataset.varRemove);
-      const specs = Object.keys(tc.variableMapDraft || {});
-      const spec = specs[idx];
-      if (spec != null) {
-        const next = { ...tc.variableMapDraft };
-        delete next[spec];
-        tc.variableMapDraft = next;
-        const tbody = $("#testcode-var-map tbody");
-        if (tbody) tbody.innerHTML = renderTestCodeVariableMapRows(next);
-        bindTestCodeHandlers(rows, logicItems);
+  bindClick("#btn-testcode-refresh-prompt", () => refreshTestCodePromptPreview(rows));
+
+  bindClick("#btn-testcode-import-copilot", () => applyImportedCopilotToEditor(rows));
+
+  bindClick("#btn-testcode-apply-imported", () => applyImportedCopilotToEditor(rows));
+
+  bindClick("#btn-testcode-validate", () => {
+    const code = $("#testcode-code-editor")?.value || "";
+    const sampleSnippet = tc.codeStyleSamples?.[0]?.snippet || tc.workspace?.code_style_samples?.[0]?.snippet || "";
+    showTestCodeValidationResult(validateGtestBeforeSave(code, tc.selectedCandidateId, sampleSnippet));
+    if (statusEl) statusEl.textContent = "Validation updated above editor.";
+  });
+
+  bindClick("#btn-testcode-export-cpp", () => {
+    const cid = tc.selectedCandidateId;
+    if (!cid) {
+      if (statusEl) statusEl.textContent = "Select a testcase first.";
+      return;
+    }
+    window.open(
+      `/api/export/gtest-cpp?job_id=${encodeURIComponent(state.jobId)}&candidate_id=${encodeURIComponent(cid)}`,
+      "_blank"
+    );
+  });
+
+  bindClick("#btn-testcode-copilot", async () => {
+    if (!tc.selectedCandidateId) {
+      if (statusEl) statusEl.textContent = "Chọn testcase trước.";
+      return;
+    }
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Authorize Copilot API trước.";
+      return;
+    }
+    const req = userRequest();
+    const editorCode = $("#testcode-code-editor")?.value || "";
+    try {
+      setTestCodeApiStatus("running");
+      if (editorHasGtestCode()) {
+        await startM365Task({
+          kind: "code_refine",
+          label: `Chỉnh ${tc.selectedCandidateId}`,
+          candidateId: tc.selectedCandidateId,
+          targetPage: "test-code",
+          payload: {
+            candidate_id: tc.selectedCandidateId,
+            existing_code: editorCode,
+            instruction: req,
+            language: state.exportLanguage || "EN",
+            reuse_conversation: true,
+          },
+        });
+        if (statusEl) statusEl.textContent = "Generate by API running — result will appear in the editor.";
+        return;
       }
-    };
-  });
 
-  const collectVariableMap = () => {
-    const map = {};
-    document.querySelectorAll("#testcode-var-map tbody tr").forEach((tr) => {
-      const spec = tr.querySelector(".gtest-map-spec")?.value?.trim();
-      const code = tr.querySelector(".gtest-map-code")?.value?.trim();
-      if (spec) map[spec] = code || "";
-    });
-    tc.variableMapDraft = map;
-    return map;
-  };
-
-  $("#btn-testcode-apply-map")?.addEventListener("click", async () => {
-    const map = collectVariableMap();
-    if (statusEl) statusEl.textContent = "Applying map…";
-    try {
-      await api(`/api/review/code-variable-map?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code_variable_map: map }),
+      const importedMode = jobBootstrapSource(state._summaryCache?.summary).startsWith("imported");
+      await startM365Task({
+        kind: "code_generate",
+        label: `Generate ${tc.selectedCandidateId}`,
+        candidateId: tc.selectedCandidateId,
+        targetPage: "test-code",
+        payload: {
+          candidate_id: tc.selectedCandidateId,
+          use_baseline: true,
+          slim: true,
+          language: state.exportLanguage || "EN",
+          engineer_note: req,
+          copilot_prompt_override: req,
+          reference_test_name: tc.codeStyleSamples?.[0]?.test_name || "",
+          from_testcase_only: importedMode ? true : null,
+          reuse_conversation: true,
+        },
       });
-      tc.variableMapDraft = map;
-      tc.draftCache = {};
-      await runGenerate();
+      if (statusEl) statusEl.textContent = "Generate by API running — see status in Step 3.";
     } catch (e) {
+      setTestCodeApiStatus("failed", e.message);
       if (statusEl) statusEl.textContent = e.message;
     }
   });
 
-  $("#btn-testcode-save-harness")?.addEventListener("click", async () => {
-    const harness = {
-      fixture_class: $("#testcode-fixture")?.value || "PowerModeTest",
-      inputs_member: $("#testcode-inputs-member")?.value || "in",
-      outputs_member: $("#testcode-outputs-member")?.value || "out",
-      state_member: $("#testcode-state-member")?.value || "state",
-      state_enum: $("#testcode-state-enum")?.value || "PowerModeState",
-      evaluate_fn: $("#testcode-evaluate-fn")?.value || "EvaluatePowerMode",
-      helpers: {
-        advance_time: $("#testcode-advance-fn")?.value || "RunForMs",
-      },
-    };
-    tc.harnessDraft = harness;
-    if (statusEl) statusEl.textContent = "Saving harness config…";
-    try {
-      await api(`/api/review/gtest-harness?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ harness }),
-      });
-      if (statusEl) statusEl.textContent = "Harness saved.";
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
-    }
-  });
-
-  $("#btn-testcode-save-draft")?.addEventListener("click", async () => {
-    const key = tc.selectedCandidateId || tc.selectedLogicId;
+  bindClick("#btn-testcode-save-draft", async () => {
+    const key = tc.selectedCandidateId;
     if (!key) return;
     const codeEl = $("#testcode-code-editor");
     const full = codeEl?.value || "";
-    const bodyStart = full.indexOf("TEST_F(");
-    const specBlock =
-      bodyStart > 0 ? full.slice(0, bodyStart).trim() : $("#testcode-spec-comments")?.value || "";
+    const sampleSnippet = tc.codeStyleSamples?.[0]?.snippet || tc.workspace?.code_style_samples?.[0]?.snippet || "";
+    const val = validateGtestBeforeSave(full, key, sampleSnippet);
+    const valEl = document.getElementById("testcode-validation");
+    if (valEl) {
+      valEl.hidden = false;
+      valEl.innerHTML = renderTestCodeValidation(val);
+    }
+    if (!confirmTestCodeSave(val, full, key)) {
+      if (statusEl) statusEl.textContent = "Save cancelled.";
+      return;
+    }
+    const bodyStart = full.search(/\bTEST(?:_F)?\s*\(/);
+    const specBlock = bodyStart > 0 ? full.slice(0, bodyStart).trim() : "";
     const codeBody = bodyStart >= 0 ? full.slice(bodyStart).trim() : full;
+    const genSrc = inferGenerationSourceForSave(key);
     if (statusEl) statusEl.textContent = "Saving…";
     try {
-      await api(`/api/review/gtest-draft?job_id=${encodeURIComponent(state.jobId)}`, {
+      const saveRes = await api(`/api/review/gtest-draft?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           draft_key: key,
-          source_kind: tc.selectedCandidateId ? "candidate" : "logic",
+          source_kind: "candidate",
           test_name: tc.draft?.test_name || key,
           spec_comment_block: specBlock,
           code_body: codeBody,
           full_snippet: full,
           engineer_edited: true,
+          code_status: "SAVED",
+          generation_source: genSrc,
         }),
       });
-      if (statusEl) statusEl.textContent = "Saved.";
+      if (codeEl) codeEl.classList.remove("field-copilot-changed");
+      clearTestCodeDirty(key, full);
+      if (!tc.generationSource) tc.generationSource = {};
+      tc.generationSource[key] = genSrc;
+      if (!tc.workspace) tc.workspace = {};
+      if (!tc.workspace.drafts) tc.workspace.drafts = {};
+      tc.workspace.drafts[key] = {
+        ...(tc.workspace.drafts[key] || {}),
+        full_snippet: full,
+        code_body: codeBody,
+        spec_comment_block: specBlock,
+        code_status: saveRes.code_status || "SAVED",
+        generation_source: saveRes.generation_source || genSrc,
+        last_saved_at: saveRes.last_saved_at || null,
+      };
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      await refreshTestCodeSyncStatus();
+      tc.draft = resolveDraftForCandidate(key);
+      applyTestCodeDraftToUi(tc.draft, rows.find((r) => r.candidate_id === key));
+      if (statusEl) statusEl.textContent = `Saved [SAVED] · ${genSrc}${saveRes.last_saved_at ? ` · ${formatTestCodeTimestamp(saveRes.last_saved_at)}` : ""}`;
+      refreshTestCodePromptPreview(rows);
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
   });
 
-  $("#btn-testcode-copy")?.addEventListener("click", async () => {
-    const text = $("#testcode-code-editor")?.value || "";
-    try {
-      await navigator.clipboard.writeText(text);
-      if (statusEl) statusEl.textContent = "Copied.";
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
+  bindOnInput("#testcode-code-editor", () => markTestCodeDirty());
+
+  bindClick("#btn-testcode-merge-saved", () => openTestCodeMergePreview(rows));
+}
+
+function renderTestCodeValidation(val) {
+  if (!val) return "";
+  const warnings = val.warnings || [];
+  if (!warnings.length) {
+    return `<span class="tag ok">Validation OK — ready to Save Code</span>`;
+  }
+  return `<div class="alex-testcode-validation-warn">
+    <span class="tag warning">Validation warnings — review before save</span>
+    <ul class="alex-testcode-validation-list">${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+  </div>`;
+}
+
+function renderTestCodeMergePanel(preview) {
+  if (!preview) return "";
+  const included = preview.included || [];
+  const skipped = preview.skipped || [];
+  const warnings = preview.warnings || [];
+  const total = preview.total_count ?? included.length + skipped.length;
+  const warnCount = preview.warning_count ?? warnings.length;
+  const skipList = skipped.length
+    ? `<ul class="alex-testcode-merge-list">${skipped
+        .map((s) => `<li><code>${esc(s.candidate_id)}</code> — ${esc(s.reason)}</li>`)
+        .join("")}</ul>`
+    : `<p class="detail">—</p>`;
+  const includeList = included.length
+    ? `<ul class="alex-testcode-merge-list">${included.map((id) => `<li><code>${esc(id)}</code></li>`).join("")}</ul>`
+    : `<p class="detail">—</p>`;
+  const warnList = warnings.length
+    ? `<ul class="alex-testcode-merge-list alex-testcode-merge-list--warn">${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`
+    : `<p class="detail">—</p>`;
+  return `<div class="alex-testcode-merge-summary">
+      <p class="detail"><b>Total testcase:</b> ${total} · <b>Included:</b> ${included.length} · <b>Skipped:</b> ${skipped.length} · <b>Warnings:</b> ${warnCount}</p>
+      ${skipped.length ? `<p class="tag warning">Some testcases are not saved or have no code. Merge will include only SAVED code.</p>` : ""}
+    </div>
+    <section class="alex-testcode-merge-section">
+      <h4 class="alex-testcode-panel-title">Included testcases (${included.length})</h4>
+      ${includeList}
+    </section>
+    <section class="alex-testcode-merge-section">
+      <h4 class="alex-testcode-panel-title">Skipped testcases (${skipped.length})</h4>
+      ${skipList}
+    </section>
+    <section class="alex-testcode-merge-section">
+      <h4 class="alex-testcode-panel-title">Warnings (${warnings.length})</h4>
+      ${warnList}
+    </section>
+    <section class="alex-testcode-merge-section">
+      <h4 class="alex-testcode-panel-title">Final merged code</h4>
+      <textarea class="gtest-input gtest-editor alex-testcode-merge-preview" id="testcode-merge-preview-code" rows="16" readonly spellcheck="false">${esc(preview.content || "")}</textarea>
+    </section>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary" id="btn-testcode-merge-copy">Copy Merged Code</button>
+      <button type="button" class="btn" id="btn-testcode-merge-export">Export Merged .cpp</button>
+    </div>`;
+}
+
+function bindTestCodeMergePanelActions(data, statusEl) {
+  bindClick("#btn-testcode-merge-copy", async () => {
+    const text = data.content || "";
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    if (statusEl) statusEl.textContent = "Merged code copied to clipboard.";
+  });
+  bindClick("#btn-testcode-merge-export", () => {
+    const text = data.content || "";
+    if (!text) return;
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = mergedExportFilename(data);
+    a.click();
+    URL.revokeObjectURL(url);
+    if (statusEl) statusEl.textContent = `Exported ${a.download}.`;
+  });
+}
+
+async function openTestCodeMergePreview(rows) {
+  const statusEl = $("#testcode-status");
+  const panel = $("#testcode-merge-panel");
+  if (!state.jobId) return;
+  if (statusEl) statusEl.textContent = "Building merge preview…";
+  try {
+    const lang = state.exportLanguage || "EN";
+    const data = await api(
+      `/api/review/gtest-merge-saved-preview?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(lang)}`
+    );
+    state.testCode.mergePreview = data;
+    if (panel) {
+      panel.hidden = false;
+      panel.innerHTML = renderTestCodeMergePanel(data);
+      bindTestCodeMergePanelActions(data, statusEl);
     }
-  });
-
-  $("#btn-testcode-download")?.addEventListener("click", () => {
-    if (!tc.selectedCandidateId) {
-      if (statusEl) statusEl.textContent = "Select a test case first.";
-      return;
+    if (statusEl) {
+      statusEl.textContent = `Merge preview ready — ${data.saved_count || 0} saved, ${data.skipped_count || 0} skipped.`;
     }
-    window.location.href = `/api/export/gtest-cpp?job_id=${encodeURIComponent(state.jobId)}&candidate_id=${encodeURIComponent(tc.selectedCandidateId)}`;
-  });
+    patchTestCodeCaseStatusUi();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message;
+  }
+}
 
-  $("#btn-testcode-download-bundle")?.addEventListener("click", () => {
-    window.location.href = `/api/export/gtest-cpp-bundle?job_id=${encodeURIComponent(state.jobId)}`;
-  });
-
-  $("#btn-testcode-save-library")?.addEventListener("click", async () => {
-    collectVariableMap();
-    if (statusEl) statusEl.textContent = "Saving preset to Library…";
-    try {
-      await api(`/api/library/gtest-preset?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preset: null }),
-      });
-      if (statusEl) statusEl.textContent = "Preset saved to ALEX/web_data/.alex/ (harness + project memory).";
-    } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
-    }
-  });
-
-  document.querySelectorAll(".gtest-map-spec, .gtest-map-code").forEach((input) => {
-    input.addEventListener("input", () => {
-      debounceAutosave("testcode-map", () => collectVariableMap());
-    });
-  });
+function patchTestCodeShell({ rows, activeRow, draft, ws }) {
+  const tc = state.testCode;
+  const sampleName = document.querySelector(".gtest-sample-name");
+  if (sampleName && (tc.codeStyleSamples?.[0] || ws?.code_style_samples?.[0])) {
+    const s = tc.codeStyleSamples?.[0] || ws.code_style_samples[0];
+    sampleName.textContent = s.label || s.source_file || "sample.cpp";
+  }
+  const reqEl = $("#testcode-user-request");
+  if (reqEl && tc.userRequest != null) reqEl.value = tc.userRequest;
+  const ioCtx = document.getElementById("testcode-io-context");
+  if (ioCtx && activeRow) ioCtx.outerHTML = renderTestCodeIoContext(activeRow);
+  if (draft) applyTestCodeDraftToUi(draft, activeRow);
+  patchTestCodeCaseStatusUi();
+  refreshM365TaskBanner();
 }
 
 async function renderTestCode(opts = {}) {
   const preserveSelection = opts.preserveSelection === true;
   const forceRefresh = opts.force === true;
+  const skipShell = opts.skipShell === true;
   if (!state.jobId) {
     content().innerHTML = renderTestCodeHelpCard(
       "No active job",
@@ -7316,6 +8776,7 @@ async function renderTestCode(opts = {}) {
     }
 
     const ws = forceRefresh ? await fetchGtestWorkspace(true) : await fetchGtestWorkspace();
+    hydrateTestCodeWorkflowFromWorkspace(ws, { fullReset: !hasShell });
     const rows = ws.workbench_rows || [];
     const logicItems = ws.logic_items || [];
     if (!rows.length && !logicItems.length) {
@@ -7346,126 +8807,26 @@ async function renderTestCode(opts = {}) {
     state.testCode.logicItems = logicItems;
     state.testCode.mounted = true;
 
-    let draft = null;
-    const draftKey = state.testCode.selectedCandidateId || state.testCode.selectedLogicId;
-    state.testCode.lastDraftKey = draftKey;
-    const saved = (ws.drafts || {})[draftKey];
-    const cacheKey = `${state.testCode.selectedCandidateId || ""}:${state.testCode.selectedLogicId || ""}:${JSON.stringify(state.testCode.variableMapDraft || {})}`;
-    if (saved?.full_snippet) {
-      draft = saved;
-      state.testCode.draft = saved;
-      if (saved.source_kind === "copilot") state.testCode.copilotDraft = saved;
-    } else if (state.testCode.draftCache[cacheKey]?.full_snippet) {
-      draft = state.testCode.draftCache[cacheKey];
-      state.testCode.draft = draft;
-    } else if (!opts.skipGenerate) {
-      try {
-        draft = await regenerateGtestDraft();
-      } catch (genErr) {
-        draft = {
-          spec_comment_block: "// Could not auto-generate — use Regenerate from spec after fixing the server.",
-          full_snippet: "",
-          unmapped_signals: [],
-        };
-        const statusEl = $("#testcode-status");
-        if (statusEl) {
-          statusEl.textContent = `Generate failed: ${genErr.message}. Workspace loaded — try Regenerate.`;
-        }
-      }
+    const cid = state.testCode.selectedCandidateId;
+    state.testCode.lastDraftKey = cid;
+    const draft = resolveDraftForCandidate(cid);
+    state.testCode.draft = draft;
+
+    if (hasShell && skipShell) {
+      patchTestCodeShell({ rows, activeRow, draft, ws });
+      return;
     }
 
-    const harness = state.testCode.harnessDraft || ws.harness || {};
-    content().innerHTML = `<section class="alex-page alex-testcode-page">
-      <div class="alex-testcode-toolbar card">
-        <div class="alex-testcode-toolbar__pickers">
-          ${renderWorkbookTestcaseBar(rows, "testcode")}
-          <label class="gtest-inline-label">Logic
-            <select id="testcode-logic-select" class="gtest-input gtest-select">
-              <option value="">—</option>
-              ${logicItems
-                .map(
-                  (item) =>
-                    `<option value="${esc(item.logic_id)}" ${item.logic_id === state.testCode.selectedLogicId ? "selected" : ""}>${esc(item.control_name || item.logic_id)}</option>`
-                )
-                .join("")}
-            </select>
-          </label>
-        </div>
-        <div class="alex-testcode-toolbar__actions">
-          <button type="button" class="btn" id="btn-testcode-regenerate">Regenerate</button>
-          <button type="button" class="btn secondary" id="btn-testcode-copilot" ${m365KnowledgeReady() ? "" : "disabled"} title="M365 Copilot writes GTest from approved I/O + code samples">Generate with Copilot</button>
-          <button type="button" class="btn secondary" id="btn-testcode-batch" ${m365KnowledgeReady() ? "" : "disabled"} title="Generate all test cases in current logic group">Batch Copilot</button>
-          <button type="button" class="btn secondary" id="btn-testcode-apply-copilot" hidden>Apply Copilot</button>
-          <button type="button" class="btn secondary" id="btn-testcode-copy">Copy</button>
-          <button type="button" class="btn secondary" id="btn-testcode-download">.cpp</button>
-          <button type="button" class="btn secondary" id="btn-testcode-save-draft" title="Save engineer edits">Save</button>
-        </div>
-      </div>
-      ${renderTestCodeIoStrip(activeRow)}
-      <p class="detail alex-testcode-hint" id="testcode-status">Upload code sample → chọn TC → Generate with Copilot (M365) hoặc Regenerate offline.</p>
-      <div id="testcode-copilot-diff" class="detail" hidden></div>
-      ${renderTestCodeBatchPanel(state.testCode.batchResults)}
-      <div class="alex-testcode-workspace">
-        <aside class="alex-testcode-side card">
-          <details class="alex-testcode-panel" open>
-            <summary>Code samples <span class="detail">(${ (state.testCode.codeStyleSamples || []).length }/3)</span></summary>
-            <div class="alex-testcode-panel__body" id="testcode-samples-panel">
-              ${renderTestCodeSamplesPanel(state.testCode.codeStyleSamples, state.testCode.referenceTestName)}
-            </div>
-          </details>
-          <details class="alex-testcode-panel">
-            <summary>Rename map <span class="detail">(optional)</span></summary>
-            <div class="alex-testcode-panel__body">
-              <div class="gtest-map-toolbar">
-                <button type="button" class="btn secondary btn-inline" id="btn-testcode-suggest-map">Suggest</button>
-                <button type="button" class="btn secondary btn-inline" id="btn-testcode-add-var">+</button>
-                <button type="button" class="btn secondary btn-inline" id="btn-testcode-apply-map">Apply</button>
-              </div>
-              <div class="gtest-var-map-scroll">
-                <table class="data-grid alex-table gtest-var-map" id="testcode-var-map">
-                  <thead><tr><th>Spec</th><th>Code</th><th></th></tr></thead>
-                  <tbody>${renderTestCodeVariableMapRows(state.testCode.variableMapDraft)}</tbody>
-                </table>
-              </div>
-            </div>
-          </details>
-          <details class="alex-testcode-panel">
-            <summary>Harness defaults</summary>
-            <div class="alex-testcode-panel__body gtest-harness-compact">
-              <label>Fixture<input id="testcode-fixture" class="gtest-input" value="${esc(harness.fixture_class || "PowerModeTest")}" /></label>
-              <label class="gtest-harness-row"><span>Members</span><span class="gtest-harness-inout"><input id="testcode-inputs-member" class="gtest-input" value="${esc(harness.inputs_member || "in")}" title="inputs member" /><span>/</span><input id="testcode-outputs-member" class="gtest-input" value="${esc(harness.outputs_member || "out")}" title="outputs member" /></span></label>
-              <label>Evaluate<input id="testcode-evaluate-fn" class="gtest-input" value="${esc(harness.evaluate_fn || "EvaluatePowerMode")}" /></label>
-              <input type="hidden" id="testcode-state-member" value="${esc(harness.state_member || "state")}" />
-              <input type="hidden" id="testcode-state-enum" value="${esc(harness.state_enum || "PowerModeState")}" />
-              <input type="hidden" id="testcode-advance-fn" value="${esc((harness.helpers || {}).advance_time || "RunForMs")}" />
-              <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-harness">Save harness</button>
-              <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-library" title="Library preset">Library</button>
-            </div>
-          </details>
-        </aside>
-        <div class="alex-testcode-editor card">
-          <div class="alex-testcode-editor__head">
-            <span class="detail">${esc(draft?.test_name || activeRow?.candidate_id || "TEST_F snippet")}</span>
-            ${
-              draft?.spec_preview?.given_when || draft?.spec_preview?.then
-                ? `<span class="detail gtest-spec-inline">${esc(
-                    [draft.spec_preview.given_when, draft.spec_preview.then].filter(Boolean).join(" → ").slice(0, 120)
-                  )}${([draft.spec_preview.given_when, draft.spec_preview.then].join(" ").length > 120 ? "…" : "")}</span>`
-                : ""
-            }
-            ${
-              draft?.unmapped_signals?.length
-                ? `<span class="tag warning">Unmapped: ${draft.unmapped_signals.map((s) => esc(s)).join(", ")}</span>`
-                : ""
-            }
-          </div>
-          <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main" spellcheck="false" placeholder="// Spec comments + TEST_F body…">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
-          <input type="hidden" id="testcode-spec-comments" value="${esc(draft?.spec_comment_block || "")}" />
-        </div>
-      </div>
+    await refreshTestCodeSyncStatus();
+
+    content().innerHTML = `<section class="alex-page alex-testcode-page alex-testcode-page--simple">
+      ${renderM365KnowledgeBanner()}
+      ${renderTestCodePageBody(rows, activeRow, draft, state.testCode.codeStyleSamples || ws.code_style_samples || [])}
+      <div id="testcode-copilot-progress" hidden></div>
+      <div id="testcode-apply-all-banner" hidden></div>
     </section>`;
     bindWorkbookTestcaseBar(rows, "testcode", renderTestCode);
-    bindTestCodeHandlers(rows, logicItems);
+    bindTestCodeHandlers(rows);
     bindTabHelpLinks();
   } catch (e) {
     content().innerHTML = `<div class="card">${explainTestCodeError(e.message)}
@@ -7530,6 +8891,7 @@ async function boot() {
   const initialPage = resolveInitialPage(state._summaryCache?.summary);
   showPage(initialPage, { replace: true });
   state.routingBoot = false;
+  await resumeM365Tasks();
 }
 
 boot();

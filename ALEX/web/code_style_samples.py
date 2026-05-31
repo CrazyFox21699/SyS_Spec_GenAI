@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -209,18 +210,93 @@ def import_library_code_samples(bundle: dict[str, Any], preset: dict[str, Any]) 
 def validate_copilot_code_draft(draft: dict[str, Any], *, expected_test_name: str = "") -> dict[str, Any]:
     """Light quality flags for batch review UI."""
     body = str(draft.get("code_body") or draft.get("full_snippet") or "")
+    return validate_gtest_code_for_save(body, candidate_id=expected_test_name)
+
+
+_GTEST_BUILTINS = frozenset(
+    {
+        "TEST",
+        "TEST_F",
+        "EXPECT_EQ",
+        "EXPECT_NE",
+        "EXPECT_TRUE",
+        "EXPECT_FALSE",
+        "EXPECT_THAT",
+        "ASSERT_EQ",
+        "ASSERT_NE",
+        "ASSERT_TRUE",
+        "ASSERT_FALSE",
+        "if",
+        "for",
+        "while",
+        "switch",
+        "return",
+        "sizeof",
+        "static_cast",
+        "dynamic_cast",
+        "reinterpret_cast",
+        "const_cast",
+    }
+)
+
+
+def _api_calls_from_cpp(text: str) -> set[str]:
+    import re
+
+    return {m.group(1) for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", text or "")}
+
+
+def validate_gtest_code_for_save(
+    code: str,
+    *,
+    candidate_id: str = "",
+    sample_snippet: str = "",
+) -> dict[str, Any]:
+    """Pre-save validation for Test Code workbench."""
+    body = str(code or "").strip()
     flags: list[str] = []
-    if not body.strip():
+    warnings: list[str] = []
+
+    if not body:
         flags.append("empty")
-    if "TEST_F" not in body:
-        flags.append("missing_TEST_F")
-    if not re_search_expect(body):
+    if "```" in body:
+        flags.append("markdown_fence")
+    if re.search(r"\bTODO\b", body, re.IGNORECASE):
+        flags.append("todo")
+    if not re.search(r"\bTEST(?:_F)?\s*\(", body):
+        flags.append("missing_TEST")
+    if not re_search_expect(body) and not re.search(r"\bASSERT_(EQ|NE|TRUE|FALSE|THAT)\b", body):
         flags.append("missing_EXPECT")
-    open_q = draft.get("open_questions") or []
-    if open_q:
-        flags.append("open_questions")
-    ok = "empty" not in flags and "missing_TEST_F" not in flags
-    return {"ok": ok, "flags": flags, "quality": "good" if ok and not flags else ("review" if ok else "failed")}
+    cid = str(candidate_id or "").strip()
+    if cid and cid not in body:
+        flags.append("missing_candidate_id_comment")
+
+    if sample_snippet.strip():
+        sample_apis = _api_calls_from_cpp(sample_snippet) - _GTEST_BUILTINS
+        code_apis = _api_calls_from_cpp(body) - _GTEST_BUILTINS
+        unknown = sorted(code_apis - sample_apis)
+        unknown = [u for u in unknown if len(u) > 2 and not u.startswith("EXPECT") and not u.startswith("ASSERT")]
+        if unknown:
+            warnings.append(f"unknown_api_vs_sample: {', '.join(unknown[:8])}")
+
+    hard_fail = {"empty", "markdown_fence", "missing_TEST", "missing_EXPECT"}
+    ok = not (hard_fail & set(flags))
+    user_action = None
+    if "missing_candidate_id_comment" in flags:
+        user_action = f"Add // {cid} in spec comment block before saving."
+    elif "markdown_fence" in flags:
+        user_action = "Remove markdown ``` fences — save C++ only."
+    elif "todo" in flags:
+        user_action = "Resolve TODO comments before saving."
+
+    quality = "good" if ok and not flags and not warnings else ("review" if ok else "failed")
+    return {
+        "ok": ok,
+        "flags": flags,
+        "warnings": warnings,
+        "quality": quality,
+        "user_action": user_action,
+    }
 
 
 def re_search_expect(text: str) -> bool:

@@ -130,3 +130,81 @@ def parse_cpp_upload(content: str, *, filename: str = "upload.cpp") -> dict[str,
         "test_blocks": test_blocks,
         "harness_hints": harness_hints,
     }
+
+
+ALEX_BEGIN_RE = re.compile(r"^\s*//\s*@alex:begin\s+(\S+)", re.MULTILINE)
+ALEX_END_RE = re.compile(r"^\s*//\s*@alex:end\s+(\S+)", re.MULTILINE)
+ALEX_SPEC_HASH_RE = re.compile(r"^\s*//\s*@alex:spec_hash\s+(\S+)", re.MULTILINE)
+
+
+def wrap_alex_block(candidate_id: str, body: str, *, spec_hash: str = "") -> str:
+    cid = str(candidate_id or "").strip()
+    inner = str(body or "").strip()
+    lines = [f"// @alex:begin {cid}"]
+    if spec_hash:
+        lines.append(f"// @alex:spec_hash {spec_hash}")
+    lines.append(inner)
+    lines.append(f"// @alex:end {cid}")
+    return "\n".join(lines)
+
+
+def index_alex_blocks(text: str) -> list[dict[str, Any]]:
+    """Scan full monolith for @alex begin/end pairs (line-based, no size cap)."""
+    lines = str(text or "").replace("\r\n", "\n").split("\n")
+    blocks: list[dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        m = ALEX_BEGIN_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        cid = m.group(1)
+        start = i
+        i += 1
+        spec_hash = ""
+        while i < len(lines):
+            hm = ALEX_SPEC_HASH_RE.match(lines[i])
+            if hm:
+                spec_hash = hm.group(1)
+                i += 1
+                continue
+            em = ALEX_END_RE.match(lines[i])
+            if em and em.group(1) == cid:
+                end = i
+                snippet = "\n".join(lines[start : end + 1]).strip()
+                blocks.append(
+                    {
+                        "candidate_id": cid,
+                        "line_start": start + 1,
+                        "line_end": end + 1,
+                        "spec_hash": spec_hash,
+                        "snippet": snippet,
+                    }
+                )
+                i += 1
+                break
+            i += 1
+    return blocks
+
+
+def import_blocks_to_draft_map(text: str) -> dict[str, dict[str, Any]]:
+    """Map candidate_id → draft payload from marked monolith."""
+    out: dict[str, dict[str, Any]] = {}
+    for block in index_alex_blocks(text):
+        cid = block["candidate_id"]
+        snippet = block["snippet"]
+        body_start = snippet.find("TEST_F(")
+        if body_start < 0:
+            body_start = len(snippet)
+        spec_part = snippet[:body_start].strip()
+        code_part = snippet[body_start:].strip()
+        if code_part.endswith(f"// @alex:end {cid}"):
+            code_part = code_part[: code_part.rfind(f"// @alex:end {cid}")].strip()
+        out[cid] = {
+            "full_snippet": snippet,
+            "spec_comment_block": spec_part,
+            "code_body": code_part,
+            "spec_hash": block.get("spec_hash") or "",
+            "source_kind": "monolith_import",
+        }
+    return out

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from src.engine.concrete_test_values import (
@@ -49,6 +49,43 @@ CUSTOMER_TESTSPEC_HEADERS = [
     "Engineer Confirmation Required",
     "Open Questions",
 ]
+
+# Team JP TestSpec template (実機テスト仕様書) — matches customer workbook layout.
+CUSTOMER_TESTSPEC_JP_HEADERS = [
+    "No",
+    "機能テスト",
+    "テストグループ",
+    "イベント",
+    "ユースケース",
+    "手順",
+    "入力に対する期待値",
+    "出力に対する期待値",
+    "備考",
+]
+
+JP_FONT_NAME = "Yu Gothic"
+JP_HEADER_FILL = PatternFill("solid", fgColor="D9E1F2")
+JP_HEADER_FONT = Font(name=JP_FONT_NAME, bold=True, color="000000")
+JP_BODY_FONT = Font(name=JP_FONT_NAME, color="000000")
+JP_TITLE_FONT = Font(name=JP_FONT_NAME, bold=True, color="000000", size=11)
+JP_THIN_BORDER = Border(
+    left=Side(style="thin", color="000000"),
+    right=Side(style="thin", color="000000"),
+    top=Side(style="thin", color="000000"),
+    bottom=Side(style="thin", color="000000"),
+)
+JP_COLUMN_WIDTHS = {
+    "A": 6,
+    "B": 18,
+    "C": 28,
+    "D": 22,
+    "E": 16,
+    "F": 12,
+    "G": 42,
+    "H": 42,
+    "I": 42,
+    "J": 14,
+}
 
 
 def _style_header(ws, ncol: int) -> None:
@@ -94,6 +131,138 @@ def _write_sheet(ws, headers: list[str], rows: list[list[Any]], status_col: int 
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
     _auto_width(ws)
+
+
+def _jp_remarks(overlay: dict[str, Any] | None) -> str:
+    questions = [str(q).strip() for q in ((overlay or {}).get("open_questions") or []) if str(q).strip()]
+    if questions:
+        return "\n".join(questions)
+    return "-"
+
+
+def _jp_test_group(candidate: dict[str, Any], overlay: dict[str, Any] | None, binding: dict[str, Any] | None) -> str:
+    group = str((overlay or {}).get("test_group") or "").strip()
+    if group:
+        return group
+    transition = _transition_operation(binding)
+    if transition:
+        return transition
+    return str((candidate.get("traceability") or {}).get("control_name") or "").strip()
+
+
+def _jp_section_title(
+    preview_rows: list[dict[str, Any]],
+    module_name: str,
+    bundle: dict[str, Any] | None = None,
+) -> str:
+    layout = (bundle or {}).get("testspec_layout") or {}
+    stored = str(layout.get("section_title") or "").strip()
+    if stored:
+        return stored
+    for row in preview_rows:
+        fn = str(row.get("test_function") or "").strip()
+        if fn:
+            return re.sub(r"\*+", "", fn).strip()
+    return re.sub(r"[_-]+", " ", module_name).strip()
+
+
+def _jp_sheet_title(
+    preview_rows: list[dict[str, Any]],
+    module_name: str,
+    bundle: dict[str, Any] | None = None,
+) -> str:
+    layout = (bundle or {}).get("testspec_layout") or {}
+    stored = str(layout.get("primary_sheet_name") or "").strip()
+    if stored:
+        return stored[:31]
+    for row in preview_rows:
+        fn = str(row.get("test_function") or "").strip()
+        if fn:
+            title = re.sub(r"\*+", "", fn)
+            title = re.sub(r"[^A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff]+", "", title)
+            if title:
+                return title[:31]
+    title = re.sub(r"[^A-Za-z0-9]+", "", module_name)
+    return (title or "TestSpec")[:31]
+
+
+def _apply_jp_borders(ws, min_row: int, max_row: int, min_col: int, max_col: int) -> None:
+    for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+        for cell in row:
+            cell.border = JP_THIN_BORDER
+
+
+def _merge_same_values(ws, *, data_start_row: int, data_end_row: int, col: int) -> None:
+    if data_end_row <= data_start_row:
+        return
+    start = data_start_row
+    prev = ws.cell(start, col).value
+    for row_idx in range(data_start_row + 1, data_end_row + 2):
+        current = ws.cell(row_idx, col).value if row_idx <= data_end_row else None
+        if current != prev or row_idx > data_end_row:
+            if prev not in (None, "") and row_idx - 1 > start:
+                ws.merge_cells(start_row=start, start_column=col, end_row=row_idx - 1, end_column=col)
+                merged = ws.cell(start, col)
+                merged.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            if row_idx <= data_end_row:
+                start = row_idx
+                prev = current
+
+
+def _write_jp_customer_sheet(
+    ws,
+    preview_rows: list[dict[str, Any]],
+    *,
+    module_name: str,
+    bundle: dict[str, Any] | None = None,
+) -> None:
+    title = _jp_section_title(preview_rows, module_name, bundle)
+    header_row = 3 if title else 2
+    data_start_row = header_row + 1
+
+    if title:
+        ws.cell(row=header_row - 1, column=2, value=title)
+        ws.cell(row=header_row - 1, column=2).font = JP_TITLE_FONT
+        ws.cell(row=header_row - 1, column=2).alignment = Alignment(horizontal="left", vertical="center")
+
+    for col_idx, header in enumerate(CUSTOMER_TESTSPEC_JP_HEADERS, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell.fill = JP_HEADER_FILL
+        cell.font = JP_HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = JP_THIN_BORDER
+
+    for row_idx, entry in enumerate(preview_rows, start=data_start_row):
+        jp_row = [
+            entry.get("no"),
+            entry.get("test_function", ""),
+            entry.get("test_group", ""),
+            entry.get("event", ""),
+            entry.get("use_case", ""),
+            entry.get("operation", ""),
+            entry.get("expected_input", ""),
+            entry.get("expected_output", ""),
+            entry.get("remarks", "-"),
+        ]
+        for col_idx, value in enumerate(jp_row, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = JP_BODY_FONT
+            if col_idx == 1:
+                cell.alignment = Alignment(horizontal="center", vertical="top", wrap_text=True)
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            cell.border = JP_THIN_BORDER
+
+    data_end_row = data_start_row + len(preview_rows) - 1
+    if preview_rows:
+        _apply_jp_borders(ws, header_row, data_end_row, 1, len(CUSTOMER_TESTSPEC_JP_HEADERS))
+        for merge_col in (2, 3, 4, 5):  # 機能テスト, テストグループ, イベント, ユースケース
+            _merge_same_values(ws, data_start_row=data_start_row, data_end_row=data_end_row, col=merge_col)
+
+    for letter, width in JP_COLUMN_WIDTHS.items():
+        ws.column_dimensions[letter].width = width
+
+    ws.freeze_panes = f"A{data_start_row}"
 
 
 def derive_module_name(bundle: dict[str, Any]) -> str:
@@ -479,6 +648,8 @@ def build_customer_testspec_preview(
             "review_status": row[12],
             "engineer_confirmation_required": row[13],
             "open_questions": row[14],
+            "test_group": _jp_test_group(cand, overlay, binding),
+            "remarks": _jp_remarks(overlay),
             "logic_id": logic_id,
             "control_name": control_name,
             "evidence_binding": binding or {},
@@ -517,7 +688,7 @@ def build_customer_testspec_preview(
         }
 
     return {
-        "headers": list(CUSTOMER_TESTSPEC_HEADERS),
+        "headers": list(CUSTOMER_TESTSPEC_JP_HEADERS if language == "JP" else CUSTOMER_TESTSPEC_HEADERS),
         "rows": row_dicts,
         "language": language,
         "validation_enabled": run_validator,
@@ -548,8 +719,14 @@ def export_customer_testspec(
             raise ValueError(
                 f"Export blocked: {failed} workbook row(s) failed I/O validation (export.strict=true)"
             )
-    rows = [row["row"] for row in preview["rows"]]
-    _write_sheet(ws, list(CUSTOMER_TESTSPEC_HEADERS), rows, status_col=13)
+
+    if language == "JP":
+        ws.title = _jp_sheet_title(preview["rows"], module_name, bundle)
+        _write_jp_customer_sheet(ws, preview["rows"], module_name=module_name, bundle=bundle)
+    else:
+        ws.title = "System Test Spec"
+        rows = [row["row"] for row in preview["rows"]]
+        _write_sheet(ws, list(CUSTOMER_TESTSPEC_HEADERS), rows, status_col=13)
 
     wb.save(path)
     return path

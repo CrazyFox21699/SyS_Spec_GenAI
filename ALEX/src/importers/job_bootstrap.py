@@ -147,6 +147,10 @@ def bootstrap_from_testspec_xlsx(
     bundle["test_candidates"] = imported.get("test_candidates") or []
     bundle["ai_assists"]["candidate_overlays"] = imported.get("candidate_overlays") or {}
     bundle["logic_blocks"] = imported.get("logic_blocks") or []
+    if imported.get("export_language"):
+        bundle["export_language"] = imported["export_language"]
+    if imported.get("testspec_layout"):
+        bundle["testspec_layout"] = imported["testspec_layout"]
     if imported.get("sheet_summary"):
         bundle["excel_import"] = {"sheets": imported["sheet_summary"]}
     return _finalize_import_bundle(bundle, source="imported_testspec", label=label)

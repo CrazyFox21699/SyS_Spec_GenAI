@@ -179,6 +179,9 @@ from web.project_memory import (
 from src.engine.verification_patterns import build_verification_matrix
 from web.gtest_workspace import (
     build_workspace_payload,
+    bulk_delete_code,
+    bulk_regen_comments,
+    classify_sync_status,
     export_approved_bundle,
     export_library_preset,
     export_single_snippet,
@@ -186,10 +189,12 @@ from web.gtest_workspace import (
     import_library_preset,
     library_preset_path,
     load_gtest_state,
+    regen_comment_only_draft,
     save_draft,
     save_gtest_state,
     suggest_map_for_request,
     sync_gtest_to_bundle,
+    _structured_io_for_candidate,
 )
 from web.structured_knowledge import (
     compile_accepted_constraints,
@@ -516,6 +521,43 @@ class CopilotCodeBatchRequest(BaseModel):
     language: str = "EN"
 
 
+class GTestTextReplaceRequest(BaseModel):
+    request: str = ""
+    from_text: str = ""
+    to_text: str = ""
+    candidate_id: str = ""
+    candidate_ids: list[str] = []
+    current_snippet: str = ""
+    persist: bool = True
+    preview: bool = False
+
+
+class GTestBulkRequest(BaseModel):
+    action: str
+    candidate_ids: list[str] = []
+    language: str = "EN"
+    from_text: str = ""
+    to_text: str = ""
+    stale_only: bool = False
+    persist: bool = True
+
+
+class CopilotCodeRefineRequest(BaseModel):
+    candidate_id: str
+    existing_code: str
+    instruction: str
+    reuse_conversation: bool = True
+
+
+class M365CopilotTaskRequest(BaseModel):
+    kind: str
+    payload: dict[str, Any] = {}
+    label: str = ""
+    logic_id: str = ""
+    candidate_id: str = ""
+    target_page: str = ""
+
+
 class CodeStyleSampleRow(BaseModel):
     label: str = ""
     test_name: str = ""
@@ -614,6 +656,8 @@ class GTestDraftSaveRequest(BaseModel):
     source_kind: str = "candidate"
     test_name: str = ""
     engineer_edited: bool = True
+    code_status: Optional[str] = None
+    generation_source: Optional[str] = None
 
 
 class GTestVariableMapRequest(BaseModel):
@@ -1603,10 +1647,20 @@ def _finalize_import_job(job_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
     return {"job_id": job_id, "status": "completed", "bundle_version": ver, "summary": summary}
 
 
+def _infer_import_language(preview: dict[str, Any]) -> str:
+    """Detect JP team template from header row text."""
+    jp_markers = ("機能テスト", "手順", "入力に対する期待値", "ユーザケース", "テストグループ")
+    for sheet in preview.get("sheets") or []:
+        blob = " ".join(sheet.get("headers_found") or [])
+        if any(m in blob for m in jp_markers):
+            return "JP"
+    return "EN"
+
+
 @app.post("/api/jobs/import-testspec")
 async def api_import_testspec(
     file: UploadFile = File(...),
-    language: str = Query("EN"),
+    language: str = Query(""),
     module_name: str = Query(""),
     label: str = Query(""),
 ) -> dict[str, Any]:
@@ -1630,14 +1684,15 @@ async def api_import_testspec(
         raise HTTPException(
             400,
             detail={
-                "error": "TestSpec column headers do not match ALEX export format.",
+                "error": "TestSpec column headers not recognized (EN export or JP 機能テスト template).",
                 "preview": preview,
             },
         )
+    lang = (language or "").strip().upper() or _infer_import_language(preview)
     try:
         bundle = bootstrap_from_testspec_xlsx(
             dest,
-            language=language,
+            language=lang,
             module_name=module_name or label,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1656,6 +1711,8 @@ async def api_import_testspec(
     result = _finalize_import_job(job.job_id, bundle)
     result["bootstrap_source"] = "imported_testspec"
     result["sheet_summary"] = (bundle.get("excel_import") or {}).get("sheets") or []
+    result["export_language"] = bundle.get("export_language") or lang
+    result["import_language"] = lang
     return result
 
 
@@ -2435,7 +2492,7 @@ def api_m365_setup_reset() -> dict[str, Any]:
 @app.post("/api/m365/login/start")
 def api_m365_login_start() -> dict[str, Any]:
     try:
-        return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id(), include_copilot_scopes=False)
+        return m365_auth.start_device_login(_cfg(), user_id=_m365_user_id(), include_copilot_scopes=True)
     except Exception as exc:
         raise _m365_api_error(exc) from exc
 
@@ -2833,10 +2890,66 @@ def api_copilot_code_context(job_id: str, candidate_id: str, language: str = "EN
             library_root=_library_root(),
             language=language,
             cfg=_cfg(),
+            library_code_samples=_library_code_samples(_library_root()),
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"ok": True, "job_id": job_id, "context_pack": pack}
+
+
+@app.get("/api/review/copilot/code/prompt")
+def api_copilot_code_prompt(
+    job_id: str,
+    candidate_id: str,
+    language: str = "EN",
+    code_rule: str = "",
+    existing_code: str = "",
+    prompt_mode: str = "full",
+    slim: bool = True,
+) -> dict[str, Any]:
+    from web.copilot_code_writer import (
+        build_gtest_context_summary,
+        build_gtest_copilot_prompt,
+        build_gtest_copilot_prompt_followup,
+    )
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    merge_samples_from_bundle(bundle)
+    try:
+        pack = build_code_context_pack(
+            bundle,
+            gtest_state,
+            candidate_id=candidate_id,
+            library_root=_library_root(),
+            language=language,
+            cfg=_cfg(),
+            library_code_samples=_library_code_samples(_library_root()),
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    samples = (pack.get("code_style_reference") or {}).get("samples") or []
+    first_sample = samples[0] if samples else {}
+    sample_label = str(first_sample.get("label") or first_sample.get("source_file") or "")
+    mode = str(prompt_mode or "full").strip().lower()
+    if mode == "followup":
+        prompt = build_gtest_copilot_prompt_followup(pack, code_rule=code_rule)
+    else:
+        prompt = build_gtest_copilot_prompt(
+            pack,
+            code_rule=code_rule,
+            existing_code=existing_code,
+            slim=bool(slim),
+        )
+    summary = build_gtest_context_summary(pack, code_rule=code_rule, sample_label=sample_label)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "candidate_id": candidate_id,
+        "prompt": prompt,
+        "prompt_mode": mode,
+        "context_summary": summary,
+    }
 
 
 @app.post("/api/review/copilot/code/generate")
@@ -2931,6 +3044,272 @@ def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) 
     return {"job_id": job_id, **result}
 
 
+@app.post("/api/review/gtest-text-replace")
+def api_gtest_text_replace(job_id: str, body: GTestTextReplaceRequest) -> dict[str, Any]:
+    from web.code_text_transform import (
+        apply_replace_to_bundle,
+        apply_replace_to_gtest_state,
+        preview_replace,
+    )
+
+    src = body.from_text.strip()
+    dst = body.to_text.strip()
+    if not src or not dst:
+        return {
+            "job_id": job_id,
+            "ok": False,
+            "error": "from_text and to_text are required (explicit mechanical replace only).",
+            "error_category": "not_simple_replace",
+        }
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    candidate_ids = [c for c in (body.candidate_ids or []) if c]
+    if not candidate_ids and body.candidate_id:
+        candidate_ids = [body.candidate_id]
+
+    if body.preview:
+        return {
+            "job_id": job_id,
+            **preview_replace(
+                bundle,
+                gtest_state,
+                src=src,
+                dst=dst,
+                candidate_ids=candidate_ids or None,
+                current_snippet=body.current_snippet,
+                current_candidate_id=body.candidate_id,
+            ),
+        }
+
+    io_result = apply_replace_to_bundle(
+        bundle,
+        src=src,
+        dst=dst,
+        candidate_ids=candidate_ids or None,
+    )
+    result = apply_replace_to_gtest_state(
+        gtest_state,
+        src=src,
+        dst=dst,
+        candidate_ids=candidate_ids or None,
+        current_snippet=body.current_snippet,
+        current_candidate_id=body.candidate_id,
+    )
+    result["io_touched"] = io_result.get("touched", 0)
+    result["io_replacements"] = io_result.get("total_replacements", 0)
+    if body.persist:
+        _save_bundle_to_job(job_id, bundle)
+        _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.get("/api/review/gtest-sync-status")
+def api_gtest_sync_status(job_id: str, language: str = "EN") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    result = classify_sync_status(bundle, gtest_state, language=language or "EN")
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/gtest-bulk")
+def api_gtest_bulk(job_id: str, body: GTestBulkRequest) -> dict[str, Any]:
+    from web.code_text_transform import apply_replace_to_bundle, apply_replace_to_gtest_state, merge_drafts_to_monolith
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    lang = body.language or "EN"
+    action = str(body.action or "").strip().lower()
+    cids = [c for c in (body.candidate_ids or []) if c]
+
+    if action == "delete_code":
+        if not cids:
+            sync = classify_sync_status(bundle, gtest_state, language=lang)
+            cids = [r["candidate_id"] for r in sync.get("rows") or [] if r.get("status") == "orphan_code"]
+        result = bulk_delete_code(gtest_state, cids)
+    elif action == "regen_comment":
+        result = bulk_regen_comments(bundle, gtest_state, cids, language=lang, stale_only=False)
+    elif action == "regen_comment_stale":
+        result = bulk_regen_comments(bundle, gtest_state, cids, language=lang, stale_only=True)
+    elif action == "replace":
+        src = body.from_text.strip()
+        dst = body.to_text.strip()
+        if not src or not dst:
+            return {"job_id": job_id, "ok": False, "error": "from_text and to_text required"}
+        apply_replace_to_bundle(bundle, src=src, dst=dst, candidate_ids=cids or None)
+        result = apply_replace_to_gtest_state(
+            gtest_state, src=src, dst=dst, candidate_ids=cids or None
+        )
+    elif action == "merge_export":
+        content = merge_drafts_to_monolith(gtest_state, bundle, candidate_ids=cids or None, language=lang)
+        return {"job_id": job_id, "ok": True, "content": content, "action": action}
+    else:
+        return {"job_id": job_id, "ok": False, "error": f"Unknown action: {action}"}
+
+    if body.persist:
+        _save_bundle_to_job(job_id, bundle)
+        _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "action": action, **result}
+
+
+@app.post("/api/review/gtest-monolith-import")
+async def api_gtest_monolith_import(job_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    from web.code_text_transform import import_monolith_to_drafts
+
+    raw = await file.read()
+    text = raw.decode("utf-8", errors="replace")
+    gtest_state = _load_job_gtest_state(job_id)
+    result = import_monolith_to_drafts(gtest_state, text)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.get("/api/export/gtest-cpp-marked")
+def api_export_gtest_cpp_marked(job_id: str, language: str = "EN") -> Response:
+    from web.code_text_transform import merge_drafts_to_monolith
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    content = merge_drafts_to_monolith(gtest_state, bundle, language=language or "EN")
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="alex_marked_tests.cpp"'},
+    )
+
+
+@app.post("/api/review/copilot/code/refine")
+def api_copilot_code_refine(job_id: str, body: CopilotCodeRefineRequest) -> dict[str, Any]:
+    from web.copilot_code_writer import run_code_refine
+
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+
+    code = str(body.existing_code or "").strip()
+    instruction = str(body.instruction or "").strip()
+    if not code or not instruction:
+        return {"job_id": job_id, "ok": False, "error": "existing_code and instruction are required."}
+
+    result = run_code_refine(
+        code,
+        instruction,
+        _cfg(),
+        test_name=body.candidate_id,
+        reuse_conversation=body.reuse_conversation,
+    )
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            raw_error=str(result.get("error") or ""),
+        )
+        return {"job_id": job_id, **result}
+    return {
+        "job_id": job_id,
+        "ok": True,
+        "copilot_draft": result.get("draft") or {},
+        "validation": result.get("validation") or {},
+        "provider": result.get("provider"),
+        "raw_preview": result.get("raw_preview"),
+    }
+
+
+def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[str, Any]:
+    from web.m365_copilot_task_runners import run_task_kind
+    from web.m365_copilot_tasks import start_task
+
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    cfg = _cfg()
+    out_dir = _job_output_dir(job_id)
+    bundle_version = _get_bundle_version(job_id)
+    payload = dict(body.payload or {})
+    payload.setdefault("bundle_version", bundle_version)
+
+    def save_bundle(updated: dict[str, Any]) -> None:
+        _save_bundle_to_job(job_id, updated)
+
+    def persist_gtest(state: dict[str, Any]) -> None:
+        _persist_job_gtest_state(job_id, state)
+
+    def runner(task: dict[str, Any], progress: Any) -> dict[str, Any]:
+        return run_task_kind(
+            body.kind,
+            job_id=job_id,
+            payload=payload,
+            task=task,
+            progress=progress,
+            bundle=bundle,
+            gtest_state=gtest_state,
+            cfg=cfg,
+            library_root=_library_root(),
+            library_code_samples=_library_code_samples(_library_root()),
+            save_bundle=save_bundle,
+            persist_gtest=persist_gtest,
+        )
+
+    try:
+        task = start_task(
+            job_id,
+            out_dir,
+            kind=body.kind,
+            payload=payload,
+            label=body.label or body.kind,
+            logic_id=body.logic_id,
+            candidate_id=body.candidate_id,
+            target_page=body.target_page,
+            runner=runner,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"job_id": job_id, "ok": True, **task}
+
+
+@app.post("/api/review/copilot/m365-tasks", status_code=202)
+def api_m365_copilot_task_start(job_id: str, body: M365CopilotTaskRequest) -> dict[str, Any]:
+    return _start_m365_copilot_task(job_id, body)
+
+
+@app.get("/api/review/copilot/m365-tasks/{task_id}")
+def api_m365_copilot_task_status(job_id: str, task_id: str) -> dict[str, Any]:
+    from web.m365_copilot_tasks import get_task_status, list_tasks
+
+    out_dir = _job_output_dir(job_id)
+    task = get_task_status(job_id, task_id, out_dir)
+    if not task:
+        raise HTTPException(404, f"Task not found: {task_id}")
+    return {"job_id": job_id, "ok": True, **task}
+
+
+@app.get("/api/review/copilot/m365-tasks")
+def api_m365_copilot_task_list(job_id: str) -> dict[str, Any]:
+    from web.m365_copilot_tasks import list_tasks
+
+    out_dir = _job_output_dir(job_id)
+    return {"job_id": job_id, "ok": True, "tasks": list_tasks(job_id, out_dir)}
+
+
+@app.delete("/api/review/copilot/m365-tasks/{task_id}")
+def api_m365_copilot_task_cancel(job_id: str, task_id: str) -> dict[str, Any]:
+    from web.m365_copilot_tasks import cancel_task
+
+    out_dir = _job_output_dir(job_id)
+    task = cancel_task(job_id, task_id, out_dir)
+    if not task:
+        raise HTTPException(404, f"Task not found: {task_id}")
+    return {"job_id": job_id, "ok": True, **task}
+
+
 @app.get("/api/review/gtest-workspace")
 def api_gtest_workspace(job_id: str, language: str = "EN") -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
@@ -2989,7 +3368,18 @@ def api_gtest_suggest_map(job_id: str, body: GTestSuggestMapRequest) -> dict[str
 
 @app.put("/api/review/gtest-draft")
 def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    from src.importers.customer_testspec_importer import compute_body_hash, compute_spec_hash
+
+    bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
+    structured = _structured_io_for_candidate(bundle, body.draft_key, language="EN")
+    spec_hash = compute_spec_hash(structured)
+    body_hash = compute_body_hash(structured)
+    code_status = str(body.code_status or "SAVED").strip().upper() or "SAVED"
+    generation_source = str(body.generation_source or "MANUAL").strip().upper() or "MANUAL"
+    last_saved_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if code_status == "SAVED" else None
     gtest_state = save_draft(
         gtest_state,
         draft_key=body.draft_key,
@@ -2999,11 +3389,42 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
             "spec_comment_block": body.spec_comment_block,
             "code_body": body.code_body,
             "full_snippet": body.full_snippet,
+            "spec_hash": spec_hash,
+            "body_hash": body_hash,
+            "code_status": code_status,
+            "generation_source": generation_source,
+            "last_saved_at": last_saved_at,
         },
         engineer_edited=body.engineer_edited,
     )
     _persist_job_gtest_state(job_id, gtest_state)
-    return {"ok": True, "job_id": job_id, "draft_key": body.draft_key}
+    saved = (gtest_state.get("drafts") or {}).get(body.draft_key) or {}
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "draft_key": body.draft_key,
+        "spec_hash": spec_hash,
+        "code_status": saved.get("code_status") or code_status,
+        "generation_source": saved.get("generation_source") or generation_source,
+        "last_saved_at": saved.get("last_saved_at") or last_saved_at,
+    }
+
+
+@app.get("/api/review/gtest-merge-saved-preview")
+def api_gtest_merge_saved_preview(job_id: str, language: str = "EN") -> dict[str, Any]:
+    from web.code_text_transform import merge_saved_code_preview
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    sync = classify_sync_status(bundle, gtest_state, language=language or "EN")
+    sync_map = {str(r.get("candidate_id") or ""): str(r.get("status") or "") for r in sync.get("rows") or []}
+    result = merge_saved_code_preview(
+        gtest_state,
+        bundle,
+        language=language or "EN",
+        sync_map=sync_map,
+    )
+    return {"job_id": job_id, **result}
 
 
 @app.put("/api/review/code-variable-map")

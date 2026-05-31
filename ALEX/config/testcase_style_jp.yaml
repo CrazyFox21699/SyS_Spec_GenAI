@@ -1,0 +1,38 @@
+# ALEX — testcase writing style for Japanese team TestSpec (実機テスト仕様書)
+name: alex_default_jp
+language: JP
+
+rules:
+  - "列「手順」= mô tả thao tác bằng văn xuôi (tiếng Nhật). Không thay bằng Given/Then."
+  - "列「入力に対する期待値」= Given:/Precondition:/When: (stimulus & timing input)"
+  - "列「出力に対する期待値」= Then: và When: (timing sau khi kích hoạt)"
+  - "Giữ tên signal ASCII (WMODE_CMD, V_PMODE_STS, SP1, APOK2…)"
+  - "Giải thích tiếng Nhật trong ngoặc () sau giá trị — vd. Given: SP1 = 199 (V1 : 1.99 km/h、車速の境界値)"
+  - "Timing: When: T7[ms]/2時点で、… hoặc When: T14[ms] (…)経過後"
+  - "Then dùng == hoặc = tùy spec gốc — vd. Then: V_PMODE_STS == 1 (ON)"
+  - "ユーザケース = loại case (正常, 異常…) — không nhét vào Operation"
+  - "Dấu ** / (*n) trên 機能テスト = footnote — không hardcode, thêm open_questions nếu thiếu định nghĩa"
+  - "Không đoán giá trị boundary — bám số trong spec hoặc hỏi engineer"
+
+examples:
+  use_case: "正常"
+  operation: |
+    オートP要求信号に対する応答が制限時間T7[ms]以内に受信された場合、状態遷移が正常に行われること
+  expected_input: |
+    Given: WMODE_CMD = 1 (手動運転)
+    Given: SSW1~SSW3 = STD_OFF
+    Given: SP1 = 199 (V1 : 1.99 km/h、車速の境界値)
+    Given: SP1S = 0 (車速(SP1)状態フラグ: 有効)
+    When: T7[ms]/2時点で、APOK2 = 1 (オートP OK応答受信)
+  expected_output: |
+    Then: V_PMODE_STS == 1 (ON)
+    Then: V_PMODE_TRS_STS1:bit15 == 1 (PowerMode遷移中)
+    Then: ACCD == STD_ON
+    When: T14[ms] (IGDオフ指令待ち時間)経過後
+    Then: IGPD == STD_OFF
+
+forbidden:
+  - "Gộp Given/Then vào cột 手順"
+  - "Hardcode nghĩa footnote (*n) / ** khi chưa có evidence"
+  - "Markdown trong ô Excel"
+  - "Bỏ comment tiếng Nhật trong ngoặc ()"
