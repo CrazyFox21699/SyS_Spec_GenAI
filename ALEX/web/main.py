@@ -3101,6 +3101,10 @@ def api_copilot_code_prompt(
 
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
+    config = _sync_project_code_config_cache(job_id, gtest_state)
+    files = config.get("files") or {}
+    project_instruction = str((files.get("project_instruction.md") or {}).get("content") or "").strip()
+    merged_code_rule = "\n\n".join(part for part in (project_instruction, str(code_rule or "").strip()) if part)
     merge_samples_from_bundle(bundle)
     try:
         pack = build_code_context_pack(
@@ -3119,15 +3123,15 @@ def api_copilot_code_prompt(
     sample_label = str(first_sample.get("label") or first_sample.get("source_file") or "")
     mode = str(prompt_mode or "full").strip().lower()
     if mode == "followup":
-        prompt = build_gtest_copilot_prompt_followup(pack, code_rule=code_rule)
+        prompt = build_gtest_copilot_prompt_followup(pack, code_rule=merged_code_rule)
     else:
         prompt = build_gtest_copilot_prompt(
             pack,
-            code_rule=code_rule,
+            code_rule=merged_code_rule,
             existing_code=existing_code,
             slim=bool(slim),
         )
-    summary = build_gtest_context_summary(pack, code_rule=code_rule, sample_label=sample_label)
+    summary = build_gtest_context_summary(pack, code_rule=merged_code_rule, sample_label=sample_label)
     return {
         "ok": True,
         "job_id": job_id,

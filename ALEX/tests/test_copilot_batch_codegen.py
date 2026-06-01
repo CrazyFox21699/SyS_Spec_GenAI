@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from web.copilot_batch_codegen import (
     apply_copilot_batch_import,
     build_copilot_batch_prompts,
     collect_copilot_project_context,
     parse_copilot_batch_response,
+    run_copilot_batch_api,
 )
 
 BATCH_OUT = """
@@ -76,3 +78,53 @@ def test_apply_marks_unresolved_error(tmp_path: Path) -> None:
     by_id = {r["candidate_id"]: r for r in out.get("results") or []}
     assert by_id["TC_B"]["workflow_status"] == "ERROR"
     assert by_id["TC_A"]["workflow_status"] in ("SAVED", "NEEDS_REVIEW", "DRAFT")
+
+
+def test_run_progress_records_failed_chunk_reason() -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+            {"id": "TC_B", "logic_id": "L1"},
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+                "TC_B": {},
+            },
+        },
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}}
+    progress_events: list[dict] = []
+
+    def on_progress(cur: int, total: int, msg: str, **extra: object) -> None:
+        progress_events.append({"cur": cur, "total": total, "msg": msg, **extra})
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": False, "error": "graph timeout"},
+    ):
+        out = run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            None,
+            cfg={},
+            candidate_ids=["TC_A", "TC_B"],
+            batch_size=10,
+            progress_callback=on_progress,
+        )
+
+    run = gtest_state["copilot_batch"]["run"]
+    assert out["summary"]["error"] == 2
+    assert run["failed_chunks"] == 1
+    assert run["failed_chunk_reason"] == "graph timeout"
+    assert run["failed_candidate_ids"] == ["TC_A", "TC_B"]
+    assert run["completed_chunks"] == 1
+    assert progress_events[-1]["failed_chunks"] == 1
+    assert progress_events[-1]["failed_chunk_reason"] == "graph timeout"

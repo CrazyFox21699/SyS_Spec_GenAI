@@ -222,7 +222,7 @@ def build_gtest_copilot_prompt_followup(
     rule = str(code_rule or "").strip()
     rule_block = f"Change request:\n{rule[:1500]}\n\n" if rule else ""
     return (
-        "Continue in the SAME GTest style as your previous answer in THIS chat.\n"
+        "Continue in the Same GTest style as your previous answer in THIS chat.\n"
         f"Write ONE new TEST_F for candidate_id {cid}.\n\n"
         f"Expected input:\n{inp[:4000]}\n\n"
         f"Expected output:\n{out[:4000]}\n\n"

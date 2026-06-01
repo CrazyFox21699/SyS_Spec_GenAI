@@ -65,14 +65,6 @@ def _cached_context_pack(
     return pack
 
 
-def _candidate_has_io(row: dict[str, Any] | None) -> bool:
-    if not row:
-        return False
-    inp = str(row.get("expected_input") or "").strip()
-    out = str(row.get("expected_output") or "").strip()
-    return bool(inp and out)
-
-
 def run_copilot_code_generate(
     bundle: dict[str, Any],
     gtest_state: dict[str, Any],
@@ -244,10 +236,6 @@ def run_copilot_code_generate_batch(
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
-
-    preview = build_customer_testspec_preview(bundle, language=language)
-    row_by_id = {str(r.get("candidate_id") or ""): r for r in preview.get("rows") or []}
     batch_size = code_write_batch_size(cfg)
     sample_snippet = ""
     if library_code_samples:
@@ -266,21 +254,6 @@ def run_copilot_code_generate_batch(
             break
         if progress_callback:
             progress_callback(idx, len(candidate_ids), f"Copilot batch {idx + 1}/{len(candidate_ids)}…")
-        row = row_by_id.get(cid)
-        if not _candidate_has_io(row):
-            results.append(
-                {
-                    "candidate_id": cid,
-                    "ok": False,
-                    "skipped": True,
-                    "workflow_status": "skipped",
-                    "workflow_message": "missing expected I/O",
-                    "reason": "missing_expected_io",
-                }
-            )
-            skip_count += 1
-            continue
-
         try:
             one = run_copilot_code_generate(
                 bundle,

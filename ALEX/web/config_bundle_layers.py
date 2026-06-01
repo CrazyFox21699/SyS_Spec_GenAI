@@ -40,7 +40,7 @@ SOURCE_AI_SUGGESTION = "AI_SUGGESTION"
 MARKDOWN_CONFIG_FILES = ("code_rules.md", "gtest_template.md", "ai_review_pack.md")
 YAML_CONFIG_FILES = ("signal_mapping.yaml", "api_catalog.yaml")
 
-EXPECTED_SECTIONS: tuple[str, ...] = tuple(CONFIG_FILES.keys())
+EXPECTED_SECTIONS: tuple[str, ...] = tuple(n for n in CONFIG_FILES.keys() if n != "project_instruction.md")
 
 _CONFIG_NAME_ALT = "|".join(re.escape(n) for n in EXPECTED_SECTIONS)
 # ## code_rules.md | ## 1. code_rules.md | ### code_rules.md | # code_rules.md | optional **bold**

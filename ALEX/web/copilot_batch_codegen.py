@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 from web.code_style_samples import load_code_style_samples
@@ -280,8 +281,8 @@ def build_copilot_batch_prompt(
     note_block = f"Engineer note:\n{note[:2000]}\n\n" if note else ""
 
     scope_bits = [
-        "Generate code for the following testcase rows from the selected existing group. "
-        "Do not change grouping or infer extra testcase.",
+        "Use the imported testcase group/order exactly as provided. "
+        "Do not change grouping; do not regroup testcase, reorder testcase, or infer extra testcase.",
     ]
     if scope_label:
         scope_bits.append(f"Selection: {scope_label}.")
@@ -294,15 +295,17 @@ def build_copilot_batch_prompt(
     grouping_block = " ".join(scope_bits) + "\n\n"
 
     return (
-        "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX (batch mode).\n"
+        "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX (API chunk mode).\n"
         "ALEX is a Copilot orchestrator — use testcase rows + sample code; do NOT invent new helper APIs.\n\n"
         f"{grouping_block}"
         "Rules (mandatory):\n"
         "- Follow sample .cc / project GTest style EXACTLY (fixture, EXPECT_CALL, timing, comments).\n"
+        "- Generate only the testcase IDs listed in this API chunk.\n"
+        "- Return code mapped exactly to testcase_id.\n"
         "- One TEST_F (or TEST) per testcase_id.\n"
         "- Spec comment must include testcase_id (e.g. // TC_PM_004 …).\n"
         "- Map Given:/When: from expected_input; Then: from expected_output.\n"
-        "- If you cannot implement a testcase faithfully, list it under [UNRESOLVED] — do not guess.\n"
+        "- If uncertain, return UNRESOLVED instead of inventing code.\n"
         "- No TODO, no placeholders.\n\n"
         f"{context.get('project_instruction') or ''}"
         f"{context.get('spec_context') or ''}"
@@ -313,7 +316,7 @@ def build_copilot_batch_prompt(
         f"{saved_text}"
         f"{exemplar_block}"
         f"{ref_block}"
-        f"Target testcases ({len(target_rows)}):\n"
+        f"API chunk testcase IDs ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
         + "\n\nRequired output format:\n"
         "[TESTCASE_CODE]\n"
@@ -360,7 +363,7 @@ def build_copilot_batch_prompts(
     if not context.get("sample_blocks") and not context.get("saved_examples") and not context.get("exemplar"):
         return {
             "ok": False,
-            "error": "Load sample .cc or save at least one good testcase (or mark exemplar) before batch generate.",
+            "error": "Load sample .cc or save at least one good testcase before Generate All with Copilot API.",
         }
 
     from web.batch_target_resolution import resolve_batch_targets
@@ -587,7 +590,7 @@ def apply_copilot_batch_import(
             continue
 
         if cid not in parsed_by_id:
-            msg = "testcase_id not found in batch output"
+            msg = "testcase_id not found in Copilot API chunk output"
             persist_batch_generation_error(
                 gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
             )
@@ -710,6 +713,7 @@ def run_copilot_batch_api(
     exclude_candidate_ids: list[str] | None = None,
     progress_callback: Any | None = None,
     cancel_check: Any | None = None,
+    retry_count: int = 0,
 ) -> dict[str, Any]:
     built = build_copilot_batch_prompts(
         bundle,
@@ -736,6 +740,14 @@ def run_copilot_batch_api(
         "batch_total": len(prompts),
         "batch_index": 0,
         "target_count": built.get("target_count") or 0,
+        "queued_chunks": len(prompts),
+        "running_chunk": 0,
+        "completed_chunks": 0,
+        "failed_chunks": 0,
+        "failed_chunk_details": [],
+        "failed_candidate_ids": [],
+        "retry_count": int(retry_count or 0),
+        "status_message": "Queued Copilot API chunks.",
         "saved": 0,
         "needs_review": 0,
         "error": 0,
@@ -746,23 +758,53 @@ def run_copilot_batch_api(
             break
         run = gtest_state.setdefault("copilot_batch", {}).setdefault("run", {})
         run["batch_index"] = idx + 1
+        run["running_chunk"] = idx + 1
+        run["queued_chunks"] = max(len(prompts) - idx - 1, 0)
+        run["completed_chunks"] = idx
+        run["current_candidate_ids"] = list(batch.get("candidate_ids") or [])
+        run["status_message"] = f"Running Copilot API chunk {idx + 1}/{len(prompts)}."
         if progress_callback:
             progress_callback(
                 idx,
                 len(prompts),
-                f"Copilot batch {idx + 1}/{len(prompts)} ({batch.get('testcase_count')} TCs)…",
+                f"Copilot API chunk {idx + 1}/{len(prompts)} ({batch.get('testcase_count')} TCs)…",
                 saved=total_saved,
                 needs_review=total_review,
                 error=total_error,
                 target_count=built.get("target_count") or 0,
+                current_candidate_ids=list(batch.get("candidate_ids") or []),
+                queued_chunks=run["queued_chunks"],
+                running_chunk=run["running_chunk"],
+                completed_chunks=run["completed_chunks"],
+                failed_chunks=run.get("failed_chunks", 0),
+                failed_chunk_details=run.get("failed_chunk_details", []),
+                retry_count=run.get("retry_count", 0),
+                status_message=run["status_message"],
             )
+        response_started = perf_counter()
         chat = run_copilot_chat_result(
             cfg,
             str(batch.get("prompt") or ""),
             reuse_session_conversation=idx > 0,
         )
+        run["last_response_s"] = round(perf_counter() - response_started, 1)
         if not chat.get("ok"):
             msg = str(chat.get("error") or "M365 API failed")
+            failed_ids = list(batch.get("candidate_ids") or [])
+            detail = {
+                "batch_index": idx + 1,
+                "candidate_ids": failed_ids,
+                "reason": msg,
+                "last_response_s": run.get("last_response_s"),
+            }
+            details = list(run.get("failed_chunk_details") or [])
+            details.append(detail)
+            run["failed_chunk_details"] = details
+            run["failed_chunks"] = len(details)
+            run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
+            run["failed_chunk_reason"] = msg
+            run["completed_chunks"] = idx + 1
+            run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
                 persist_batch_generation_error(
                     gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
@@ -777,6 +819,30 @@ def run_copilot_batch_api(
                     }
                 )
                 total_error += 1
+            run["saved"] = total_saved
+            run["needs_review"] = total_review
+            run["error"] = total_error
+            if progress_callback:
+                progress_callback(
+                    idx,
+                    len(prompts),
+                    run["status_message"],
+                    saved=total_saved,
+                    needs_review=total_review,
+                    error=total_error,
+                    target_count=built.get("target_count") or 0,
+                    current_candidate_ids=failed_ids,
+                    queued_chunks=run.get("queued_chunks", 0),
+                    running_chunk=run.get("running_chunk", idx + 1),
+                    completed_chunks=run.get("completed_chunks", idx + 1),
+                    failed_chunks=run.get("failed_chunks", 0),
+                    failed_chunk_details=run.get("failed_chunk_details", []),
+                    failed_candidate_ids=run.get("failed_candidate_ids", []),
+                    failed_chunk_reason=msg,
+                    last_response_s=run.get("last_response_s"),
+                    retry_count=run.get("retry_count", 0),
+                    status_message=run["status_message"],
+                )
             continue
 
         raw = str(chat.get("content") or chat.get("text") or "")
@@ -796,16 +862,72 @@ def run_copilot_batch_api(
         total_review += int(s.get("needs_review") or 0)
         total_error += int(s.get("error") or 0)
         run = gtest_state.setdefault("copilot_batch", {}).setdefault("run", {})
+        chunk_error_results = [
+            r for r in (one.get("results") or [])
+            if str(r.get("workflow_status") or r.get("code_status") or "").upper() == "ERROR"
+        ]
+        if chunk_error_results:
+            failed_ids = [str(r.get("candidate_id") or "") for r in chunk_error_results if r.get("candidate_id")]
+            reason = str(
+                chunk_error_results[0].get("workflow_message")
+                or chunk_error_results[0].get("error")
+                or "Copilot response did not produce usable code for every testcase in this API chunk."
+            )
+            detail = {
+                "batch_index": idx + 1,
+                "candidate_ids": failed_ids,
+                "reason": reason,
+                "last_response_s": run.get("last_response_s"),
+            }
+            details = list(run.get("failed_chunk_details") or [])
+            details.append(detail)
+            run["failed_chunk_details"] = details
+            run["failed_chunks"] = len(details)
+            run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
+            run["failed_chunk_reason"] = reason
         run.update(
             {
                 "saved": total_saved,
                 "needs_review": total_review,
                 "error": total_error,
                 "batch_index": idx + 1,
+                "completed_chunks": idx + 1,
+                "queued_chunks": max(len(prompts) - idx - 1, 0),
+                "status_message": f"Completed Copilot API chunk {idx + 1}/{len(prompts)}.",
             }
         )
+        if progress_callback:
+            progress_callback(
+                idx,
+                len(prompts),
+                run["status_message"],
+                saved=total_saved,
+                needs_review=total_review,
+                error=total_error,
+                target_count=built.get("target_count") or 0,
+                current_candidate_ids=list(batch.get("candidate_ids") or []),
+                queued_chunks=run.get("queued_chunks", 0),
+                running_chunk=run.get("running_chunk", idx + 1),
+                completed_chunks=run.get("completed_chunks", idx + 1),
+                failed_chunks=run.get("failed_chunks", 0),
+                failed_chunk_details=run.get("failed_chunk_details", []),
+                failed_candidate_ids=run.get("failed_candidate_ids", []),
+                failed_chunk_reason=run.get("failed_chunk_reason", ""),
+                last_response_s=run.get("last_response_s"),
+                retry_count=run.get("retry_count", 0),
+                status_message=run["status_message"],
+            )
 
-    gtest_state.setdefault("copilot_batch", {})["run"]["status"] = "completed"
+    run = gtest_state.setdefault("copilot_batch", {})["run"]
+    run["status"] = "completed"
+    run["running_chunk"] = 0
+    run["queued_chunks"] = 0
+    run["completed_chunks"] = len(prompts)
+    run["status_message"] = (
+        f"Completed with {run.get('failed_chunks', 0)} failed API chunk(s)."
+        if run.get("failed_chunks")
+        else "Completed all Copilot API chunks."
+    )
     summary = {
         "saved": total_saved,
         "needs_review": total_review,

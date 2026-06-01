@@ -180,7 +180,7 @@ def _run_code_copilot_batch(
 ) -> dict[str, Any]:
     from web.copilot_batch_codegen import run_copilot_batch_api
 
-    progress("Copilot batch API…", current=0, total=1)
+    progress("Copilot API chunks…", current=0, total=1)
     result = run_copilot_batch_api(
         bundle,
         gtest_state,
@@ -194,6 +194,7 @@ def _run_code_copilot_batch(
         scope=str(payload.get("scope") or "filter"),
         group_key=str(payload.get("group_key") or ""),
         group_field=str(payload.get("group_field") or "test_group"),
+        retry_count=int(payload.get("retry_count") or 0),
         progress_callback=lambda cur, tot, msg, **extra: progress(
             msg, current=cur + 1, total=tot, **extra
         ),

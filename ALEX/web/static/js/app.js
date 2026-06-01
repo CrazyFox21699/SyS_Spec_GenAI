@@ -368,7 +368,9 @@ let state = {
     skipSavedOnBatch: false,
     projectCodeConfig: null,
     configFileSelected: "project_instruction.md",
+    projectInstructionDraft: null,
     batchRunProgress: null,
+    batchRetryCount: 0,
     batchApproveSelection: {},
     configProposal: null,
     configProposalError: null,
@@ -1734,6 +1736,18 @@ function pollM365Tasks() {
             saved: prog.saved ?? 0,
             needs_review: prog.needs_review ?? 0,
             error: prog.error ?? 0,
+            current_candidate_ids: prog.current_candidate_ids || [],
+            elapsed_s: st.elapsed_s || 0,
+            last_response_s: prog.last_response_s,
+            queued_chunks: prog.queued_chunks,
+            running_chunk: prog.running_chunk,
+            completed_chunks: prog.completed_chunks,
+            failed_chunks: prog.failed_chunks,
+            failed_chunk_details: prog.failed_chunk_details || [],
+            failed_candidate_ids: prog.failed_candidate_ids || [],
+            failed_chunk_reason: prog.failed_chunk_reason || "",
+            retry_count: prog.retry_count ?? state.testCode.batchRetryCount ?? 0,
+            status_message: prog.status_message || prog.message || "",
           };
           const bar = document.querySelector("#testcode-batch-progress .alex-testcode-progress-bar__fill");
           const label = document.querySelector("#testcode-batch-progress p.detail");
@@ -1741,8 +1755,10 @@ function pollM365Tasks() {
             bar.style.width = `${Math.round(((prog.current || 0) / prog.total) * 100)}%`;
           }
           if (label) {
-            label.textContent = `Batch ${prog.current || "…"}/${prog.total || "…"} — SAVED ${prog.saved ?? 0} · NEEDS_REVIEW ${prog.needs_review ?? 0} · ERROR ${prog.error ?? 0}`;
+            label.textContent = `API chunk ${prog.current || "…"}/${prog.total || "…"} — SAVED ${prog.saved ?? 0} · NEEDS_REVIEW ${prog.needs_review ?? 0} · ERROR ${prog.error ?? 0}`;
           }
+          const progressPanel = document.getElementById("testcode-progress-panel");
+          if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
         }
         if (st.status === "completed" || st.status === "failed" || st.status === "cancelled") {
           state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
@@ -1761,7 +1777,33 @@ function pollM365Tasks() {
             st.status === "failed" &&
             (st.kind === "code_batch" || st.kind === "code_exemplar_batch" || st.kind === "code_copilot_batch")
           ) {
-            setTestCodeApiStatus("failed", st.error || st.result?.error || "Batch failed");
+            setTestCodeApiStatus("failed", st.error || st.result?.error || "API chunk run failed");
+            if (st.kind === "code_copilot_batch") {
+              const prog = st.progress || {};
+              state.testCode.batchRunProgress = {
+                ...(state.testCode.batchRunProgress || {}),
+                status: "failed",
+                batch_index: prog.current || state.testCode.batchRunProgress?.batch_index || 0,
+                batch_total: prog.total || state.testCode.batchRunProgress?.batch_total || 0,
+                saved: prog.saved ?? state.testCode.batchRunProgress?.saved ?? 0,
+                needs_review: prog.needs_review ?? state.testCode.batchRunProgress?.needs_review ?? 0,
+                error: prog.error ?? state.testCode.batchRunProgress?.error ?? 0,
+                current_candidate_ids: prog.current_candidate_ids || state.testCode.batchRunProgress?.current_candidate_ids || [],
+                elapsed_s: st.elapsed_s || state.testCode.batchRunProgress?.elapsed_s || 0,
+                last_response_s: prog.last_response_s ?? state.testCode.batchRunProgress?.last_response_s,
+                queued_chunks: prog.queued_chunks ?? state.testCode.batchRunProgress?.queued_chunks,
+                running_chunk: prog.running_chunk ?? state.testCode.batchRunProgress?.running_chunk,
+                completed_chunks: prog.completed_chunks ?? state.testCode.batchRunProgress?.completed_chunks,
+                failed_chunks: prog.failed_chunks ?? state.testCode.batchRunProgress?.failed_chunks,
+                failed_chunk_details: prog.failed_chunk_details || state.testCode.batchRunProgress?.failed_chunk_details || [],
+                failed_candidate_ids: prog.failed_candidate_ids || state.testCode.batchRunProgress?.failed_candidate_ids || [],
+                failed_chunk_reason: prog.failed_chunk_reason || st.error || st.result?.error || "",
+                retry_count: prog.retry_count ?? state.testCode.batchRetryCount ?? 0,
+                status_message: prog.status_message || st.error || st.result?.error || "Copilot API chunk run failed.",
+              };
+              const progressPanel = document.getElementById("testcode-progress-panel");
+              if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
+            }
             applyBatchWorkflowResults(st.result || {});
           }
         }
@@ -1962,11 +2004,11 @@ function renderGuideTestCodeTab() {
     "Tab 6 — Test Code",
     `<p class="detail">Sinh <code>TEST_F</code> từ Before/After — Copilot bám <b>code mẫu</b> project (fixture, helper, style).</p>
     <ol class="alex-guide-steps">
-      <li>Upload <b>Code sample</b> (.cpp) — 1–3 TEST_F mẫu từ project (hoặc upload cùng spec ở Review).</li>
+      <li>Upload <b>Code sample</b> (.cc) — 1–3 TEST_F mẫu từ project (hoặc upload cùng spec ở Review).</li>
       <li>Chọn <b>Reference test</b> làm anchor style (tuỳ chọn).</li>
       <li>Ghi <b>Engineer note</b> (helper, timing, quy ước assert) trước Generate.</li>
       <li><b>Regenerate</b> = skeleton offline · <b>Generate with Copilot</b> = viết theo I/O + mẫu.</li>
-      <li><b>Batch Copilot</b> — sinh hàng loạt TC cùng logic (cần M365).</li>
+      <li><b>Copilot API chunks</b> — sinh code theo chunk API, giữ nguyên group/order từ Excel (cần M365).</li>
       <li><b>Library</b> — lưu harness + code samples cho module sau.</li>
     </ol>
     <p class="detail">Approve Expected I/O ở Final File trước — Copilot cần Given/Then rõ.</p>`,
@@ -7546,6 +7588,7 @@ function testCodeFilterMatches(wf, filter) {
   if (filter === "no_code") return wf === TC_WF.NO_CODE;
   if (filter === "has_code") return [TC_WF.SAVED, TC_WF.DRAFT, TC_WF.MODIFIED_UNSAVED].includes(wf);
   if (filter === "needs_review") return wf === TC_WF.NEEDS_REVIEW;
+  if (filter === "needs_review_or_error") return wf === TC_WF.NEEDS_REVIEW || wf === TC_WF.ERROR;
   if (filter === "unsaved") return wf === TC_WF.MODIFIED_UNSAVED;
   if (filter === "error") return wf === TC_WF.ERROR;
   return true;
@@ -7559,6 +7602,37 @@ const TESTCODE_CONFIG_FILES = [
   "api_catalog.yaml",
   "ai_review_pack.md",
 ];
+
+const TESTCODE_PROJECT_INSTRUCTION_TEMPLATE = `# Project instruction
+
+## Fixture / test style
+- Follow the loaded sample .cc style for fixture class, TEST_F naming, helper calls, comments, and setup/teardown patterns.
+- Keep imported testcase group/order as provided.
+
+## Mock / RTE read rules
+- Use project sample patterns for mocks, RTE reads/writes, return values, and call expectations.
+- Do not invent helper APIs, mocks, macros, or signal access paths that are not shown in the sample/project context.
+
+## Assertion rules
+- Assert observable outputs from the testcase After/Then fields.
+- Prefer the assertion style used in the sample .cc.
+
+## Timing rules
+- Use the project timing helper shown in sample code for elapsed time, waits, debounce, and cyclic execution.
+- Do not use sleeps unless the sample .cc uses them.
+
+## Forbidden patterns
+- No TODO, placeholder code, pseudo-code, or markdown fences in saved code.
+- Do not access private/internal harness state unless the testcase or sample explicitly shows that pattern.
+
+## Output format rules
+- Generate only the requested testcase IDs.
+- Return code mapped exactly to testcase_id.
+- If uncertain, return UNRESOLVED with testcase_id and reason instead of inventing code.
+
+## Customer-specific notes
+- Add customer/project-specific constraints here.
+`;
 
 function testCaseMatchesQualityFilter(cid, qFilter) {
   if (!qFilter || qFilter === "all") return true;
@@ -7952,30 +8026,59 @@ function renderTestCodeAdvancedBody(rows) {
   const covLine = cov
     ? `Coverage: ${cov.ready_for_local_generation ?? 0} ready / ${cov.total_testcase_count ?? cov.total ?? 0} total · ${cov.missing_mapping_count ?? 0} missing map · detected keys: ${cov.detected_mapping_count ?? "—"}`
     : "Run Check Mapping Coverage to see readiness.";
-  return `<p class="detail">Fallback tools — only if Copilot batch is not enough.</p>
-    <div id="testcode-advanced-smart-wrap">${renderTestCodeSimpleToolbar()}</div>
-    <div id="testcode-advanced-exemplar-wrap">${renderTestCodeExemplarPanel(rows)}</div>
-    ${renderTestCodeMappingProposalsPanel()}
-    ${renderTestCodeReviewDashboard(rows)}
-    <p class="detail" id="testcode-mapping-coverage-line">${esc(covLine)}</p>
-    ${renderMappingCoverageDetail(cov)}
-    <div class="alex-testcode-editor__actions">
-      <button type="button" class="btn secondary btn-inline" id="btn-testcode-local-template">Generate Local from Template</button>
-      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-review-pack">Copy AI Batch Review Pack</button>
-    </div>
-    <label class="detail">Batch Change Request
-      <textarea id="testcode-batch-change-request" class="gtest-input gtest-note" rows="4" placeholder="e.g. rename API, add WaitMs(100), change assertion style…">${esc(state.testCode.batchChangeRequest || "")}</textarea>
-    </label>
-    <div id="testcode-mapping-fixes-wrap">${renderTestCodeMissingMappingPanel()}</div>
-    <h4 class="alex-testcode-panel-title">Project Code Config</h4>
-    <div id="testcode-project-config-panel">${renderTestCodeProjectConfigPanel()}</div>
-    <h4 class="alex-testcode-panel-title">Per-testcase review</h4>
-    <div id="testcode-review-details-advanced">${renderTestCodePerCaseReviewDetails(state.testCode.selectedCandidateId)}</div>
-    <label class="detail testcode-followup-label">
-      <input type="checkbox" id="testcode-copilot-followup" ${state.testCode.copilotWebFollowUp ? "checked" : ""} />
-      Shorter Copilot prompt for next testcase (same web chat)
-    </label>
-    <p class="detail">Workflow: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR] · Sources: COPILOT_WEB, COPILOT_API, LOCAL_TEMPLATE, MANUAL, CLAUDE_MANUAL (pack only)</p>`;
+  return `<details class="alex-testcode-advanced-section">
+      <summary>Fallback generation</summary>
+      <div id="testcode-advanced-smart-wrap">${renderTestCodeSimpleToolbar()}</div>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-local-template">Generate Local from Template</button>
+      </div>
+      <div id="testcode-advanced-exemplar-wrap">${renderTestCodeExemplarPanel(rows)}</div>
+    </details>
+    <details class="alex-testcode-advanced-section">
+      <summary>Internal config</summary>
+      ${renderTestCodeMappingProposalsPanel()}
+      ${renderTestCodeReviewDashboard(rows)}
+      <p class="detail" id="testcode-mapping-coverage-line">${esc(covLine)}</p>
+      ${renderMappingCoverageDetail(cov)}
+      <div id="testcode-mapping-fixes-wrap">${renderTestCodeMissingMappingPanel()}</div>
+      <h4 class="alex-testcode-panel-title">Project Code Config</h4>
+      <div id="testcode-project-config-panel">${renderTestCodeProjectConfigPanel()}</div>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-review-pack">Copy AI Review Pack</button>
+      </div>
+      <label class="detail">Batch Change Request
+        <textarea id="testcode-batch-change-request" class="gtest-input gtest-note" rows="4" placeholder="e.g. rename API, add WaitMs(100), change assertion style…">${esc(state.testCode.batchChangeRequest || "")}</textarea>
+      </label>
+    </details>
+    <details class="alex-testcode-advanced-section">
+      <summary>Debug logs</summary>
+      <div id="testcode-batch-result" class="alex-testcode-batch-result">${renderTestCodeBatchResultSummary(state.testCode.batchResults, state.testCode.batchSummary)}</div>
+      <div class="alex-testcode-prompt-preview" id="testcode-prompt-preview">
+        <h4 class="alex-testcode-panel-title">Raw prompt preview</h4>
+        <div class="alex-testcode-prompt-preview__body" id="testcode-prompt-preview-body">${renderTestCodePromptPreviewPlaceholder()}</div>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-refresh-prompt">Refresh preview</button>
+      </div>
+      <label class="detail">Manual instruction
+        <textarea id="testcode-user-request" class="gtest-input gtest-note alex-testcode-rules" rows="4" placeholder="Optional one-off instruction for manual fallback only.">${esc(state.testCode.userRequest || "")}</textarea>
+      </label>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-prompt">Copy Copilot Prompt</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot">Generate by API</button>
+      </div>
+      <div id="testcode-api-status" class="alex-testcode-api-status"></div>
+      <label class="detail">Paste Copilot Result Here
+        <textarea id="testcode-copilot-import" class="gtest-input gtest-note" rows="6" placeholder="Paste Copilot .cc block (+ ASSUMPTIONS optional)…"></textarea>
+      </label>
+      <button type="button" class="btn secondary" id="btn-testcode-import-copilot">Import to Editor</button>
+      ${renderTestCodeRunReportPanel()}
+      <h4 class="alex-testcode-panel-title">API response / error details</h4>
+      <div id="testcode-review-details-advanced">${renderTestCodePerCaseReviewDetails(state.testCode.selectedCandidateId)}</div>
+      <label class="detail testcode-followup-label">
+        <input type="checkbox" id="testcode-copilot-followup" ${state.testCode.copilotWebFollowUp ? "checked" : ""} />
+        Shorter Copilot prompt for next testcase (same web chat)
+      </label>
+      <p class="detail">Workflow: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR] · Sources: COPILOT_WEB, COPILOT_API, LOCAL_TEMPLATE, MANUAL, CLAUDE_MANUAL (pack only)</p>
+    </details>`;
 }
 
 function patchTestCodeReviewDetailsUi() {
@@ -7994,6 +8097,9 @@ async function ensureProjectCodeConfigLoaded(force = false) {
   const data = await api(`/api/review/project-code-config?job_id=${encodeURIComponent(state.jobId)}`);
   state.testCode.projectCodeConfig = data;
   state.testCode.configVersions = data.versions || [];
+  if (state.testCode.projectInstructionDraft == null && data.files?.["project_instruction.md"]) {
+    state.testCode.projectInstructionDraft = String(data.files["project_instruction.md"].content || TESTCODE_PROJECT_INSTRUCTION_TEMPLATE);
+  }
   if (!state.testCode.workspace) state.testCode.workspace = {};
   state.testCode.workspace.project_code_config_meta = {
     files: Object.keys(data.files || {}),
@@ -8034,6 +8140,14 @@ function refreshTestCodeConfigUi(rows, statusEl) {
   refreshTestCodeExemplarUi(rows, statusEl);
   const panel = $("#testcode-project-config-panel");
   if (panel) panel.innerHTML = renderTestCodeProjectConfigPanel();
+  const instruction = $("#testcode-project-instruction-main");
+  const currentInstruction = getTestCodeProjectInstruction();
+  if (instruction && instruction.value !== currentInstruction) instruction.value = currentInstruction;
+  const savedAt = $("#testcode-project-instruction-saved-at");
+  if (savedAt) {
+    const ts = testCodeProjectInstructionSavedAt();
+    savedAt.textContent = `Last saved: ${ts ? formatTestCodeTimestamp(ts) : "not saved yet"}`;
+  }
   const fixes = $("#testcode-mapping-fixes-wrap");
   if (fixes) fixes.innerHTML = renderTestCodeMissingMappingPanel();
   bindTestCodeConfigPanelHandlers(rows, statusEl);
@@ -8208,14 +8322,114 @@ function testCodeCopilotBatchPayload(rows, scopeOverride) {
   const groupKey = scope === "group" ? testCodeBatchGroupKey(rows) : "";
   return {
     language: state.exportLanguage || "EN",
-    candidate_ids: testCodeBatchTargetIds(rows, scope),
-    engineer_note: $("#testcode-user-request")?.value || state.testCode.userRequest || "",
+    candidate_ids: state.testCode.batchRetryIds?.length
+      ? state.testCode.batchRetryIds
+      : testCodeBatchTargetIds(rows, scope),
+    engineer_note: "",
     batch_size: Number(state.testCode.copilotBatchSize) || 10,
     skip_saved: !!state.testCode.skipSavedOnBatch,
+    retry_count: Number(state.testCode.batchRetryCount) || 0,
     scope,
     group_key: groupKey,
     group_field: "test_group",
   };
+}
+
+function getTestCodeProjectInstruction() {
+  const file = state.testCode.projectCodeConfig?.files?.["project_instruction.md"];
+  if (state.testCode.projectInstructionDraft != null) return String(state.testCode.projectInstructionDraft);
+  return String(file?.content ?? TESTCODE_PROJECT_INSTRUCTION_TEMPLATE);
+}
+
+function testCodeProjectInstructionSavedAt() {
+  const versions = state.testCode.configVersions || state.testCode.projectCodeConfig?.versions || [];
+  const hit = [...versions].reverse().find((v) => (v.changed_sections || []).includes("project_instruction.md"));
+  return hit?.timestamp || state.testCode.projectInstructionSavedAt || "";
+}
+
+function renderTestCodeProjectInstructionEditor() {
+  const savedAt = testCodeProjectInstructionSavedAt();
+  return `<label class="detail alex-testcode-project-instruction">Project Instruction Markdown
+    <textarea id="testcode-project-instruction-main" class="gtest-input gtest-note alex-testcode-rules" rows="8" spellcheck="false" placeholder="- Fixture/style rules
+- Assertion rules
+- RTE/mock rules
+- Timing rules
+- Forbidden patterns
+- Customer-specific notes">${esc(getTestCodeProjectInstruction())}</textarea>
+  </label>
+  <p class="detail">ALEX includes this markdown in every Copilot API batch prompt and manual Copy Prompt.</p>
+  <p class="detail" id="testcode-project-instruction-saved-at">Last saved: ${savedAt ? esc(formatTestCodeTimestamp(savedAt)) : "not saved yet"}</p>
+  <div class="alex-testcode-editor__actions">
+    <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-project-instruction">Save Instruction</button>
+  </div>`;
+}
+
+function testCodeFailedChunkDetails() {
+  const run = state.testCode.batchRunProgress || state.testCode.workspace?.copilot_batch?.run || {};
+  const details = Array.isArray(run.failed_chunk_details) ? run.failed_chunk_details : [];
+  if (details.length) return details;
+  const failedIds = run.failed_candidate_ids || run.failed_chunk_candidate_ids || [];
+  if (failedIds.length) {
+    return [{
+      batch_index: run.failed_chunk_index || run.batch_index || 0,
+      candidate_ids: failedIds,
+      reason: run.failed_chunk_reason || run.error_message || "",
+    }];
+  }
+  return [];
+}
+
+function testCodeFailedChunkCandidateIds(rows) {
+  const detailIds = testCodeFailedChunkDetails().flatMap((d) => d.candidate_ids || []);
+  if (detailIds.length) return [...new Set(detailIds.filter(Boolean))];
+  return (rows || [])
+    .filter((r) => computeTestCodeWorkflowStatus(r.candidate_id) === TC_WF.ERROR)
+    .map((r) => r.candidate_id)
+    .filter(Boolean);
+}
+
+function renderTestCodeProgressPanel(rows) {
+  const tc = state.testCode;
+  const progress = computeTestCodeProgress(rows || []);
+  const importedGroups = new Set((rows || []).map((r) => String(r.test_group || "").trim()).filter(Boolean));
+  const run = tc.batchRunProgress || tc.workspace?.copilot_batch?.run || {};
+  const allTargets = testCodeAllTargetIds(rows || []);
+  const chunkSize = Number(tc.copilotBatchSize) || 10;
+  const totalChunks = Number(run.batch_total || Math.ceil((allTargets.length || 0) / chunkSize) || 0);
+  const runningIndex = Number(run.batch_index || 0);
+  const queuedChunks = Number(run.queued_chunks ?? Math.max(totalChunks - runningIndex, 0));
+  const completedChunks =
+    Number(run.completed_chunks ?? (run.status === "completed" ? totalChunks : Math.max(0, Math.min(totalChunks, runningIndex ? runningIndex - 1 : 0))));
+  const failedDetails = testCodeFailedChunkDetails();
+  const failedChunks = Number(run.failed_chunks ?? failedDetails.length ?? (tc.apiGenStatus === "failed" ? 1 : 0));
+  const generatedCount = progress.saved + progress.review + progress.error + progress.draft;
+  const currentIds = (run.current_candidate_ids || run.current_testcase_ids || []).join(", ");
+  const elapsed = run.elapsed_s != null ? `${run.elapsed_s}s` : "—";
+  const lastResponse = run.last_response_s != null ? `${run.last_response_s}s` : "—";
+  const statusMessage = run.status_message || run.message || (tc.apiGenStatus === "running" ? "Running Copilot API chunks." : "Idle");
+  const retryCount = Number(run.retry_count ?? tc.batchRetryCount ?? 0);
+  const failedReason = run.failed_chunk_reason || failedDetails[failedDetails.length - 1]?.reason || "";
+  return `<section class="card alex-testcode-progress-panel" id="testcode-progress-panel">
+    <h3 class="alex-testcode-copilot-primary__title">Progress Panel</h3>
+    <dl class="alex-testcode-context-dl alex-testcode-progress-grid">
+      <dt>Total testcase count</dt><dd>${progress.total}</dd>
+      <dt>Imported group count</dt><dd>${importedGroups.size}</dd>
+      <dt>Total API chunks</dt><dd>${totalChunks}</dd>
+      <dt>Queued API chunks</dt><dd>${queuedChunks}</dd>
+      <dt>Running API chunk</dt><dd>${runningIndex ? `${runningIndex}/${totalChunks || "?"}` : "—"}</dd>
+      <dt>Current chunk index</dt><dd>${runningIndex || "—"}</dd>
+      <dt>Completed API chunks</dt><dd>${completedChunks}</dd>
+      <dt>Failed API chunks</dt><dd>${failedChunks}</dd>
+      <dt>Generated testcase count</dt><dd>${generatedCount}</dd>
+      <dt>SAVED / NEEDS_REVIEW / ERROR</dt><dd>${progress.saved} / ${progress.review} / ${progress.error}</dd>
+      <dt>Current API chunk testcase IDs</dt><dd>${currentIds ? `<code>${esc(currentIds)}</code>` : "—"}</dd>
+      <dt>Elapsed time</dt><dd>${esc(elapsed)}</dd>
+      <dt>Last response time</dt><dd>${esc(lastResponse)}</dd>
+      <dt>Current status message</dt><dd>${esc(statusMessage)}</dd>
+      <dt>Retry count</dt><dd>${retryCount}</dd>
+      <dt>Failed chunk reason</dt><dd>${failedReason ? esc(failedReason) : "—"}</dd>
+    </dl>
+  </section>`;
 }
 
 function renderTestCodeExemplarPanel(rows) {
@@ -8293,7 +8507,7 @@ function applyImportedCopilotToEditor(rows) {
   const paste = $("#testcode-copilot-import")?.value || "";
   const { code, assumptions } = parseCopilotCppPaste(paste);
   if (!code) {
-    if (statusEl) statusEl.textContent = "Paste a Copilot cpp block in Step 3 first.";
+    if (statusEl) statusEl.textContent = "Paste a Copilot .cc block first.";
     return;
   }
   const cid = tc.selectedCandidateId;
@@ -8406,7 +8620,7 @@ function renderTestCodeBatchResultSummary(results, summary) {
     })
     .join("");
   return `<div class="alex-testcode-batch-result-inner">
-    <h4 class="alex-testcode-panel-title">Batch Generate Result</h4>
+    <h4 class="alex-testcode-panel-title">API Chunk Result</h4>
     <ul class="detail alex-testcode-batch-stats">
       <li>Generated and saved: <b>${s.saved ?? 0}</b></li>
       <li>Needs review: <b>${s.needs_review ?? 0}</b></li>
@@ -8445,7 +8659,7 @@ function applyBatchWorkflowResults(result) {
   const statusEl = $("#testcode-status");
   const s = tc.batchSummary || {};
   if (statusEl) {
-    statusEl.textContent = `Batch done — Saved: ${s.saved ?? 0}, Needs review: ${s.needs_review ?? 0}, Error: ${s.error ?? 0}`;
+    statusEl.textContent = `API chunks done — Saved: ${s.saved ?? 0}, Needs review: ${s.needs_review ?? 0}, Error: ${s.error ?? 0}`;
   }
 }
 
@@ -8469,13 +8683,13 @@ function renderTestCodeSamplePanel(samples) {
   const loaded = list.length > 0;
   const snippet = String(first.snippet || state.testCode.samplePasteDraft || "").trim();
   const statusText = loaded
-    ? `Sample loaded: ${first.label || first.source_file || first.test_name || "sample.cpp"}`
+    ? `Sample loaded: ${first.label || first.source_file || first.test_name || "sample.cc"}`
     : "Sample not loaded";
   return `<div class="alex-testcode-context-panel alex-testcode-context-panel--sample">
     <h4 class="alex-testcode-panel-title">Sample C++ Style</h4>
     <p class="detail gtest-sample-status">${esc(statusText)}</p>
     <div class="alex-testcode-sample-actions">
-      <label class="btn secondary btn-inline upload-label">Load Sample .cpp<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+      <label class="btn secondary btn-inline upload-label">Load Sample .cc<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
     </div>
     <label class="detail">Paste sample code (optional)
       <textarea id="testcode-sample-paste" class="gtest-input gtest-note" rows="6" placeholder="Paste a reference TEST_F snippet…">${esc(state.testCode.samplePasteDraft || "")}</textarea>
@@ -8722,84 +8936,65 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
   const sampleOk = list.length > 0 || String(state.testCode.samplePasteDraft || "").trim();
   const allCount = testCodeAllTargetIds(rows).length;
   const bs = Number(state.testCode.copilotBatchSize) || 10;
-  const ex = state.testCode.codeExemplar;
   const apiDisabled = !m365KnowledgeReady();
   const batchSummary = state.testCode.batchSummary;
-  const wfCounts = testCodeWorkflowCountsFromWorkspace();
   const run = state.testCode.batchRunProgress || state.testCode.workspace?.copilot_batch?.run;
   const apiStatus = state.testCode.apiGenStatus || "idle";
   const progressHtml = run?.status === "running" || apiStatus === "running"
     ? `<div class="alex-testcode-batch-progress" id="testcode-batch-progress">
-        <p class="detail">Batch ${run?.batch_index || "…"}/${run?.batch_total || "…"} — SAVED ${run?.saved ?? 0} · NEEDS_REVIEW ${run?.needs_review ?? 0} · ERROR ${run?.error ?? 0}</p>
+        <p class="detail">API chunk ${run?.batch_index || "…"}/${run?.batch_total || "…"} — SAVED ${run?.saved ?? 0} · NEEDS_REVIEW ${run?.needs_review ?? 0} · ERROR ${run?.error ?? 0}</p>
         <div class="alex-testcode-progress-bar"><div class="alex-testcode-progress-bar__fill" style="width:${run?.batch_total ? Math.round(((run.batch_index || 0) / run.batch_total) * 100) : 0}%"></div></div>
       </div>`
     : "";
   return `<section class="card alex-testcode-copilot-primary" id="testcode-copilot-primary">
-    <h3 class="alex-testcode-copilot-primary__title">Copilot orchestrator</h3>
-    <p class="detail">Excel + sample .cc + project context → Copilot API batch. Edit <code>project_instruction.md</code> in Advanced config if needed — no YAML required.</p>
+    <h3 class="alex-testcode-copilot-primary__title">Copilot Orchestrator</h3>
+    <p class="detail">Import testcase Excel → load sample .cc / project context → Generate All with Copilot API → review NEEDS_REVIEW / ERROR → approve → Export Final .cc.</p>
     <p class="detail gtest-sample-status" id="testcode-primary-sample-status">${
       sampleOk
         ? esc(`Sample: ${first.label || first.source_file || "loaded"}`)
-        : "Load sample .cc before batch generate."
-    }${ex?.candidate_id ? ` · Exemplar (style only): ${ex.candidate_id}` : ""} · ${allCount} testcase(s) imported</p>
-    <ul class="detail alex-testcode-wf-counts">
-      <li><span class="tag ok">SAVED</span> ${wfCounts.SAVED}</li>
-      <li><span class="tag ok">Approved</span> ${wfCounts.APPROVED}</li>
-      <li><span class="tag warning">NEEDS_REVIEW</span> ${wfCounts.NEEDS_REVIEW}</li>
-      <li><span class="tag error">ERROR</span> ${wfCounts.ERROR}</li>
-    </ul>
+        : "Load sample .cc / project context before Generate All."
+    } · ${allCount} testcase(s) imported</p>
     ${progressHtml}
     <div class="alex-testcode-primary-sample-row">
-      <label class="btn secondary btn-inline upload-label">Load Sample .cc<input type="file" id="testcode-cpp-upload-primary" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
-      <label class="detail">API batch size
+      <label class="btn secondary btn-inline upload-label">Load Sample .cc / Project Context<input type="file" id="testcode-cpp-upload-primary" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+      <label class="detail">API chunk size
         <select id="testcode-batch-size" class="clarify-box">
           <option value="5" ${bs === 5 ? "selected" : ""}>5</option>
           <option value="10" ${bs === 10 ? "selected" : ""}>10</option>
           <option value="20" ${bs === 20 ? "selected" : ""}>20</option>
         </select>
       </label>
+      <p class="detail">Chunk size only controls how many testcases are sent to Copilot per API request. It does not change testcase grouping.</p>
       <label class="detail testcode-skip-saved-label">
         <input type="checkbox" id="testcode-skip-saved-batch" ${state.testCode.skipSavedOnBatch ? "checked" : ""} />
-        Skip already SAVED on re-run
+        Skip already SAVED
       </label>
     </div>
+    ${renderTestCodeProjectInstructionEditor()}
     <div class="alex-testcode-editor__actions alex-testcode-copilot-primary__actions">
       <button type="button" class="btn" id="btn-testcode-copilot-batch-all" ${!sampleOk || !allCount ? "disabled" : ""} ${apiDisabled ? "disabled title=\"" + esc(m365KnowledgeBlockReason()) + "\"" : ""}>Generate All with Copilot API</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-group">Generate Current Group with Copilot API</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-copilot-batch-prompt">Copy Current Chunk Prompt</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-cancel-copilot">Cancel generation</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-failed">Retry failed chunks</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-failed-chunk-prompt">Copy Failed Chunk Prompt</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-review-issues-primary">Review NEEDS_REVIEW / ERROR</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-export-final-cc">Export Final .cc</button>
     </div>
-    <details class="alex-testcode-advanced-batch">
-      <summary class="detail">Partial batch &amp; Copilot Web fallback</summary>
-      <p class="detail alex-testcode-batch-scope" role="group">
-        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="filter" ${(state.testCode.batchScope || "filter") === "filter" ? "checked" : ""} /> Filter</label>
-        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="group" ${state.testCode.batchScope === "group" ? "checked" : ""} /> Group</label>
-        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="selected" ${state.testCode.batchScope === "selected" ? "checked" : ""} /> Selected</label>
-      </p>
-      <div class="alex-testcode-editor__actions">
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-filter">Generate Current Filter</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-group">Generate Current Group</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-selected">Generate Selected</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-copilot-batch-prompt">Copy Batch Prompt</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-merge-saved-primary">Preview Merge (SAVED)</button>
-      </div>
-      <label class="detail">Paste Copilot Web batch result
-        <textarea id="testcode-copilot-batch-import" class="gtest-input gtest-note" rows="8" placeholder="[TESTCASE_CODE] … [UNRESOLVED] … [ASSUMPTIONS]"></textarea>
-      </label>
-      <button type="button" class="btn secondary" id="btn-testcode-import-copilot-batch">Import Batch Result</button>
-    </details>
+    <label class="detail">Import Copilot Result
+      <textarea id="testcode-copilot-batch-import" class="gtest-input gtest-note" rows="8" placeholder="[TESTCASE_CODE] … [UNRESOLVED] … [ASSUMPTIONS]"></textarea>
+    </label>
+    <button type="button" class="btn secondary" id="btn-testcode-import-copilot-batch">Import Copilot Result</button>
     <section class="alex-testcode-approve-bar" id="testcode-approve-bar">
       <h4 class="alex-testcode-panel-title">Review &amp; approve</h4>
       <p class="detail">SAVED = quality gate pass · NEEDS_REVIEW = warnings · ERROR = API/parse fail. Export final .cc uses approved SAVED only.</p>
       <div class="alex-testcode-editor__actions">
         <button type="button" class="btn secondary btn-inline" id="btn-testcode-approve-selected">Approve Selected</button>
         <button type="button" class="btn secondary btn-inline" id="btn-testcode-approve-all-saved">Approve All SAVED</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-mark-reviewed">Mark Reviewed</button>
-        <button type="button" class="btn secondary btn-inline" id="btn-testcode-reopen-edit">Reopen for Edit</button>
       </div>
     </section>
-    ${batchSummary ? `<p class="detail tag ok">Last batch — SAVED ${batchSummary.saved ?? 0} · review ${batchSummary.needs_review ?? 0} · error ${batchSummary.error ?? 0}</p>` : ""}
+    ${batchSummary ? `<p class="detail tag ok">Last API chunks — SAVED ${batchSummary.saved ?? 0} · NEEDS_REVIEW ${batchSummary.needs_review ?? 0} · ERROR ${batchSummary.error ?? 0}</p>` : ""}
     <div id="testcode-batch-result-primary">${renderTestCodeBatchResultSummary(state.testCode.batchResults, state.testCode.batchSummary)}</div>
-    ${renderTestCodeRunReportPanel()}
   </section>`;
 }
 
@@ -8823,21 +9018,18 @@ function renderTestCodeSimpleToolbar() {
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-merge-saved">Merge Saved Code</button>
     </div>
     ${smart ? `<p class="detail tag ok" id="testcode-smart-summary">Smart run: saved ${smart.saved ?? 0} · review ${smart.review ?? 0} · error ${smart.error ?? 0} · skipped ${smart.skipped ?? 0}</p>` : ""}
-    ${renderTestCodeRunReportPanel()}
-    ${renderTestCodeMappingProposalsPanel()}
   </section>`;
 }
 
 function renderTestCodePageBody(rows, activeRow, draft, samples) {
-  const apiDisabled = !m365KnowledgeReady();
   const cid = activeRow?.candidate_id || "";
-  const apiStatus = state.testCode.apiGenStatus || "idle";
   return `<div class="alex-testcode-steps">
     ${renderTestCodeCopilotPrimaryBar(rows, samples)}
+    ${renderTestCodeProgressPanel(rows)}
     <section class="card alex-testcode-step">
       <header class="alex-testcode-step__header">
         <span class="alex-testcode-step__num">1</span>
-        <h3 class="alex-testcode-step__title">Select Test Case</h3>
+        <h3 class="alex-testcode-step__title">Select Testcase</h3>
       </header>
       <div class="alex-testcode-step__body">
         ${renderTestCodeCaseBar(rows)}
@@ -8845,59 +9037,9 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
       </div>
     </section>
 
-    <details class="card alex-testcode-manual-details">
-      <summary>Manual coding context &amp; generation (optional)</summary>
-    <section class="card alex-testcode-step alex-testcode-step--nested">
-      <header class="alex-testcode-step__header">
-        <span class="alex-testcode-step__num">2</span>
-        <h3 class="alex-testcode-step__title">Coding Context</h3>
-      </header>
-      <div class="alex-testcode-step__body alex-testcode-context-split">
-        <div class="alex-testcode-context-panel">
-          <h4 class="alex-testcode-panel-title">Coding Rules / Change Request</h4>
-          <textarea id="testcode-user-request" class="gtest-input gtest-note alex-testcode-rules" rows="8" placeholder="Optional notes for Copilot/API — project rules are inferred automatically when you Analyze.">${esc(state.testCode.userRequest || "")}</textarea>
-        </div>
-        ${renderTestCodeSamplePanel(samples)}
-      </div>
-    </section>
-
-    <section class="card alex-testcode-step alex-testcode-step--nested">
-      <header class="alex-testcode-step__header">
-        <span class="alex-testcode-step__num">3</span>
-        <h3 class="alex-testcode-step__title">Generate Code (manual)</h3>
-      </header>
-      <div class="alex-testcode-step__body">
-        <div class="alex-testcode-gen-panels">
-          <div class="alex-testcode-gen-option card">
-            <h4 class="alex-testcode-panel-title">Option A — Copilot Web</h4>
-            <p class="detail">Use this when M365 API is slow or failed.</p>
-            <button type="button" class="btn" id="btn-testcode-copy-prompt">Copy Copilot Prompt</button>
-            <label class="detail">Paste Copilot Result Here
-              <textarea id="testcode-copilot-import" class="gtest-input gtest-note" rows="6" placeholder="Paste Copilot cpp block (+ ASSUMPTIONS optional)…"></textarea>
-            </label>
-            <button type="button" class="btn secondary" id="btn-testcode-import-copilot">Import to Editor</button>
-          </div>
-          <div class="alex-testcode-gen-option card">
-            <h4 class="alex-testcode-panel-title">Option B — Generate API</h4>
-            <p class="detail">Same context package — result goes to the editor when done.</p>
-            <button type="button" class="btn secondary" id="btn-testcode-copilot" ${apiDisabled ? "disabled" : ""} title="${esc(apiDisabled ? m365KnowledgeBlockReason() : "")}">Generate by API</button>
-            <div id="testcode-api-status" class="alex-testcode-api-status">${apiStatus === "idle" ? '<span class="detail">Status: Idle</span>' : ""}</div>
-            ${apiDisabled ? `<p class="detail testcode-copilot-hint">${esc(m365KnowledgeBlockReason())}</p>` : ""}
-          </div>
-        </div>
-        <div id="testcode-batch-result" class="alex-testcode-batch-result">${renderTestCodeBatchResultSummary(state.testCode.batchResults, state.testCode.batchSummary)}</div>
-        <details class="alex-testcode-prompt-preview" id="testcode-prompt-preview">
-          <summary>Prompt Preview — context sent to Copilot / API</summary>
-          <div class="alex-testcode-prompt-preview__body" id="testcode-prompt-preview-body">${renderTestCodePromptPreviewPlaceholder()}</div>
-          <button type="button" class="btn secondary btn-inline" id="btn-testcode-refresh-prompt">Refresh preview</button>
-        </details>
-      </div>
-    </section>
-    </details>
-
     <section class="card alex-testcode-step alex-testcode-step--review">
       <header class="alex-testcode-step__header">
-        <span class="alex-testcode-step__num">4</span>
+        <span class="alex-testcode-step__num">2</span>
         <h3 class="alex-testcode-step__title">Review &amp; Save Code</h3>
         <span class="detail">${esc(draft?.test_name || cid || "")}</span>
         ${renderTestCodeEditorStatusBadge(cid)}
@@ -8908,19 +9050,18 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
         <div class="alex-testcode-editor__foot">
           <p class="detail testcode-flow-hint" id="testcode-status">Review generated code, validate, then Save Code.</p>
           <div class="alex-testcode-editor__actions">
-            <button type="button" class="btn secondary" id="btn-testcode-validate">Validate Code</button>
-            <button type="button" class="btn secondary" id="btn-testcode-apply-imported">Apply Imported Code</button>
-            <button type="button" class="btn secondary" id="btn-testcode-export-cpp">Export .cpp</button>
-            <button type="button" class="btn" id="btn-testcode-save-draft">Save Code</button>
+              <button type="button" class="btn secondary" id="btn-testcode-validate">Validate Code</button>
+              <button type="button" class="btn secondary" id="btn-testcode-export-cpp">Export single .cc</button>
+              <button type="button" class="btn" id="btn-testcode-save-draft">Save Code</button>
+            </div>
           </div>
-        </div>
         <div id="testcode-review-details" class="alex-testcode-review-details">${renderTestCodePerCaseReviewDetails(cid)}</div>
         <div id="testcode-merge-panel" class="alex-testcode-merge-panel" hidden></div>
       </div>
     </section>
 
     <details class="alex-testcode-advanced card">
-      <summary>Advanced — Smart Mode, exemplar, config, local template (fallback)</summary>
+      <summary>Advanced / Fallback / Diagnostics</summary>
       <div class="alex-testcode-advanced__body" id="testcode-advanced-body">
         ${renderTestCodeAdvancedBody(rows)}
       </div>
@@ -8996,8 +9137,8 @@ function renderTestCodeContextPreviewBody(summary, row) {
     <dt>Testcase</dt><dd><code>${esc(s.candidate_id || row?.candidate_id || "—")}</code>${s.test_function ? ` · ${esc(s.test_function)}` : ""}</dd>
     <dt>BEFORE (input)</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_input || row?.expected_input))}</pre></dd>
     <dt>AFTER (output)</dt><dd><pre class="alex-testcode-context-pre">${esc(clip(s.expected_output || row?.expected_output))}</pre></dd>
-    <dt>Sample .cpp</dt><dd>${s.sample_loaded ? esc(s.sample_label || "loaded") : "— chưa load"}${s.fixture_class ? ` · fixture: ${esc(s.fixture_class)}` : ""}</dd>
-    <dt>Code Rule</dt><dd><pre class="alex-testcode-context-pre">${esc(s.code_rule || "—")}</pre></dd>
+    <dt>Sample .cc</dt><dd>${s.sample_loaded ? esc(s.sample_label || "loaded") : "— chưa load"}${s.fixture_class ? ` · fixture: ${esc(s.fixture_class)}` : ""}</dd>
+    <dt>Project instruction</dt><dd><pre class="alex-testcode-context-pre">${esc(s.code_rule || "—")}</pre></dd>
   </dl>`;
 }
 
@@ -9293,7 +9434,7 @@ function renderTestCodeSamplesPanel(samples, referenceTestName) {
     .join("");
   const list =
     rows.length === 0
-      ? `<p class="detail">Chưa có mẫu — upload .cpp hoặc upload file code cùng spec ở Review.</p>`
+      ? `<p class="detail">Chưa có mẫu — upload .cc hoặc upload file code cùng spec ở Review.</p>`
       : `<ul class="alex-testcode-sample-list">${rows
           .map(
             (s) =>
@@ -9314,7 +9455,7 @@ function renderTestCodeSamplesPanel(samples, referenceTestName) {
       <textarea id="testcode-copilot-prompt" class="gtest-input gtest-note" rows="3" placeholder="vd. Dùng TEST_F, không mock CAN trực tiếp…">${esc(state.testCode.copilotPromptOverride || "")}</textarea>
     </label>
     <div class="gtest-map-toolbar">
-      <label class="btn secondary upload-label">Attach .cpp<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+      <label class="btn secondary upload-label">Attach .cc<input type="file" id="testcode-cpp-upload" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
     </div>`;
 }
 
@@ -9333,7 +9474,7 @@ function renderTestCodeBatchPanel(results) {
     })
     .join("");
   return `<details class="alex-testcode-panel alex-testcode-batch" open>
-    <summary>Batch results (${results.length})</summary>
+    <summary>API chunk results (${results.length})</summary>
     <div class="alex-testcode-panel__body">
       <table class="data-grid alex-table gtest-batch-table">
         <thead><tr><th></th><th>TestCase</th><th>Status</th><th>Note</th></tr></thead>
@@ -9442,9 +9583,35 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   bindOnChange("#testcode-cpp-upload", handleCppUpload);
   bindOnChange("#testcode-batch-size", (ev) => {
     tc.copilotBatchSize = Number(ev.target.value) || 10;
+    refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+    const progressPanel = document.getElementById("testcode-progress-panel");
+    if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(rows);
   });
   bindOnChange("#testcode-skip-saved-batch", (ev) => {
     tc.skipSavedOnBatch = !!ev.target.checked;
+  });
+  bindOnChange("#testcode-project-instruction-main", (ev) => {
+    tc.projectInstructionDraft = ev.target.value || "";
+  });
+  bindClick("#btn-testcode-save-project-instruction", async () => {
+    const content = $("#testcode-project-instruction-main")?.value ?? "";
+    tc.projectInstructionDraft = content;
+    try {
+      await api(`/api/review/project-code-config?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: "project_instruction.md", content }),
+      });
+      const savedAt = data.version?.timestamp || new Date().toISOString();
+      tc.projectInstructionSavedAt = savedAt;
+      tc.projectInstructionDraft = content;
+      await ensureProjectCodeConfigLoaded(true);
+      refreshTestCodeConfigUi(rows, statusEl);
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = `Saved Instruction · ${formatTestCodeTimestamp(savedAt)}.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
   });
 
   document.querySelectorAll('input[name="testcode-batch-scope"]').forEach((el) => {
@@ -9462,25 +9629,43 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       return;
     }
     tc.batchScope = scope || tc.batchScope || "filter";
-    const ids = testCodeBatchTargetIds(rows, tc.batchScope);
+    const ids = tc.batchRetryIds?.length ? tc.batchRetryIds : testCodeBatchTargetIds(rows, tc.batchScope);
     if (!ids.length) {
       if (statusEl) statusEl.textContent = `No targets for ${testCodeBatchScopeLabel(tc.batchScope)}.`;
       return;
     }
     try {
-      tc.batchRunProgress = { status: "running", batch_index: 0, batch_total: 0, saved: 0, needs_review: 0, error: 0 };
+      tc.batchRunProgress = {
+        status: "running",
+        batch_index: 0,
+        batch_total: 0,
+        queued_chunks: 0,
+        running_chunk: 0,
+        completed_chunks: 0,
+        failed_chunks: 0,
+        failed_chunk_details: [],
+        failed_candidate_ids: [],
+        failed_chunk_reason: "",
+        retry_count: tc.batchRetryCount || 0,
+        status_message: "Starting Copilot API chunks.",
+        saved: 0,
+        needs_review: 0,
+        error: 0,
+        current_candidate_ids: [],
+        elapsed_s: 0,
+      };
       refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
       setTestCodeApiStatus("running");
       await startM365Task({
         kind: "code_copilot_batch",
         label:
           scope === "all"
-            ? `Copilot batch — all (${ids.length} TC)`
-            : `Copilot batch — ${testCodeBatchScopeLabel(tc.batchScope)} (${ids.length} TC)`,
+            ? `Copilot API chunks — all (${ids.length} TC)`
+            : `Copilot API chunks — ${testCodeBatchScopeLabel(tc.batchScope)} (${ids.length} TC)`,
         targetPage: "test-code",
         payload: testCodeCopilotBatchPayload(rows, tc.batchScope),
       });
-      if (statusEl) statusEl.textContent = "Copilot API batch running — watch progress above.";
+      if (statusEl) statusEl.textContent = "Copilot API chunks running — watch progress above.";
     } catch (e) {
       setTestCodeApiStatus("failed", e.message);
       if (statusEl) statusEl.textContent = e.message;
@@ -9491,6 +9676,57 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   bindClick("#btn-testcode-copilot-batch-filter", () => runCopilotBatchForScope("filter"));
   bindClick("#btn-testcode-copilot-batch-group", () => runCopilotBatchForScope("group"));
   bindClick("#btn-testcode-copilot-batch-selected", () => runCopilotBatchForScope("selected"));
+  bindClick("#btn-testcode-cancel-copilot", async () => {
+    const running = Object.values(state.m365Tasks.byId || {}).find(
+      (t) => t.status === "running" && t.kind === "code_copilot_batch"
+    );
+    if (!running) {
+      if (statusEl) statusEl.textContent = "No Copilot API chunk is running.";
+      return;
+    }
+    await cancelM365Task(running.task_id);
+    setTestCodeApiStatus("failed", "Cancelled");
+    if (statusEl) statusEl.textContent = "Cancelled Copilot API chunk run.";
+  });
+  bindClick("#btn-testcode-retry-failed", async () => {
+    const failedIds = testCodeFailedChunkCandidateIds(rows);
+    if (!failedIds.length) {
+      if (statusEl) statusEl.textContent = "No failed API chunks to retry.";
+      return;
+    }
+    tc.batchRetryCount = (Number(tc.batchRetryCount) || 0) + 1;
+    tc.batchScope = "selected";
+    tc.batchRetryIds = failedIds;
+    await runCopilotBatchForScope("selected");
+    tc.batchRetryIds = null;
+  });
+  bindClick("#btn-testcode-copy-failed-chunk-prompt", async () => {
+    const failedIds = testCodeFailedChunkCandidateIds(rows);
+    if (!failedIds.length) {
+      if (statusEl) statusEl.textContent = "No failed API chunk to copy.";
+      return;
+    }
+    try {
+      const data = await api(`/api/review/copilot-batch-prompt?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...testCodeCopilotBatchPayload(rows, "selected"),
+          candidate_ids: failedIds,
+          scope: "selected",
+        }),
+      });
+      if (!data.ok) throw new Error(data.error || data.detail || "Prompt failed");
+      const prompt = data.prompts?.[0]?.prompt || data.combined_prompt || "";
+      if (!prompt) throw new Error("Empty failed chunk prompt");
+      tc.copilotBatchPrompt = prompt;
+      tc.copilotBatchPromptIds = data.prompts?.[0]?.candidate_ids || failedIds;
+      await navigator.clipboard.writeText(prompt);
+      if (statusEl) statusEl.textContent = `Copied failed API chunk prompt (${failedIds.length} TC).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
 
   function selectedBatchApproveIds() {
     const fromCb = [...document.querySelectorAll(".batch-approve-cb:checked")].map((el) => el.dataset.batchCid).filter(Boolean);
@@ -9598,13 +9834,15 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       const data = await api(`/api/review/copilot-batch-prompt?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(testCodeCopilotBatchPayload(rows)),
+        body: JSON.stringify(testCodeCopilotBatchPayload(rows, "all")),
       });
       if (!data.ok) throw new Error(data.error || data.detail || "Prompt failed");
-      tc.copilotBatchPrompt = data.combined_prompt || "";
+      tc.copilotBatchPrompt = data.prompts?.[0]?.prompt || data.combined_prompt || "";
+      tc.copilotBatchPromptIds = data.prompts?.[0]?.candidate_ids || [];
       await navigator.clipboard.writeText(tc.copilotBatchPrompt);
       if (statusEl) {
-        statusEl.textContent = `Copied batch prompt (${data.batch_count || 1} batch(es), ${data.target_count || 0} TCs). Paste into Copilot web.`;
+        const firstChunkCount = data.prompts?.[0]?.testcase_count || data.target_count || 0;
+        statusEl.textContent = `Copied current API chunk prompt (${firstChunkCount} TC). Paste into Copilot web.`;
       }
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
@@ -9614,10 +9852,10 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   bindClick("#btn-testcode-import-copilot-batch", async () => {
     const content = ($("#testcode-copilot-batch-import")?.value || "").trim();
     if (!content) {
-      if (statusEl) statusEl.textContent = "Paste Copilot batch output first.";
+      if (statusEl) statusEl.textContent = "Paste Copilot API chunk output first.";
       return;
     }
-    if (statusEl) statusEl.textContent = "Importing Copilot batch…";
+    if (statusEl) statusEl.textContent = "Importing Copilot API chunk result…";
     try {
       const data = await api(`/api/review/import-copilot-batch?job_id=${encodeURIComponent(state.jobId)}`, {
         method: "POST",
@@ -9625,7 +9863,8 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
         body: JSON.stringify({
           content,
           language: state.exportLanguage || "EN",
-          ...testCodeCopilotBatchPayload(rows),
+          ...testCodeCopilotBatchPayload(rows, "all"),
+          candidate_ids: tc.copilotBatchPromptIds?.length ? tc.copilotBatchPromptIds : testCodeBatchTargetIds(rows, "all"),
         }),
       });
       applyBatchWorkflowResults(data);
@@ -9644,9 +9883,9 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   });
 
   bindClick("#btn-testcode-review-issues-primary", () => {
-    state.testCode.caseFilter = "needs_review";
+    state.testCode.caseFilter = "needs_review_or_error";
     document.querySelectorAll(".testcode-case-filter").forEach((b) => {
-      b.classList.toggle("active", b.dataset.caseFilter === "needs_review");
+      b.classList.toggle("active", b.dataset.caseFilter === "needs_review" || b.dataset.caseFilter === "error");
     });
     const next = testCodeRowOrder(rows).find((r) => {
       const wf = computeTestCodeWorkflowStatus(r.candidate_id);
@@ -9661,7 +9900,7 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   bindClick("#btn-testcode-copy-run-report", async () => {
     const text = tc.runReportMarkdown || formatTestCodeRunReportMarkdownClient(tc.runReport) || "";
     if (!text) {
-      if (statusEl) statusEl.textContent = "Run batch generate first.";
+      if (statusEl) statusEl.textContent = "Run Copilot API chunks first.";
       return;
     }
     await navigator.clipboard.writeText(text);
@@ -10064,7 +10303,7 @@ function bindTestCodeHandlers(rows) {
       const statusSample = document.querySelector(".gtest-sample-status");
       if (statusSample && tc.codeStyleSamples[0]) {
         const s = tc.codeStyleSamples[0];
-        statusSample.textContent = `Sample loaded: ${s.label || s.source_file || "sample.cpp"}`;
+        statusSample.textContent = `Sample loaded: ${s.label || s.source_file || "sample.cc"}`;
       }
       if (statusEl) statusEl.textContent = `Sample loaded (${tc.codeStyleSamples.length}).`;
       refreshTestCodePromptPreview(rows);
@@ -10112,7 +10351,7 @@ function bindTestCodeHandlers(rows) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           replace: true,
-          samples: [{ label: "pasted_sample", source_file: "paste.cpp", snippet: text }],
+          samples: [{ label: "pasted_sample", source_file: "paste.cc", snippet: text }],
         }),
       });
       invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
@@ -10190,7 +10429,9 @@ function bindTestCodeHandlers(rows) {
       if (statusEl) statusEl.textContent = "Authorize Copilot API trước.";
       return;
     }
-    const req = userRequest();
+    const manualNote = userRequest();
+    const projectInstruction = getTestCodeProjectInstruction();
+    const req = [projectInstruction, manualNote ? `\n## Manual fallback note\n${manualNote}` : ""].filter(Boolean).join("\n");
     const editorCode = $("#testcode-code-editor")?.value || "";
     try {
       setTestCodeApiStatus("running");
@@ -10264,7 +10505,7 @@ function bindTestCodeHandlers(rows) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           draft_key: key,
-          source_kind: "candidate",
+              source_kind: "candidate",
           test_name: tc.draft?.test_name || key,
           spec_comment_block: specBlock,
           code_body: codeBody,
@@ -10927,7 +11168,7 @@ function patchTestCodeShell({ rows, activeRow, draft, ws }) {
   const sampleName = document.querySelector(".gtest-sample-name");
   if (sampleName && (tc.codeStyleSamples?.[0] || ws?.code_style_samples?.[0])) {
     const s = tc.codeStyleSamples?.[0] || ws.code_style_samples[0];
-    sampleName.textContent = s.label || s.source_file || "sample.cpp";
+    sampleName.textContent = s.label || s.source_file || "sample.cc";
   }
   const reqEl = $("#testcode-user-request");
   if (reqEl && tc.userRequest != null) reqEl.value = tc.userRequest;
