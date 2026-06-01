@@ -1114,6 +1114,63 @@ textarea.field-manual-changed,
   gap: 0.85rem;
 }
 
+.alex-testcode-copilot-primary {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--accent, #4da3ff);
+  border-radius: 8px;
+}
+.alex-testcode-copilot-primary__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+.alex-testcode-copilot-primary__actions {
+  margin: 0.5rem 0 0.75rem;
+}
+.alex-testcode-primary-sample-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.alex-testcode-exemplar-bar {
+  padding: 0.85rem 1rem;
+}
+.alex-testcode-exemplar-bar__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.alex-testcode-exemplar-bar__actions {
+  margin: 0.5rem 0;
+}
+
+.alex-testcode-run-report {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border, #333);
+}
+.alex-testcode-run-report__grid {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.9rem;
+}
+.alex-testcode-run-report__grid dt {
+  margin: 0;
+  color: var(--muted, #999);
+  font-weight: 500;
+}
+.alex-testcode-run-report__grid dd {
+  margin: 0;
+}
+.alex-testcode-run-report__list {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.25rem;
+  font-size: 0.88rem;
+}
+
 .alex-testcode-step {
   padding: 0;
   overflow: hidden;
@@ -1311,10 +1368,98 @@ textarea.field-manual-changed,
   margin: 0 0 0.65rem;
   font-size: 0.88rem;
 }
+.alex-testcode-batch-progress {
+  margin: 0.5rem 0 0.75rem;
+}
+.alex-testcode-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border, #333);
+  overflow: hidden;
+  margin-top: 0.35rem;
+}
+.alex-testcode-progress-bar__fill {
+  height: 100%;
+  background: var(--accent, #4a9eff);
+  transition: width 0.3s ease;
+}
+.alex-testcode-wf-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  list-style: none;
+  padding: 0;
+  margin: 0.35rem 0 0.65rem;
+}
+.alex-testcode-advanced-batch {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0;
+}
+.alex-testcode-approve-bar {
+  margin-top: 0.85rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border, #333);
+}
 .testcode-wf-badge {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
   letter-spacing: -0.02em;
+}
+.alex-testcode-review-dash__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.65rem;
+}
+.alex-testcode-quality-filters {
+  margin-bottom: 0.75rem;
+}
+.alex-testcode-quality-filters .testcode-quality-filter.active {
+  border-color: var(--accent, #4a9eff);
+}
+.alex-testcode-review-details,
+.alex-testcode-review-details-inner {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #333);
+}
+.alex-testcode-review-checks {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+}
+.alex-testcode-config-panel {
+  margin: 0.5rem 0 1rem;
+}
+.alex-testcode-version-list {
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+.alex-testcode-config-diff-list {
+  margin: 0.35rem 0 0.65rem;
+  padding-left: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+.alex-testcode-config-diff-list li {
+  margin: 0.25rem 0;
+}
+.alex-testcode-mapping-fix-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.35rem 0;
+}
+.alex-testcode-mapping-fix-row .gtest-input {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+}
+.alex-testcode-learned-rule-box {
+  margin-top: 0.65rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border, #333);
 }
 .testcode-wf-neutral {
   opacity: 0.85;
@@ -1375,6 +1520,28 @@ textarea.field-manual-changed,
 }
 .alex-testcode-merge-list--warn {
   color: var(--warning-fg, #b8860b);
+}
+.alex-testcode-batch-result {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+}
+.alex-testcode-batch-stats {
+  margin: 0.35rem 0;
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+}
+.alex-testcode-batch-lines {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+  max-height: 12rem;
+  overflow: auto;
+}
+.alex-testcode-batch-lines li {
+  margin: 0.2rem 0;
 }
 .alex-testcode-merge-warn {
   display: flex;

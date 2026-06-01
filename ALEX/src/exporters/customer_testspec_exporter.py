@@ -144,6 +144,9 @@ def _jp_test_group(candidate: dict[str, Any], overlay: dict[str, Any] | None, bi
     group = str((overlay or {}).get("test_group") or "").strip()
     if group:
         return group
+    group = str(candidate.get("test_group") or "").strip()
+    if group:
+        return group
     transition = _transition_operation(binding)
     if transition:
         return transition

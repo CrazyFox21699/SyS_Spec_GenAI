@@ -51,6 +51,28 @@ def run_task_kind(
             library_root,
             library_code_samples,
         )
+    if kind == "code_copilot_batch":
+        return _run_code_copilot_batch(
+            payload,
+            task,
+            progress,
+            job_id,
+            bundle,
+            gtest_state,
+            cfg,
+            persist_gtest,
+        )
+    if kind == "code_exemplar_batch":
+        return _run_code_exemplar_batch(
+            payload,
+            task,
+            progress,
+            job_id,
+            bundle,
+            gtest_state,
+            cfg,
+            persist_gtest,
+        )
     if kind == "code_batch":
         return _run_code_batch(
             payload,
@@ -144,6 +166,72 @@ def _run_code_refine(
             "review_note": result.get("error"),
         }
     return result
+
+
+def _run_code_copilot_batch(
+    payload: dict[str, Any],
+    task: dict[str, Any],
+    progress: ProgressFn,
+    job_id: str,
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    cfg: dict[str, Any],
+    persist_gtest: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    from web.copilot_batch_codegen import run_copilot_batch_api
+
+    progress("Copilot batch API…", current=0, total=1)
+    result = run_copilot_batch_api(
+        bundle,
+        gtest_state,
+        None,
+        cfg=cfg,
+        candidate_ids=[c for c in (payload.get("candidate_ids") or []) if c],
+        language=str(payload.get("language") or "EN"),
+        engineer_note=str(payload.get("engineer_note") or ""),
+        batch_size=int(payload.get("batch_size") or 10),
+        skip_saved=bool(payload.get("skip_saved")),
+        scope=str(payload.get("scope") or "filter"),
+        group_key=str(payload.get("group_key") or ""),
+        group_field=str(payload.get("group_field") or "test_group"),
+        progress_callback=lambda cur, tot, msg, **extra: progress(
+            msg, current=cur + 1, total=tot, **extra
+        ),
+        cancel_check=lambda: is_cancelled(job_id, str(task.get("task_id") or "")),
+    )
+    persist_gtest(gtest_state)
+    return {"ok": bool(result.get("ok")), **result}
+
+
+def _run_code_exemplar_batch(
+    payload: dict[str, Any],
+    task: dict[str, Any],
+    progress: ProgressFn,
+    job_id: str,
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    cfg: dict[str, Any],
+    persist_gtest: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import run_exemplar_batch_api
+
+    progress("Exemplar batch API…", current=0, total=1)
+    result = run_exemplar_batch_api(
+        bundle,
+        gtest_state,
+        None,
+        cfg=cfg,
+        candidate_ids=[c for c in (payload.get("candidate_ids") or []) if c],
+        language=str(payload.get("language") or "EN"),
+        engineer_note=str(payload.get("engineer_note") or ""),
+        scope=str(payload.get("scope") or "filter"),
+        group_key=str(payload.get("group_key") or ""),
+        group_field=str(payload.get("group_field") or "test_group"),
+        progress_callback=lambda cur, tot, msg: progress(msg, current=cur, total=tot),
+        cancel_check=lambda: is_cancelled(job_id, str(task.get("task_id") or "")),
+    )
+    persist_gtest(gtest_state)
+    return {"ok": bool(result.get("ok")), **result}
 
 
 def _run_code_batch(

@@ -352,6 +352,27 @@ let state = {
     generationSource: {},
     errorMap: {},
     mergePreview: null,
+    qualityFilter: "all",
+    batchChangeRequest: "",
+    mappingCoverage: null,
+    mappingProposals: null,
+    smartModeSummary: null,
+    contextAnalyzeResult: null,
+    runReport: null,
+    runReportMarkdown: "",
+    codeExemplar: null,
+    exemplarBatchPrompt: "",
+    batchScope: "filter",
+    copilotBatchSize: 10,
+    copilotBatchPrompt: "",
+    skipSavedOnBatch: false,
+    projectCodeConfig: null,
+    configFileSelected: "project_instruction.md",
+    batchRunProgress: null,
+    batchApproveSelection: {},
+    configProposal: null,
+    configProposalError: null,
+    configVersions: [],
   },
   _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
@@ -481,8 +502,20 @@ function api(path, opts = {}) {
       let detail = r.statusText;
       try {
         const j = await r.json();
-        detail = j.detail || j.message || JSON.stringify(j);
-      } catch (_) {
+        if (j && typeof j === "object" && j.ok === false && j.error) {
+          const err = new Error(String(j.error));
+          err.apiBody = j;
+          throw err;
+        }
+        const rawDetail = j.detail;
+        if (rawDetail && typeof rawDetail === "object" && rawDetail.error) {
+          const err = new Error(String(rawDetail.error));
+          err.apiBody = rawDetail.ok === false ? rawDetail : { ok: false, error: rawDetail.error, details: rawDetail.details || rawDetail };
+          throw err;
+        }
+        detail = typeof rawDetail === "string" ? rawDetail : j.message || JSON.stringify(j);
+      } catch (e) {
+        if (e instanceof Error && e.apiBody) throw e;
         try {
           detail = await r.text();
         } catch (_e) {
@@ -1406,6 +1439,10 @@ function refreshM365TaskBanner() {
   running.forEach((t) => {
     const prog = t.progress || {};
     const progTxt = prog.total ? ` (${prog.current || 0}/${prog.total})` : "";
+    const batchStats =
+      t.kind === "code_copilot_batch" && (prog.saved != null || prog.error != null)
+        ? ` · SAVED ${prog.saved ?? 0} · review ${prog.needs_review ?? 0} · err ${prog.error ?? 0}`
+        : "";
     const elapsed = t.elapsed_s || 0;
     const codeTask = String(t.kind || "").startsWith("code_");
     const slowHint =
@@ -1415,7 +1452,7 @@ function refreshM365TaskBanner() {
     lines.push(
       `<div class="m365-task-banner__row m365-task-banner__row--running">
         <span class="tag warning">Copilot</span>
-        <span>${esc(m365TaskLabel(t))}${progTxt} — ${elapsed}s</span>
+        <span>${esc(m365TaskLabel(t))}${progTxt}${batchStats} — ${elapsed}s</span>
         ${slowHint}
         <button type="button" class="btn secondary btn-inline" data-m365-cancel="${esc(t.task_id)}">Hủy</button>
       </div>`
@@ -1590,12 +1627,16 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
     }
   }
 
-  if (kind === "code_batch") {
+  if (kind === "code_batch" || kind === "code_exemplar_batch" || kind === "code_copilot_batch") {
     invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
     state.testCode.workspace = await fetchGtestWorkspace(true);
-    const statusEl = $("#testcode-status");
-    if (statusEl) {
-      statusEl.textContent = `Batch xong: ${result.generated || 0} ok — mở từng TC → Save.`;
+    hydrateTestCodeWorkflowFromWorkspace(state.testCode.workspace, { fullReset: false });
+    applyBatchWorkflowResults(result);
+    state.testCode.batchRunProgress = state.testCode.workspace?.copilot_batch?.run || null;
+    setTestCodeApiStatus("done");
+    if (state.currentPageId === "test-code") {
+      const statusEl = $("#testcode-status");
+      refreshTestCodePrimaryUi(state.testCode.rows || [], statusEl, state.testCode.codeStyleSamples);
     }
   }
 
@@ -1680,6 +1721,29 @@ function pollM365Tasks() {
         );
         const prev = state.m365Tasks.byId[id] || {};
         state.m365Tasks.byId[id] = { ...prev, ...st, kind: prev.kind || st.kind, payload: prev.payload || st.payload };
+        if (
+          (prev.kind || st.kind) === "code_copilot_batch" &&
+          st.status === "running" &&
+          state.currentPageId === "test-code"
+        ) {
+          const prog = st.progress || {};
+          state.testCode.batchRunProgress = {
+            status: "running",
+            batch_index: prog.current || 0,
+            batch_total: prog.total || 0,
+            saved: prog.saved ?? 0,
+            needs_review: prog.needs_review ?? 0,
+            error: prog.error ?? 0,
+          };
+          const bar = document.querySelector("#testcode-batch-progress .alex-testcode-progress-bar__fill");
+          const label = document.querySelector("#testcode-batch-progress p.detail");
+          if (bar && prog.total) {
+            bar.style.width = `${Math.round(((prog.current || 0) / prog.total) * 100)}%`;
+          }
+          if (label) {
+            label.textContent = `Batch ${prog.current || "…"}/${prog.total || "…"} — SAVED ${prog.saved ?? 0} · NEEDS_REVIEW ${prog.needs_review ?? 0} · ERROR ${prog.error ?? 0}`;
+          }
+        }
         if (st.status === "completed" || st.status === "failed" || st.status === "cancelled") {
           state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
           persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
@@ -1688,6 +1752,17 @@ function pollM365Tasks() {
             setTestCodeApiStatus("failed", st.error || st.result?.error || "Generation failed");
             const normalized = normalizeTestCodeTaskResult(state.m365Tasks.byId[id]);
             if (normalized.result?.copilot_draft) applyTestCodeTaskResult(normalized);
+            const failCid =
+              normalized.candidateId ||
+              normalized.payload?.candidate_id ||
+              normalized.result?.candidate_id;
+            if (failCid) setTestCodeWorkflowError(failCid, st.error || st.result?.error || "API failed");
+          } else if (
+            st.status === "failed" &&
+            (st.kind === "code_batch" || st.kind === "code_exemplar_batch" || st.kind === "code_copilot_batch")
+          ) {
+            setTestCodeApiStatus("failed", st.error || st.result?.error || "Batch failed");
+            applyBatchWorkflowResults(st.result || {});
           }
         }
       } catch (_) {
@@ -7155,7 +7230,10 @@ async function fetchGtestWorkspace(force = false) {
   state.testCode.variableMapDraft = { ...(data.code_variable_map || {}) };
   state.testCode.harnessDraft = { ...(data.harness || {}) };
   state.testCode.codeStyleSamples = data.code_style_samples || [];
-  if (data.copilot_batch?.last_results) state.testCode.batchResults = data.copilot_batch.last_results;
+  if (data.copilot_batch?.last_results) {
+    state.testCode.batchResults = data.copilot_batch.last_results;
+    state.testCode.batchSummary = summarizeBatchWorkflowResults(state.testCode.batchResults);
+  }
   return data;
 }
 
@@ -7345,10 +7423,21 @@ function hydrateTestCodeWorkflowFromWorkspace(ws, { fullReset = false } = {}) {
   }
   if (!tc.generationSource) tc.generationSource = {};
   if (!tc.savedSnapshot) tc.savedSnapshot = {};
+  if (ws?.mapping_coverage) tc.mappingCoverage = ws.mapping_coverage;
+  if (ws?.smart_workflow_run_report && Object.keys(ws.smart_workflow_run_report).length) {
+    tc.runReport = ws.smart_workflow_run_report;
+  }
+  if (ws?.code_exemplar?.candidate_id) {
+    tc.codeExemplar = ws.code_exemplar;
+  }
   for (const [cid, draft] of Object.entries(ws?.drafts || {})) {
     if (draft?.generation_source) tc.generationSource[cid] = draft.generation_source;
     const text = String(draft?.full_snippet || draft?.code_body || "");
     if (text && fullReset) tc.savedSnapshot[cid] = text;
+    if (String(draft?.code_status || "").toUpperCase() === "ERROR") {
+      if (!tc.errorMap) tc.errorMap = {};
+      tc.errorMap[cid] = [draft.workflow_error || draft.workflow_message || "Error"];
+    }
   }
 }
 
@@ -7366,6 +7455,9 @@ function renderTestCodeCaseMeta(cid, row) {
   if (draft.generation_source) {
     parts.push(`<p class="detail testcode-case-meta-line">Source: ${esc(draft.generation_source)}</p>`);
   }
+  if (draft.engineer_approved) {
+    parts.push(`<p class="detail testcode-case-meta-line"><span class="tag ok">Engineer approved</span></p>`);
+  }
   if (isLegacyTestCodeDraft(cid) && !state.testCode.dirtyMap?.[cid]) {
     parts.push(`<p class="detail testcode-legacy-hint">Legacy draft — click Save Code to mark as SAVED.</p>`);
   }
@@ -7373,9 +7465,10 @@ function renderTestCodeCaseMeta(cid, row) {
 }
 
 function mergedExportFilename(preview) {
+  if (preview?.export_filename) return String(preview.export_filename);
   const job = String(state.jobId || "job").replace(/[^\w.-]+/g, "_");
   const ts = String(preview?.timestamp || new Date().toISOString()).replace(/[:.]/g, "-").slice(0, 19);
-  return `ALEX_GTest_${job}_${ts}.cpp`;
+  return `ALEX_GTest_${job}_${ts}.cc`;
 }
 
 function getTestCodeEditorContent(cid) {
@@ -7394,18 +7487,23 @@ function getTestCodeEditorContent(cid) {
 function computeTestCodeWorkflowStatus(cid) {
   if (!cid) return TC_WF.NO_CODE;
   const tc = state.testCode;
-  if (tc.errorMap?.[cid]?.length) return TC_WF.ERROR;
-  if (tc.dirtyMap?.[cid]) {
-    const codeStatus = String(getTestCodeDraftRecord(cid).code_status || "").toUpperCase();
-    return codeStatus === "SAVED" ? TC_WF.MODIFIED_UNSAVED : TC_WF.DRAFT;
-  }
-
-  const content = getTestCodeEditorContent(cid);
   const draft = getTestCodeDraftRecord(cid);
-  const persisted = String(draft.full_snippet || draft.code_body || "").trim();
   const codeStatus = String(draft.code_status || "").toUpperCase();
 
-  if (!content && !persisted) return TC_WF.NO_CODE;
+  if (tc.dirtyMap?.[cid]) {
+    return codeStatus === "SAVED" ? TC_WF.MODIFIED_UNSAVED : TC_WF.DRAFT;
+  }
+  if (tc.errorMap?.[cid]?.length && codeStatus !== "SAVED") return TC_WF.ERROR;
+  if (codeStatus === "ERROR") return TC_WF.ERROR;
+  if (codeStatus === "NEEDS_REVIEW") return TC_WF.NEEDS_REVIEW;
+
+  const content = getTestCodeEditorContent(cid);
+  const persisted = String(draft.full_snippet || draft.code_body || "").trim();
+
+  if (!content && !persisted) {
+    if (tc.errorMap?.[cid]?.length) return TC_WF.ERROR;
+    return TC_WF.NO_CODE;
+  }
 
   const syncSt = testCodeSyncStatusFor(cid);
   if (codeStatus === "SAVED") {
@@ -7418,6 +7516,18 @@ function computeTestCodeWorkflowStatus(cid) {
   if (isLegacyTestCodeDraft(cid)) return TC_WF.DRAFT;
   if (content || persisted) return TC_WF.DRAFT;
   return TC_WF.NO_CODE;
+}
+
+function setTestCodeWorkflowError(cid, message) {
+  if (!cid) return;
+  if (!state.testCode.errorMap) state.testCode.errorMap = {};
+  state.testCode.errorMap[cid] = [String(message || "Error")];
+  patchTestCodeCaseStatusUi();
+}
+
+function clearTestCodeWorkflowError(cid) {
+  if (!cid || !state.testCode.errorMap) return;
+  delete state.testCode.errorMap[cid];
 }
 
 function testCodeWorkflowLabel(wf) {
@@ -7437,11 +7547,58 @@ function testCodeFilterMatches(wf, filter) {
   if (filter === "has_code") return [TC_WF.SAVED, TC_WF.DRAFT, TC_WF.MODIFIED_UNSAVED].includes(wf);
   if (filter === "needs_review") return wf === TC_WF.NEEDS_REVIEW;
   if (filter === "unsaved") return wf === TC_WF.MODIFIED_UNSAVED;
+  if (filter === "error") return wf === TC_WF.ERROR;
   return true;
 }
 
+const TESTCODE_CONFIG_FILES = [
+  "project_instruction.md",
+  "code_rules.md",
+  "signal_mapping.yaml",
+  "gtest_template.md",
+  "api_catalog.yaml",
+  "ai_review_pack.md",
+];
+
+function testCaseMatchesQualityFilter(cid, qFilter) {
+  if (!qFilter || qFilter === "all") return true;
+  const draft = getTestCodeDraftRecord(cid);
+  const checks = draft.quality_results || [];
+  const cov = state.testCode.mappingCoverage || state.testCode.workspace?.mapping_coverage || {};
+  const affected = new Set(cov.affected_testcase_ids || []);
+  if (qFilter === "quality_pass") return String(draft.quality_summary || "").toUpperCase() === "PASS";
+  if (qFilter === "quality_warning") return String(draft.quality_summary || "").toUpperCase() === "WARNING";
+  if (qFilter === "quality_fail") return String(draft.quality_summary || "").toUpperCase() === "FAIL";
+  if (qFilter === "missing_mapping") {
+    return draft.mapping_ready === false || (draft.mapping_missing || []).length > 0 || affected.has(cid);
+  }
+  if (qFilter === "unknown_api") return checks.some((c) => c.check_name === "unknown_api");
+  if (qFilter === "missing_assertion") return checks.some((c) => c.check_name === "missing_output_assertion");
+  if (qFilter === "missing_input") return checks.some((c) => c.check_name === "missing_input_setup");
+  if (qFilter === "timing_issue") return checks.some((c) => c.check_name === "timing_requirement");
+  return true;
+}
+
+function computeTestCodeReviewStats(rows) {
+  const base = computeTestCodeProgress(rows);
+  const cov = state.testCode.mappingCoverage || state.testCode.workspace?.mapping_coverage || {};
+  let qualityWarnings = 0;
+  for (const row of rows || []) {
+    const draft = getTestCodeDraftRecord(row.candidate_id);
+    const qs = String(draft.quality_summary || "").toUpperCase();
+    if (qs === "WARNING") qualityWarnings++;
+    const checks = draft.quality_results || [];
+    if (!qs && checks.some((c) => c.severity === "WARNING")) qualityWarnings++;
+  }
+  return {
+    ...base,
+    missing_mapping: cov.missing_mapping_count ?? 0,
+    quality_warnings: qualityWarnings,
+  };
+}
+
 function computeTestCodeProgress(rows) {
-  const c = { total: rows.length, saved: 0, draft: 0, no_code: 0, unsaved: 0, review: 0 };
+  const c = { total: rows.length, saved: 0, draft: 0, no_code: 0, unsaved: 0, review: 0, error: 0 };
   for (const row of rows || []) {
     const wf = computeTestCodeWorkflowStatus(row.candidate_id);
     if (wf === TC_WF.SAVED) c.saved++;
@@ -7449,13 +7606,439 @@ function computeTestCodeProgress(rows) {
     else if (wf === TC_WF.NO_CODE) c.no_code++;
     else if (wf === TC_WF.MODIFIED_UNSAVED) c.unsaved++;
     else if (wf === TC_WF.NEEDS_REVIEW) c.review++;
+    else if (wf === TC_WF.ERROR) c.error++;
   }
   return c;
 }
 
 function renderTestCodeProgressSummaryText(rows) {
-  const c = computeTestCodeProgress(rows);
-  return `Code progress: Total: ${c.total} | Saved: ${c.saved} | Draft: ${c.draft} | No code: ${c.no_code} | Unsaved: ${c.unsaved} | Review: ${c.review}`;
+  const c = computeTestCodeReviewStats(rows);
+  return `Code progress: Total: ${c.total} | Saved: ${c.saved} | Review: ${c.review} | Error: ${c.error} | Unsaved: ${c.unsaved} | Missing map: ${c.missing_mapping} | Q-warn: ${c.quality_warnings}`;
+}
+
+function renderTestCodeReviewDashboard(rows) {
+  const c = computeTestCodeReviewStats(rows);
+  return `<div class="alex-testcode-review-dash" id="testcode-review-dashboard">
+    <p class="detail alex-testcode-review-dash__grid">
+      <span><b>Total</b> ${c.total}</span>
+      <span><b>Saved</b> ${c.saved}</span>
+      <span><b>Needs review</b> ${c.review}</span>
+      <span><b>Error</b> ${c.error}</span>
+      <span><b>Missing mapping</b> ${c.missing_mapping}</span>
+      <span><b>Unsaved</b> ${c.unsaved}</span>
+      <span><b>Quality warnings</b> ${c.quality_warnings}</span>
+    </p>
+    <div class="alex-testcode-filters alex-testcode-quality-filters">
+      <span class="detail">Quality filters:</span>
+      ${[
+        ["all", "All"],
+        ["quality_pass", "PASS"],
+        ["quality_warning", "WARNING"],
+        ["quality_fail", "FAIL"],
+        ["missing_mapping", "Missing map"],
+        ["unknown_api", "Unknown API"],
+        ["missing_assertion", "Missing assert"],
+        ["missing_input", "Missing input"],
+        ["timing_issue", "Timing"],
+      ]
+        .map(
+          ([id, label]) =>
+            `<button type="button" class="btn secondary btn-inline testcode-quality-filter ${(state.testCode.qualityFilter || "all") === id ? "active" : ""}" data-quality-filter="${id}">${label}</button>`
+        )
+        .join("")}
+    </div>
+  </div>`;
+}
+
+function renderTestCodePerCaseReviewDetails(cid) {
+  if (!cid) return `<p class="detail">Select a testcase to see review details.</p>`;
+  const draft = getTestCodeDraftRecord(cid);
+  const checks = draft.quality_results || [];
+  const fails = checks.filter((c) => c.severity === "FAIL");
+  const warns = checks.filter((c) => c.severity === "WARNING");
+  const unknownApis = checks.filter((c) => c.check_name === "unknown_api");
+  const missAssert = checks.filter((c) => c.check_name === "missing_output_assertion");
+  const missInput = checks.filter((c) => c.check_name === "missing_input_setup");
+  const timing = checks.filter((c) => c.check_name === "timing_requirement");
+  const listChecks = (items) =>
+    items.length
+      ? `<ul class="alex-testcode-review-checks">${items.map((c) => `<li><span class="tag ${c.severity === "FAIL" ? "error" : "warning"}">${esc(c.severity)}</span> ${esc(c.check_name)}: ${esc(c.message)}</li>`).join("")}</ul>`
+      : `<p class="detail">—</p>`;
+  return `<div class="alex-testcode-review-details-inner">
+    <dl class="alex-testcode-context-dl alex-testcode-review-dl">
+      <dt>Generation source</dt><dd>${esc(draft.generation_source || "—")}</dd>
+      <dt>Last saved</dt><dd>${esc(draft.last_saved_at ? formatTestCodeTimestamp(draft.last_saved_at) : "—")}</dd>
+      <dt>Quality summary</dt><dd>${esc(draft.quality_summary || "—")}</dd>
+      <dt>Review reason</dt><dd>${esc(draft.review_reason || "—")}</dd>
+      <dt>Missing mapping</dt><dd>${esc((draft.mapping_missing || []).join(", ") || (draft.mapping_ready === false ? "yes" : "—"))}</dd>
+    </dl>
+    <h4 class="alex-testcode-panel-title">Quality gate</h4>
+    ${listChecks([...fails, ...warns])}
+    ${unknownApis.length ? `<h4 class="alex-testcode-panel-title">Unknown APIs</h4>${listChecks(unknownApis)}` : ""}
+    ${missAssert.length ? `<h4 class="alex-testcode-panel-title">Outputs not asserted</h4>${listChecks(missAssert)}` : ""}
+    ${missInput.length ? `<h4 class="alex-testcode-panel-title">Inputs not set</h4>${listChecks(missInput)}` : ""}
+    ${timing.length ? `<h4 class="alex-testcode-panel-title">Timing</h4>${listChecks(timing)}` : ""}
+    ${
+      fails.length || warns.length
+        ? `<div class="alex-testcode-learned-rule-box">
+      <label class="detail">Add fix to Learned Rules
+        <textarea id="testcode-learned-rule-text" class="gtest-input gtest-note" rows="2" placeholder="e.g. Use GetPModeSts() for PMODE_STS; Add WaitMs(100) for T_WAIT_100MS"></textarea>
+      </label>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-add-learned-rule">Add to Learned Rules</button>
+    </div>`
+        : ""
+    }
+  </div>`;
+}
+
+function renderTestCodeConfigVersionPanel() {
+  const cfg = state.testCode.projectCodeConfig || {};
+  const cur = cfg.current_version || {};
+  const versions = cfg.versions || state.testCode.configVersions || [];
+  const rows = versions
+    .slice()
+    .reverse()
+    .slice(0, 8)
+    .map(
+      (v) => `<li><code>${esc(v.config_version_id || "")}</code> · ${esc(v.timestamp || "")} · ${esc(v.source || "")} — ${esc(v.summary || "")}
+        <button type="button" class="btn secondary btn-inline" data-config-rollback="${esc(v.config_version_id || "")}">Rollback</button></li>`
+    )
+    .join("");
+  return `<div class="alex-testcode-config-versions">
+    <p class="detail"><b>Current version:</b> ${esc(cfg.current_version_id || cur.config_version_id || "—")} · <b>Updated:</b> ${esc(cur.timestamp || "—")} · <b>Source:</b> ${esc(cur.source || "—")}</p>
+    ${versions.length ? `<ul class="alex-testcode-version-list">${rows}</ul>` : `<p class="detail">No version history yet.</p>`}
+  </div>`;
+}
+
+const CONFIG_BUNDLE_START_MARKERS = [
+  "ALEX_CONFIG_BUNDLE_START",
+  "alex_code_config_bundle_start",
+  "<!-- ALEX_CONFIG_BUNDLE_START",
+  "--- ALEX_CONFIG_BUNDLE_START",
+];
+const CONFIG_BUNDLE_END_MARKERS = [
+  "ALEX_CONFIG_BUNDLE_END",
+  "alex_code_config_bundle_end",
+  "<!-- ALEX_CONFIG_BUNDLE_END",
+  "--- ALEX_CONFIG_BUNDLE_END",
+];
+
+function logConfigBundleImportPreflight(md) {
+  const text = String(md || "");
+  const normalized = text.replace(/\\_/g, "_").replace(/^\\-/gm, "-").replace(/^\\(=+)/gm, "$1");
+  const upper = normalized.toUpperCase();
+  const hasStart = CONFIG_BUNDLE_START_MARKERS.some((m) => upper.includes(m.toUpperCase()));
+  const hasEnd = CONFIG_BUNDLE_END_MARKERS.some((m) => upper.includes(m.toUpperCase()));
+  const headingRe = /^#{1,3}\s*(?:\d+[\).\s]+)?\*{0,2}(code_rules\.md|signal_mapping\.yaml|gtest_template\.md|api_catalog\.yaml|ai_review_pack\.md)\*{0,2}\s*:?\s*$/gim;
+  const headings = [...normalized.matchAll(headingRe)].map((m) => m[1]);
+  const payload = getConfigBundleRequestPayload(text);
+  const logPreview = text.length > 100 ? `${text.slice(0, 100)}…` : text;
+  console.info("[ALEX config bundle import]", {
+    bundleLength: text.length,
+    preview: logPreview,
+    hasStartMarker: hasStart,
+    hasEndMarker: hasEnd,
+    detectedHeadings: headings,
+    requestJsonKeys: Object.keys(payload),
+    escapedUnderscores: (text.match(/\\_/g) || []).length,
+  });
+  return { hasStart, hasEnd, headings, payload };
+}
+
+function getConfigBundleRequestPayload(md) {
+  return { bundle: String(md || "") };
+}
+
+function formatConfigBundleApiError(err) {
+  const body = err?.apiBody;
+  if (!body) return err?.message || String(err);
+  const d = body.details || {};
+  const parts = [body.error || err.message];
+  if (d.bundle_length != null) parts.push(`length=${d.bundle_length}`);
+  if (d.payload_keys?.length) parts.push(`payload keys: ${d.payload_keys.join(", ")}`);
+  if (d.missing_markers?.length) parts.push(`missing markers: ${d.missing_markers.join(", ")}`);
+  if (d.detected_sections?.length) parts.push(`detected: ${d.detected_sections.join(", ")}`);
+  if (d.missing_sections?.length) parts.push(`missing sections: ${d.missing_sections.join(", ")}`);
+  if (d.expected_sections?.length && !d.detected_sections?.length) {
+    parts.push(`expected: ${d.expected_sections.join(", ")}`);
+  }
+  if (body.warnings?.length) parts.push(`warnings: ${body.warnings.join("; ")}`);
+  return parts.filter(Boolean).join(" · ");
+}
+
+function renderTestCodeConfigProposalPanel() {
+  const prop = state.testCode.configProposal;
+  const errText = state.testCode.configProposalError;
+  if (errText) {
+    return `<div class="alex-testcode-config-proposal alex-testcode-config-proposal--error" id="testcode-config-proposal">
+      <p class="tag error">Import failed</p>
+      <p class="detail" id="testcode-config-proposal-error">${esc(errText)}</p>
+    </div>`;
+  }
+  if (!prop) {
+    return `<p class="detail" id="testcode-config-proposal-empty">Import <code>alex_code_config_bundle.md</code> to preview proposed changes (no overwrite until you apply).</p>`;
+  }
+  const warnHtml = (prop.warnings || []).length
+    ? `<ul class="alex-testcode-config-diff-list">${(prop.warnings || []).map((w) => `<li class="tag warning">${esc(w)}</li>`).join("")}</ul>`
+    : "";
+  const normHint = prop.copilot_normalized
+    ? `<p class="detail tag ok">Copilot escaped Markdown was normalized.</p>`
+    : "";
+  const diag = prop.import_diagnostics || {};
+  const diagHtml = diag.detected_count != null
+    ? `<p class="detail alex-testcode-config-diag">Import: <b>${diag.detected_count}</b> detected · <b>${(diag.missing_sections || []).length}</b> missing · Normalized: <b>${diag.bundle_normalized ? "yes" : "no"}</b> · YAML validation: <b>${esc(diag.yaml_validation || "not_performed")}</b> · Importable: <b>${diag.importable ? "yes" : "no"}</b></p>`
+    : "";
+  const meta = [
+    prop.detected_sections?.length ? `<b>Detected:</b> ${prop.detected_sections.map((s) => `<code>${esc(s)}</code>`).join(", ")}` : "",
+    prop.missing_sections?.length ? `<b>Missing:</b> ${prop.missing_sections.map((s) => `<code>${esc(s)}</code>`).join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (!prop.changes?.length) {
+    return `<div class="alex-testcode-config-proposal" id="testcode-config-proposal">
+      ${normHint}
+      ${diagHtml}
+      <p class="detail">${meta || "Sections parsed."}</p>
+      ${warnHtml}
+      <p class="detail">No diff changes vs current effective config. Use <b>Import bundle</b> above to store the bundle, or edit sections manually.</p>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-config-ignore-proposal">Ignore</button>
+      </div>
+    </div>`;
+  }
+  const s = prop.diff_summary || prop.summary || {};
+  const lines = prop.changes
+    .map((c) => {
+      const checked = c.selected_default ? "checked" : "";
+      const warn = c.warning ? ` <span class="tag warning">${esc(c.warning)}</span>` : "";
+      const detail =
+        c.kind === "mapping_modified"
+          ? `${esc(c.key)}: ${esc(c.previous_value || "—")} → ${esc(c.new_value || "")}`
+          : c.kind === "mapping_added"
+            ? `+ ${esc(c.key)} → ${esc(c.new_value || "")}`
+            : c.kind === "mapping_removed"
+              ? `− ${esc(c.key)}`
+              : `${esc(c.section)} (${esc(c.kind)})`;
+      return `<li><label><input type="checkbox" data-config-change-id="${esc(c.id || "")}" ${checked} /> ${esc(detail)}${warn}</label></li>`;
+    })
+    .join("");
+  return `<div class="alex-testcode-config-proposal" id="testcode-config-proposal">
+    ${normHint}
+    ${diagHtml}
+    <p class="detail">${meta}</p>
+    ${warnHtml}
+    <p class="detail">Proposed update: +${s.added_mappings || 0} mappings · ~${s.modified_mappings || 0} modified · ${s.conflicts || 0} conflicts · +${s.new_apis || 0} APIs</p>
+    <ul class="alex-testcode-config-diff-list">${lines}</ul>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-config-apply-selected">Apply selected</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-config-apply-safe">Apply safe only</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-config-save-baseline">Save as new baseline</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-config-ignore-proposal">Ignore</button>
+    </div>
+  </div>`;
+}
+
+function renderTestCodeMissingMappingPanel() {
+  const cov = state.testCode.mappingCoverage;
+  const terms = cov?.missing_terms || [];
+  if (!terms.length) return "";
+  return `<div class="alex-testcode-mapping-fixes" id="testcode-mapping-fixes">
+    <h4 class="alex-testcode-panel-title">Add missing mappings</h4>
+    ${terms
+      .slice(0, 25)
+      .map(
+        (t) => `<div class="alex-testcode-mapping-fix-row">
+        <code>${esc(t)}</code>
+        <input type="text" class="gtest-input" data-mapping-term="${esc(t)}" placeholder="Code path / assertion snippet" />
+        <button type="button" class="btn secondary btn-inline" data-save-mapping="${esc(t)}">Save as learned</button>
+        <button type="button" class="btn secondary btn-inline" data-save-mapping-override="${esc(t)}">Save as override</button>
+      </div>`
+      )
+      .join("")}
+  </div>`;
+}
+
+function renderTestCodeConfigDiagnosticsPanel() {
+  const d = state.testCode.configDiagnostics;
+  if (!d) {
+    return `<div class="alex-testcode-config-diagnostics" id="testcode-config-diagnostics">
+      <p class="detail">Config diagnostics: not loaded — click Refresh.</p>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-config-diagnostics">Refresh Config Diagnostics</button>
+    </div>`;
+  }
+  const sm = d.signal_mapping || {};
+  const api = d.api_catalog || {};
+  const yamlSt = d.yaml_parse_status || "—";
+  const yamlCls = yamlSt === "OK" ? "ok" : yamlSt === "WARNING" ? "warning" : "error";
+  return `<div class="alex-testcode-config-diagnostics" id="testcode-config-diagnostics">
+    <p class="detail"><b>Config diagnostics</b></p>
+    <ul class="detail alex-testcode-config-diag-list">
+      <li>Signal mapping keys detected: <b>${sm.keys_detected ?? 0}</b></li>
+      <li>API catalog entries detected: <b>${api.entries_detected ?? 0}</b> (literal: ${api.literal_apis ?? 0})</li>
+      <li>Wildcard APIs detected: <b>${api.wildcard_apis ?? 0}</b>${(api.wildcards || []).length ? ` — ${esc((api.wildcards || []).slice(0, 6).join(", "))}` : ""}</li>
+      <li>YAML parse status: <span class="tag ${yamlCls}">${esc(yamlSt)}</span></li>
+      <li>Top-level mapping format: <b>${sm.top_level_format ? "yes" : "no"}</b></li>
+      <li>Reserved schema format (mappings/terms): <b>${sm.reserved_schema_format ? "yes" : "no"}</b></li>
+    </ul>
+    <button type="button" class="btn secondary btn-inline" id="btn-testcode-config-diagnostics">Refresh Config Diagnostics</button>
+  </div>`;
+}
+
+function renderMappingCoverageDetail(cov) {
+  if (!cov || (cov.total_testcase_count == null && cov.total == null)) return "";
+  const total = cov.total_testcase_count ?? cov.total ?? 0;
+  const ready = cov.ready_for_local_generation ?? 0;
+  const missing = cov.missing_mapping_count ?? 0;
+  const detected = cov.detected_mapping_count ?? "—";
+  const topMissing = (cov.top_missing_terms || cov.missing_terms || []).slice(0, 10);
+  const topHtml = topMissing.length
+    ? `<li>Top missing terms: <code>${esc(topMissing.join("</code>, <code>"))}</code></li>`
+    : "";
+  const samples = (cov.sample_matched_mappings || []).slice(0, 6);
+  const sampleHtml = samples.length
+    ? `<li>Sample matches: ${samples
+        .map((s) => `<code>${esc(s.term)}</code>→${esc(s.canonical || s.term)} (${esc(s.source)})`)
+        .join("; ")}</li>`
+    : "";
+  const warnHtml = (cov.warnings || []).length
+    ? `<li class="tag warning">${esc((cov.warnings || []).join(" "))}</li>`
+    : "";
+  return `<ul class="detail alex-testcode-mapping-cov-detail" id="testcode-mapping-coverage-detail">
+    <li>Total testcases: <b>${total}</b> · Ready: <b>${ready}</b> · Missing mapping: <b>${missing}</b></li>
+    <li>Detected mapping keys (config + variable map): <b>${detected}</b></li>
+    ${topHtml}
+    ${sampleHtml}
+    ${warnHtml}
+  </ul>`;
+}
+
+function renderTestCodeProjectConfigPanel() {
+  const cfg = state.testCode.projectCodeConfig;
+  const selected = state.testCode.configFileSelected || "code_rules.md";
+  const file = cfg?.files?.[selected];
+  const content = file?.content ?? "";
+  const opts = TESTCODE_CONFIG_FILES.map(
+    (name) => `<option value="${esc(name)}" ${name === selected ? "selected" : ""}>${esc(name)}</option>`
+  ).join("");
+  return `<div class="alex-testcode-config-panel">
+    <p class="detail">Effective config = baseline + project_overrides + learned_rules. Edits save to <b>project_overrides</b>.</p>
+    <p class="detail">Workspace: <code>bundle/code_config/</code></p>
+    ${renderTestCodeConfigVersionPanel()}
+    ${renderTestCodeConfigDiagnosticsPanel()}
+    <label class="detail">Import bundle (proposed update)
+      <textarea id="testcode-config-bundle-import" class="gtest-input gtest-note" rows="6" placeholder="Paste alex_code_config_bundle.md…">${esc(state.testCode.configBundlePaste || "")}</textarea>
+    </label>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-propose-bundle">Preview import diff</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-import-bundle">Import bundle</button>
+      <p class="detail" id="testcode-config-import-status"></p>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-export-config-bundle">Export Effective Config Bundle</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-config-prompt">Copy Config Improvement Prompt</button>
+    </div>
+    ${renderTestCodeConfigProposalPanel()}
+    <label class="detail">Edit effective file (saved as override)
+      <select id="testcode-config-file-select" class="clarify-box">${opts}</select>
+    </label>
+    <textarea id="testcode-config-editor" class="gtest-input gtest-note" rows="10" spellcheck="false">${esc(content)}</textarea>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-reload-config">Reload config</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-config">Save to project overrides</button>
+    </div>
+  </div>`;
+}
+
+function renderTestCodeAdvancedBody(rows) {
+  const cov = state.testCode.mappingCoverage;
+  const covLine = cov
+    ? `Coverage: ${cov.ready_for_local_generation ?? 0} ready / ${cov.total_testcase_count ?? cov.total ?? 0} total · ${cov.missing_mapping_count ?? 0} missing map · detected keys: ${cov.detected_mapping_count ?? "—"}`
+    : "Run Check Mapping Coverage to see readiness.";
+  return `<p class="detail">Fallback tools — only if Copilot batch is not enough.</p>
+    <div id="testcode-advanced-smart-wrap">${renderTestCodeSimpleToolbar()}</div>
+    <div id="testcode-advanced-exemplar-wrap">${renderTestCodeExemplarPanel(rows)}</div>
+    ${renderTestCodeMappingProposalsPanel()}
+    ${renderTestCodeReviewDashboard(rows)}
+    <p class="detail" id="testcode-mapping-coverage-line">${esc(covLine)}</p>
+    ${renderMappingCoverageDetail(cov)}
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-local-template">Generate Local from Template</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-review-pack">Copy AI Batch Review Pack</button>
+    </div>
+    <label class="detail">Batch Change Request
+      <textarea id="testcode-batch-change-request" class="gtest-input gtest-note" rows="4" placeholder="e.g. rename API, add WaitMs(100), change assertion style…">${esc(state.testCode.batchChangeRequest || "")}</textarea>
+    </label>
+    <div id="testcode-mapping-fixes-wrap">${renderTestCodeMissingMappingPanel()}</div>
+    <h4 class="alex-testcode-panel-title">Project Code Config</h4>
+    <div id="testcode-project-config-panel">${renderTestCodeProjectConfigPanel()}</div>
+    <h4 class="alex-testcode-panel-title">Per-testcase review</h4>
+    <div id="testcode-review-details-advanced">${renderTestCodePerCaseReviewDetails(state.testCode.selectedCandidateId)}</div>
+    <label class="detail testcode-followup-label">
+      <input type="checkbox" id="testcode-copilot-followup" ${state.testCode.copilotWebFollowUp ? "checked" : ""} />
+      Shorter Copilot prompt for next testcase (same web chat)
+    </label>
+    <p class="detail">Workflow: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR] · Sources: COPILOT_WEB, COPILOT_API, LOCAL_TEMPLATE, MANUAL, CLAUDE_MANUAL (pack only)</p>`;
+}
+
+function patchTestCodeReviewDetailsUi() {
+  const cid = state.testCode.selectedCandidateId;
+  const html = renderTestCodePerCaseReviewDetails(cid);
+  const adv = $("#testcode-review-details-advanced");
+  if (adv) adv.innerHTML = html;
+  const step = $("#testcode-review-details");
+  if (step) step.innerHTML = html;
+  bindTestCodeReviewActionHandlers(state.testCode.rows || [], $("#testcode-status"));
+}
+
+async function ensureProjectCodeConfigLoaded(force = false) {
+  if (!state.jobId) return null;
+  if (!force && state.testCode.projectCodeConfig?.files) return state.testCode.projectCodeConfig;
+  const data = await api(`/api/review/project-code-config?job_id=${encodeURIComponent(state.jobId)}`);
+  state.testCode.projectCodeConfig = data;
+  state.testCode.configVersions = data.versions || [];
+  if (!state.testCode.workspace) state.testCode.workspace = {};
+  state.testCode.workspace.project_code_config_meta = {
+    files: Object.keys(data.files || {}),
+    current_version_id: data.current_version_id,
+    layers: data.layers,
+    pending_proposal: data.pending_proposal,
+  };
+  return data;
+}
+
+function refreshTestCodeExemplarUi(rows, statusEl) {
+  const wrap = $("#testcode-advanced-exemplar-wrap");
+  if (wrap) {
+    wrap.innerHTML = renderTestCodeExemplarPanel(rows);
+    bindTestCodeExemplarHandlers(rows, statusEl);
+  }
+  const bar = $("#testcode-exemplar-bar");
+  if (bar) {
+    bar.outerHTML = renderTestCodeExemplarPanel(rows);
+    bindTestCodeExemplarHandlers(rows, statusEl);
+  }
+}
+
+function refreshTestCodePrimaryUi(rows, statusEl, samples) {
+  const primary = $("#testcode-copilot-primary");
+  if (primary) {
+    primary.outerHTML = renderTestCodeCopilotPrimaryBar(rows, samples);
+    bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples);
+  }
+}
+
+function refreshTestCodeConfigUi(rows, statusEl) {
+  const smartWrap = $("#testcode-advanced-smart-wrap");
+  if (smartWrap) {
+    smartWrap.innerHTML = renderTestCodeSimpleToolbar();
+    bindTestCodeSmartHandlers(rows, statusEl);
+  }
+  refreshTestCodeExemplarUi(rows, statusEl);
+  const panel = $("#testcode-project-config-panel");
+  if (panel) panel.innerHTML = renderTestCodeProjectConfigPanel();
+  const fixes = $("#testcode-mapping-fixes-wrap");
+  if (fixes) fixes.innerHTML = renderTestCodeMissingMappingPanel();
+  bindTestCodeConfigPanelHandlers(rows, statusEl);
+  bindTestCodeConfigBundleHandlers(rows, statusEl);
+  bindTestCodeMappingFixHandlers(rows, statusEl);
 }
 
 function stashTestCodeEditor(cid) {
@@ -7471,6 +8054,7 @@ function markTestCodeDirty() {
   if (!cid) return;
   if (!state.testCode.dirtyMap) state.testCode.dirtyMap = {};
   state.testCode.dirtyMap[cid] = true;
+  clearTestCodeWorkflowError(cid);
   stashTestCodeEditor(cid);
   patchTestCodeCaseStatusUi();
 }
@@ -7539,11 +8123,149 @@ function testCodeStatusTagClass(status) {
   return testCodeWorkflowTagClass(wf);
 }
 
+function testCodeImportGroupKey(row) {
+  if (!row) return "";
+  return String(row.test_group || "").trim();
+}
+
+function testCodeBatchGroupKey(rows) {
+  const active = (rows || state.testCode.rows || []).find(
+    (r) => r.candidate_id === state.testCode.selectedCandidateId,
+  );
+  return testCodeImportGroupKey(active);
+}
+
+function testCodeAllTargetIds(rows) {
+  const ordered = testCodeRowOrder(rows);
+  const exId = state.testCode.codeExemplar?.candidate_id;
+  return ordered.map((r) => r.candidate_id).filter((cid) => cid && cid !== exId);
+}
+
+function testCodeWorkflowCountsFromWorkspace() {
+  const drafts = state.testCode.workspace?.drafts || {};
+  const counts = { SAVED: 0, NEEDS_REVIEW: 0, ERROR: 0, APPROVED: 0, NO_CODE: 0 };
+  for (const d of Object.values(drafts)) {
+    if (!d || typeof d !== "object") continue;
+    const st = String(d.code_status || "").toUpperCase();
+    const has = String(d.full_snippet || d.code_body || "").trim();
+    if (!has) {
+      counts.NO_CODE += 1;
+      continue;
+    }
+    if (st === "SAVED") {
+      counts.SAVED += 1;
+      if (d.engineer_approved) counts.APPROVED += 1;
+    } else if (st === "NEEDS_REVIEW") counts.NEEDS_REVIEW += 1;
+    else if (st === "ERROR") counts.ERROR += 1;
+  }
+  return counts;
+}
+
+function testCodeBatchTargetIds(rows, scopeOverride) {
+  const scope = scopeOverride || state.testCode.batchScope || "filter";
+  const ordered = testCodeRowOrder(rows);
+  const exId = state.testCode.codeExemplar?.candidate_id;
+  if (scope === "all") {
+    let ids = testCodeAllTargetIds(rows);
+    if (state.testCode.skipSavedOnBatch) {
+      ids = ids.filter((cid) => {
+        const st = String(getTestCodeDraftRecord(cid).code_status || "").toUpperCase();
+        return st !== "SAVED";
+      });
+    }
+    return ids;
+  }
+  if (scope === "selected") {
+    const cid = state.testCode.selectedCandidateId;
+    return cid && cid !== exId ? [cid] : [];
+  }
+  if (scope === "group") {
+    const gk = testCodeBatchGroupKey(rows);
+    if (!gk) return [];
+    return ordered
+      .filter((r) => testCodeImportGroupKey(r) === gk)
+      .map((r) => r.candidate_id)
+      .filter((cid) => cid && cid !== exId);
+  }
+  return testCodeRowsForFilter(rows)
+    .map((r) => r.candidate_id)
+    .filter((cid) => cid && cid !== exId);
+}
+
+function testCodeBatchScopeLabel(scope) {
+  const s = scope || state.testCode.batchScope || "filter";
+  if (s === "all") return "all imported testcases";
+  if (s === "group") {
+    const gk = testCodeBatchGroupKey(state.testCode.rows);
+    return gk ? `import group “${gk}”` : "import group (select a testcase with Test Group)";
+  }
+  if (s === "selected") return "selected testcase";
+  return "current filter";
+}
+
+function testCodeCopilotBatchPayload(rows, scopeOverride) {
+  const scope = scopeOverride || state.testCode.batchScope || "filter";
+  const groupKey = scope === "group" ? testCodeBatchGroupKey(rows) : "";
+  return {
+    language: state.exportLanguage || "EN",
+    candidate_ids: testCodeBatchTargetIds(rows, scope),
+    engineer_note: $("#testcode-user-request")?.value || state.testCode.userRequest || "",
+    batch_size: Number(state.testCode.copilotBatchSize) || 10,
+    skip_saved: !!state.testCode.skipSavedOnBatch,
+    scope,
+    group_key: groupKey,
+    group_field: "test_group",
+  };
+}
+
+function renderTestCodeExemplarPanel(rows) {
+  const ex = state.testCode.codeExemplar;
+  const scope = state.testCode.batchScope || "filter";
+  const targets = testCodeBatchTargetIds(rows, scope);
+  const exGroup = ex?.import_group || ex?.test_group || "";
+  const exLabel = ex?.candidate_id
+    ? `<code>${esc(ex.candidate_id)}</code> · ${esc(ex.style_notes || "style reference")}${exGroup ? ` · group ${esc(exGroup)}` : ""}`
+    : `<span class="detail">None — save good code, then Mark as Exemplar (style reference only)</span>`;
+  const batchHint =
+    targets.length > 0
+      ? `${targets.length} target(s) for ${testCodeBatchScopeLabel(scope)} (import order preserved)`
+      : `No targets for ${testCodeBatchScopeLabel(scope)} — change scope or select a testcase`;
+  const groupHint =
+    ex?.candidate_id && exGroup
+      ? `<p class="detail">Exemplar is in import group <strong>${esc(exGroup)}</strong> — use Generate Current Group to batch others in that group only.</p>`
+      : "";
+  return `<section class="card alex-testcode-exemplar-bar" id="testcode-exemplar-bar">
+    <h3 class="alex-testcode-exemplar-bar__title">Exemplar batch (Advanced)</h3>
+    <p class="detail">Exemplar is a coding-style reference only — targets come from filter, import group, or selection.</p>
+    <p class="detail">Exemplar: ${exLabel}</p>
+    ${groupHint}
+    <p class="detail" id="testcode-exemplar-targets">${esc(batchHint)}</p>
+    <div class="alex-testcode-editor__actions alex-testcode-exemplar-bar__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-mark-exemplar">Mark as Exemplar</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-clear-exemplar" ${ex ? "" : "disabled"}>Clear Exemplar</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-exemplar-prompt" ${ex && targets.length ? "" : "disabled"}>Copy Exemplar Batch Prompt</button>
+      <button type="button" class="btn" id="btn-testcode-exemplar-batch-filter" data-batch-scope="filter" ${ex && testCodeBatchTargetIds(rows, "filter").length ? "" : "disabled"}>Generate Current Filter</button>
+      <button type="button" class="btn" id="btn-testcode-exemplar-batch-group" data-batch-scope="group" ${ex && testCodeBatchTargetIds(rows, "group").length ? "" : "disabled"}>Generate Current Group</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-exemplar-batch-selected" data-batch-scope="selected" ${ex && testCodeBatchTargetIds(rows, "selected").length ? "" : "disabled"}>Generate Selected Testcase</button>
+    </div>
+    <label class="detail">Paste Exemplar Batch Result (Copilot web)
+      <textarea id="testcode-exemplar-batch-import" class="gtest-input gtest-note" rows="8" placeholder="Paste [TESTCASE_CODE] … [ASSUMPTIONS] … blocks from Copilot…"></textarea>
+    </label>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn" id="btn-testcode-import-exemplar-batch" ${ex ? "" : "disabled"}>Import Exemplar Batch Result</button>
+    </div>
+  </section>`;
+}
+
 function testCodeRowsForFilter(rows) {
   const filter = state.testCode.caseFilter || "all";
+  const qFilter = state.testCode.qualityFilter || "all";
   const ordered = testCodeRowOrder(rows);
-  if (filter === "all") return ordered;
-  return ordered.filter((row) => testCodeFilterMatches(computeTestCodeWorkflowStatus(row.candidate_id), filter));
+  return ordered.filter((row) => {
+    const cid = row.candidate_id;
+    const wfOk = filter === "all" || testCodeFilterMatches(computeTestCodeWorkflowStatus(cid), filter);
+    return wfOk && testCaseMatchesQualityFilter(cid, qFilter);
+  });
 }
 
 function navigateTestCodeCase(rows, delta) {
@@ -7648,8 +8370,83 @@ function renderTestCodeCaseBar(rows) {
       <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "has_code" ? "active" : ""}" data-case-filter="has_code">Has code</button>
       <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "unsaved" ? "active" : ""}" data-case-filter="unsaved">Unsaved</button>
       <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "needs_review" ? "active" : ""}" data-case-filter="needs_review">Needs review</button>
+      <button type="button" class="btn secondary btn-inline testcode-case-filter ${caseFilter === "error" ? "active" : ""}" data-case-filter="error">Error</button>
     </div>
   </div>`;
+}
+
+function summarizeBatchWorkflowResults(results) {
+  const rows = results || [];
+  return {
+    saved: rows.filter((r) => (r.workflow_status || r.code_status) === "SAVED").length,
+    needs_review: rows.filter((r) => (r.workflow_status || r.code_status) === "NEEDS_REVIEW").length,
+    error: rows.filter((r) => (r.workflow_status || r.code_status) === "ERROR").length,
+    skipped: rows.filter((r) => r.skipped || r.workflow_status === "skipped").length,
+    total: rows.length,
+  };
+}
+
+function renderTestCodeBatchResultSummary(results, summary) {
+  if (!results?.length) return "";
+  const s = summary || summarizeBatchWorkflowResults(results);
+  const sel = state.testCode.batchApproveSelection || {};
+  const lines = results
+    .map((r) => {
+      const cid = r.candidate_id || "";
+      const wf = r.workflow_status || r.code_status || (r.skipped ? "skipped" : "ERROR");
+      const tagCls = wf === "SAVED" ? "ok" : wf === "ERROR" ? "error" : wf === "NEEDS_REVIEW" ? "warning" : "";
+      const msg = r.workflow_message || r.error || r.reason || "";
+      const draft = getTestCodeDraftRecord(cid);
+      const appr = draft.engineer_approved ? '<span class="tag ok">approved</span>' : "";
+      const cb =
+        wf === "SAVED" || wf === "NEEDS_REVIEW"
+          ? `<input type="checkbox" class="batch-approve-cb" data-batch-cid="${esc(cid)}" ${sel[cid] ? "checked" : ""} />`
+          : "";
+      return `<li>${cb}<code>${esc(cid)}</code> <span class="tag ${tagCls} testcode-wf-badge">[${esc(wf)}]</span> ${appr}<span class="detail">${esc(msg)}</span></li>`;
+    })
+    .join("");
+  return `<div class="alex-testcode-batch-result-inner">
+    <h4 class="alex-testcode-panel-title">Batch Generate Result</h4>
+    <ul class="detail alex-testcode-batch-stats">
+      <li>Generated and saved: <b>${s.saved ?? 0}</b></li>
+      <li>Needs review: <b>${s.needs_review ?? 0}</b></li>
+      <li>Failed: <b>${s.error ?? 0}</b></li>
+    </ul>
+    <ul class="alex-testcode-batch-lines">${lines}</ul>
+  </div>`;
+}
+
+function applyBatchWorkflowResults(result) {
+  const tc = state.testCode;
+  tc.batchResults = result.results || [];
+  tc.batchSummary = result.summary || summarizeBatchWorkflowResults(tc.batchResults);
+  if (!tc.errorMap) tc.errorMap = {};
+  for (const row of tc.batchResults) {
+    const cid = row.candidate_id;
+    if (!cid) continue;
+    const ws = row.workflow_status || row.code_status;
+    if (ws === "ERROR") {
+      tc.errorMap[cid] = [row.workflow_message || row.error || "API failed"];
+    } else {
+      delete tc.errorMap[cid];
+    }
+  }
+  const panel = $("#testcode-batch-result");
+  if (panel) panel.innerHTML = renderTestCodeBatchResultSummary(tc.batchResults, tc.batchSummary);
+  const panelPrimary = $("#testcode-batch-result-primary");
+  if (panelPrimary) panelPrimary.innerHTML = renderTestCodeBatchResultSummary(tc.batchResults, tc.batchSummary);
+  patchTestCodeCaseStatusUi();
+  const cid = tc.selectedCandidateId;
+  if (cid) {
+    tc.draft = resolveDraftForCandidate(cid);
+    const row = (tc.rows || []).find((r) => r.candidate_id === cid);
+    applyTestCodeDraftToUi(tc.draft, row);
+  }
+  const statusEl = $("#testcode-status");
+  const s = tc.batchSummary || {};
+  if (statusEl) {
+    statusEl.textContent = `Batch done — Saved: ${s.saved ?? 0}, Needs review: ${s.needs_review ?? 0}, Error: ${s.error ?? 0}`;
+  }
 }
 
 function renderTestCodeIoContext(row) {
@@ -7761,6 +8558,19 @@ function patchTestCodeCaseStatusUi() {
     const row = rows.find((r) => r.candidate_id === cid);
     metaEl.outerHTML = renderTestCodeCaseMeta(cid, row);
   }
+
+  const dash = $("#testcode-review-dashboard");
+  if (dash) dash.outerHTML = renderTestCodeReviewDashboard(rows);
+
+  const covLine = $("#testcode-mapping-coverage-line");
+  if (covLine) {
+    const cov = state.testCode.mappingCoverage || state.testCode.workspace?.mapping_coverage;
+    covLine.textContent = cov
+      ? `Coverage: ${cov.ready_for_local_generation ?? 0} ready / ${cov.total_testcase_count ?? cov.total ?? 0} total · ${cov.missing_mapping_count ?? 0} missing map`
+      : "Run Check Mapping Coverage to see readiness.";
+  }
+  patchTestCodeReviewDetailsUi();
+  bindTestCodeReviewActionHandlers(rows, statusEl);
 }
 
 function testCodeRowOrder(rows) {
@@ -7781,11 +8591,249 @@ function nextTestCodeMissingId(rows) {
   return hit?.candidate_id || null;
 }
 
+function applyTestCodeRunReportFromResponse(data) {
+  if (!data) return;
+  const tc = state.testCode;
+  if (data.run_report) tc.runReport = data.run_report;
+  if (data.run_report_markdown) tc.runReportMarkdown = data.run_report_markdown;
+  else if (data.run_report) tc.runReportMarkdown = formatTestCodeRunReportMarkdownClient(data.run_report);
+}
+
+function formatTestCodeRunReportMarkdownClient(report) {
+  if (!report) return "";
+  const lines = [
+    "# ALEX Smart Workflow Run Report",
+    "",
+    `- **Generated:** ${report.generated_at || "—"}`,
+    `- **Verdict:** ${report.verdict || "—"}`,
+    "",
+    "## Summary",
+    "",
+    `| Metric | Value |`,
+    `|--------|-------|`,
+    `| Total testcases | ${report.total_testcase_count ?? 0} |`,
+    `| Context analyzed | ${report.analyzed_context_summary || "—"} |`,
+    `| Fixture detected | \`${report.fixture_detected || "—"}\` |`,
+    `| Mapping candidates | ${report.mapping_candidates_detected ?? 0} |`,
+    `| Coverage ready | ${report.coverage_ready_count ?? 0} |`,
+    `| Missing mappings | ${report.missing_mapping_count ?? 0} |`,
+    `| Auto-accepted mappings | ${report.auto_accepted_mapping_count ?? 0} |`,
+    `| Mappings needing review | ${report.mappings_requiring_review_count ?? 0} |`,
+    `| Generated SAVED | ${report.generated_saved_count ?? 0} |`,
+    `| NEEDS_REVIEW | ${report.needs_review_count ?? 0} |`,
+    `| ERROR | ${report.error_count ?? 0} |`,
+    `| Mergeable (SAVED) | ${report.mergeable_testcase_count ?? 0} |`,
+    "",
+  ];
+  (report.top_missing_signals || []).forEach((s) => lines.push(`- missing: \`${s}\``));
+  (report.top_repeated_issues || []).forEach((row) => lines.push(`- (${row.count}×) ${row.issue}`));
+  (report.unknown_apis || []).forEach((u) => lines.push(`- unknown API: \`${u}\``));
+  (report.duplicate_test_names || []).forEach((d) =>
+    lines.push(`- duplicate \`${d.test_name}\`: ${(d.candidate_ids || []).join(", ")}`)
+  );
+  return lines.join("\n");
+}
+
+function renderTestCodeRunReportPanel() {
+  const r = state.testCode.runReport;
+  if (!r) return "";
+  const verdictCls = r.usable ? "ok" : "warning";
+  const issues = (r.top_repeated_issues || [])
+    .slice(0, 10)
+    .map((row) => `<li>${esc(row.issue)} <span class="tag">×${row.count}</span></li>`)
+    .join("");
+  const missing = (r.top_missing_signals || [])
+    .slice(0, 10)
+    .map((s) => `<li><code>${esc(s)}</code></li>`)
+    .join("");
+  const unknown = (r.unknown_apis || [])
+    .slice(0, 10)
+    .map((u) => `<li><code>${esc(u)}</code></li>`)
+    .join("");
+  const dupes = (r.duplicate_test_names || [])
+    .slice(0, 5)
+    .map((d) => `<li><code>${esc(d.test_name)}</code> — ${d.count} cases</li>`)
+    .join("");
+  const apis = (r.api_patterns_detected || []).map((a) => `<li>${esc(a)}</li>`).join("");
+  return `<div class="alex-testcode-run-report card" id="testcode-run-report">
+    <h4 class="alex-testcode-panel-title">Smart Workflow Run Report</h4>
+    <p class="detail"><span class="tag ${verdictCls}">${esc(r.verdict || "—")}</span> · ${esc(r.generated_at || "")}</p>
+    <dl class="alex-testcode-run-report__grid">
+      <dt>Testcases</dt><dd>${r.total_testcase_count ?? 0}</dd>
+      <dt>Context</dt><dd>${esc((r.analyzed_context_summary || "—").slice(0, 120))}</dd>
+      <dt>Fixture</dt><dd><code>${esc(r.fixture_detected || "—")}</code></dd>
+      <dt>Mapping candidates</dt><dd>${r.mapping_candidates_detected ?? 0}</dd>
+      <dt>Coverage ready</dt><dd>${r.coverage_ready_count ?? 0}</dd>
+      <dt>Missing mappings</dt><dd>${r.missing_mapping_count ?? 0}</dd>
+      <dt>Auto-accepted</dt><dd>${r.auto_accepted_mapping_count ?? 0}</dd>
+      <dt>Review mappings</dt><dd>${r.mappings_requiring_review_count ?? 0}</dd>
+      <dt>SAVED</dt><dd>${r.generated_saved_count ?? 0}</dd>
+      <dt>NEEDS_REVIEW</dt><dd>${r.needs_review_count ?? 0}</dd>
+      <dt>ERROR</dt><dd>${r.error_count ?? 0}</dd>
+      <dt>Mergeable</dt><dd>${r.mergeable_testcase_count ?? 0}</dd>
+    </dl>
+    ${apis ? `<p class="detail"><strong>API patterns</strong></p><ul class="alex-testcode-run-report__list">${apis}</ul>` : ""}
+    ${missing ? `<p class="detail"><strong>Top missing signals</strong></p><ul class="alex-testcode-run-report__list">${missing}</ul>` : ""}
+    ${issues ? `<p class="detail"><strong>Top repeated issues</strong></p><ul class="alex-testcode-run-report__list">${issues}</ul>` : ""}
+    ${unknown ? `<p class="detail"><strong>Unknown APIs</strong></p><ul class="alex-testcode-run-report__list">${unknown}</ul>` : ""}
+    ${dupes ? `<p class="detail"><strong>Duplicate test names</strong></p><ul class="alex-testcode-run-report__list">${dupes}</ul>` : ""}
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-run-report">Copy Run Report</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-export-run-report-md">Export Run Report Markdown</button>
+    </div>
+  </div>`;
+}
+
+function renderTestCodeMappingProposalsPanel() {
+  const proposals = state.testCode.mappingProposals || [];
+  if (!proposals.length) return "";
+  const rows = proposals
+    .slice(0, 40)
+    .map((p) => {
+      const conf = Math.round((Number(p.confidence) || 0) * 100);
+      const confCls = conf >= 90 ? "ok" : conf >= 70 ? "warning" : "error";
+      return `<tr data-proposal-signal="${esc(p.signal)}">
+        <td><input type="checkbox" class="proposal-accept-cb" data-signal="${esc(p.signal)}" ${conf >= 90 ? "checked" : ""} /></td>
+        <td><code>${esc(p.signal)}</code></td>
+        <td><textarea class="gtest-input proposal-code-input" rows="2" data-signal="${esc(p.signal)}">${esc(p.proposed_code || "")}</textarea></td>
+        <td><span class="tag ${confCls}">${conf}%</span></td>
+        <td class="detail">${esc(p.source || "")} · ${esc((p.evidence || "").slice(0, 80))}</td>
+        <td>${p.affected_testcase_count ?? "—"}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<div class="alex-testcode-mapping-proposals card" id="testcode-mapping-proposals">
+    <h4 class="alex-testcode-panel-title">Proposed mappings (review before apply)</h4>
+    <p class="detail">High-confidence mappings can be auto-accepted in Smart Mode. Low-confidence items need your review.</p>
+    <table class="alex-testcode-proposals-table"><thead><tr>
+      <th></th><th>Signal</th><th>Proposed code</th><th>Conf.</th><th>Evidence</th><th>TCs</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <div class="alex-testcode-editor__actions">
+      <button type="button" class="btn" id="btn-testcode-accept-proposals">Accept selected</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-reject-proposals">Clear proposals</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-mapping-prompt">Ask Copilot — copy mapping prompt</button>
+    </div>
+  </div>`;
+}
+
+function renderTestCodeCopilotPrimaryBar(rows, samples) {
+  const list = samples || state.testCode.codeStyleSamples || [];
+  const first = list[0] || {};
+  const sampleOk = list.length > 0 || String(state.testCode.samplePasteDraft || "").trim();
+  const allCount = testCodeAllTargetIds(rows).length;
+  const bs = Number(state.testCode.copilotBatchSize) || 10;
+  const ex = state.testCode.codeExemplar;
+  const apiDisabled = !m365KnowledgeReady();
+  const batchSummary = state.testCode.batchSummary;
+  const wfCounts = testCodeWorkflowCountsFromWorkspace();
+  const run = state.testCode.batchRunProgress || state.testCode.workspace?.copilot_batch?.run;
+  const apiStatus = state.testCode.apiGenStatus || "idle";
+  const progressHtml = run?.status === "running" || apiStatus === "running"
+    ? `<div class="alex-testcode-batch-progress" id="testcode-batch-progress">
+        <p class="detail">Batch ${run?.batch_index || "…"}/${run?.batch_total || "…"} — SAVED ${run?.saved ?? 0} · NEEDS_REVIEW ${run?.needs_review ?? 0} · ERROR ${run?.error ?? 0}</p>
+        <div class="alex-testcode-progress-bar"><div class="alex-testcode-progress-bar__fill" style="width:${run?.batch_total ? Math.round(((run.batch_index || 0) / run.batch_total) * 100) : 0}%"></div></div>
+      </div>`
+    : "";
+  return `<section class="card alex-testcode-copilot-primary" id="testcode-copilot-primary">
+    <h3 class="alex-testcode-copilot-primary__title">Copilot orchestrator</h3>
+    <p class="detail">Excel + sample .cc + project context → Copilot API batch. Edit <code>project_instruction.md</code> in Advanced config if needed — no YAML required.</p>
+    <p class="detail gtest-sample-status" id="testcode-primary-sample-status">${
+      sampleOk
+        ? esc(`Sample: ${first.label || first.source_file || "loaded"}`)
+        : "Load sample .cc before batch generate."
+    }${ex?.candidate_id ? ` · Exemplar (style only): ${ex.candidate_id}` : ""} · ${allCount} testcase(s) imported</p>
+    <ul class="detail alex-testcode-wf-counts">
+      <li><span class="tag ok">SAVED</span> ${wfCounts.SAVED}</li>
+      <li><span class="tag ok">Approved</span> ${wfCounts.APPROVED}</li>
+      <li><span class="tag warning">NEEDS_REVIEW</span> ${wfCounts.NEEDS_REVIEW}</li>
+      <li><span class="tag error">ERROR</span> ${wfCounts.ERROR}</li>
+    </ul>
+    ${progressHtml}
+    <div class="alex-testcode-primary-sample-row">
+      <label class="btn secondary btn-inline upload-label">Load Sample .cc<input type="file" id="testcode-cpp-upload-primary" accept=".cpp,.h,.hpp,.cc,.txt" hidden /></label>
+      <label class="detail">API batch size
+        <select id="testcode-batch-size" class="clarify-box">
+          <option value="5" ${bs === 5 ? "selected" : ""}>5</option>
+          <option value="10" ${bs === 10 ? "selected" : ""}>10</option>
+          <option value="20" ${bs === 20 ? "selected" : ""}>20</option>
+        </select>
+      </label>
+      <label class="detail testcode-skip-saved-label">
+        <input type="checkbox" id="testcode-skip-saved-batch" ${state.testCode.skipSavedOnBatch ? "checked" : ""} />
+        Skip already SAVED on re-run
+      </label>
+    </div>
+    <div class="alex-testcode-editor__actions alex-testcode-copilot-primary__actions">
+      <button type="button" class="btn" id="btn-testcode-copilot-batch-all" ${!sampleOk || !allCount ? "disabled" : ""} ${apiDisabled ? "disabled title=\"" + esc(m365KnowledgeBlockReason()) + "\"" : ""}>Generate All with Copilot API</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-review-issues-primary">Review NEEDS_REVIEW / ERROR</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-export-final-cc">Export Final .cc</button>
+    </div>
+    <details class="alex-testcode-advanced-batch">
+      <summary class="detail">Partial batch &amp; Copilot Web fallback</summary>
+      <p class="detail alex-testcode-batch-scope" role="group">
+        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="filter" ${(state.testCode.batchScope || "filter") === "filter" ? "checked" : ""} /> Filter</label>
+        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="group" ${state.testCode.batchScope === "group" ? "checked" : ""} /> Group</label>
+        <label class="detail testcode-batch-scope-opt"><input type="radio" name="testcode-batch-scope" value="selected" ${state.testCode.batchScope === "selected" ? "checked" : ""} /> Selected</label>
+      </p>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-filter">Generate Current Filter</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-group">Generate Current Group</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copilot-batch-selected">Generate Selected</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-copilot-batch-prompt">Copy Batch Prompt</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-merge-saved-primary">Preview Merge (SAVED)</button>
+      </div>
+      <label class="detail">Paste Copilot Web batch result
+        <textarea id="testcode-copilot-batch-import" class="gtest-input gtest-note" rows="8" placeholder="[TESTCASE_CODE] … [UNRESOLVED] … [ASSUMPTIONS]"></textarea>
+      </label>
+      <button type="button" class="btn secondary" id="btn-testcode-import-copilot-batch">Import Batch Result</button>
+    </details>
+    <section class="alex-testcode-approve-bar" id="testcode-approve-bar">
+      <h4 class="alex-testcode-panel-title">Review &amp; approve</h4>
+      <p class="detail">SAVED = quality gate pass · NEEDS_REVIEW = warnings · ERROR = API/parse fail. Export final .cc uses approved SAVED only.</p>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-approve-selected">Approve Selected</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-approve-all-saved">Approve All SAVED</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-mark-reviewed">Mark Reviewed</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-reopen-edit">Reopen for Edit</button>
+      </div>
+    </section>
+    ${batchSummary ? `<p class="detail tag ok">Last batch — SAVED ${batchSummary.saved ?? 0} · review ${batchSummary.needs_review ?? 0} · error ${batchSummary.error ?? 0}</p>` : ""}
+    <div id="testcode-batch-result-primary">${renderTestCodeBatchResultSummary(state.testCode.batchResults, state.testCode.batchSummary)}</div>
+    ${renderTestCodeRunReportPanel()}
+  </section>`;
+}
+
+function renderTestCodeSimpleToolbar() {
+  const smart = state.testCode.smartModeSummary;
+  const analyzed = state.testCode.contextAnalyzeResult;
+  const hint = analyzed?.skipped
+    ? "Config already loaded — Analyze is optional (fallback)."
+    : analyzed?.mapping_keys_inferred
+      ? `Last analyze: ${analyzed.mapping_keys_inferred} mapping keys.`
+      : "Fallback: infer internal config from samples (optional).";
+  return `<section class="card alex-testcode-smart-bar" id="testcode-smart-bar">
+    <h4 class="alex-testcode-panel-title">Smart Mode (fallback)</h4>
+    <p class="detail">${esc(hint)}</p>
+    <div class="alex-testcode-editor__actions alex-testcode-smart-bar__actions">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-analyze-context">Analyze Project Context</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-check-mapping">Check Coverage</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-propose-mappings">Auto-propose missing mappings</button>
+      <button type="button" class="btn" id="btn-testcode-smart-generate">Generate Code — Smart Mode</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-review-issues">Review Issues</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-merge-saved">Merge Saved Code</button>
+    </div>
+    ${smart ? `<p class="detail tag ok" id="testcode-smart-summary">Smart run: saved ${smart.saved ?? 0} · review ${smart.review ?? 0} · error ${smart.error ?? 0} · skipped ${smart.skipped ?? 0}</p>` : ""}
+    ${renderTestCodeRunReportPanel()}
+    ${renderTestCodeMappingProposalsPanel()}
+  </section>`;
+}
+
 function renderTestCodePageBody(rows, activeRow, draft, samples) {
   const apiDisabled = !m365KnowledgeReady();
   const cid = activeRow?.candidate_id || "";
   const apiStatus = state.testCode.apiGenStatus || "idle";
   return `<div class="alex-testcode-steps">
+    ${renderTestCodeCopilotPrimaryBar(rows, samples)}
     <section class="card alex-testcode-step">
       <header class="alex-testcode-step__header">
         <span class="alex-testcode-step__num">1</span>
@@ -7797,7 +8845,9 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
       </div>
     </section>
 
-    <section class="card alex-testcode-step">
+    <details class="card alex-testcode-manual-details">
+      <summary>Manual coding context &amp; generation (optional)</summary>
+    <section class="card alex-testcode-step alex-testcode-step--nested">
       <header class="alex-testcode-step__header">
         <span class="alex-testcode-step__num">2</span>
         <h3 class="alex-testcode-step__title">Coding Context</h3>
@@ -7805,16 +8855,16 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
       <div class="alex-testcode-step__body alex-testcode-context-split">
         <div class="alex-testcode-context-panel">
           <h4 class="alex-testcode-panel-title">Coding Rules / Change Request</h4>
-          <textarea id="testcode-user-request" class="gtest-input gtest-note alex-testcode-rules" rows="8" placeholder="Example: use TEST_F, fixture PowerModeTest, use SetInput() for inputs, assert PMODE_STS only, add WaitMs(50), do not access internal variables.">${esc(state.testCode.userRequest || "")}</textarea>
+          <textarea id="testcode-user-request" class="gtest-input gtest-note alex-testcode-rules" rows="8" placeholder="Optional notes for Copilot/API — project rules are inferred automatically when you Analyze.">${esc(state.testCode.userRequest || "")}</textarea>
         </div>
         ${renderTestCodeSamplePanel(samples)}
       </div>
     </section>
 
-    <section class="card alex-testcode-step">
+    <section class="card alex-testcode-step alex-testcode-step--nested">
       <header class="alex-testcode-step__header">
         <span class="alex-testcode-step__num">3</span>
-        <h3 class="alex-testcode-step__title">Generate Code</h3>
+        <h3 class="alex-testcode-step__title">Generate Code (manual)</h3>
       </header>
       <div class="alex-testcode-step__body">
         <div class="alex-testcode-gen-panels">
@@ -7835,6 +8885,7 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
             ${apiDisabled ? `<p class="detail testcode-copilot-hint">${esc(m365KnowledgeBlockReason())}</p>` : ""}
           </div>
         </div>
+        <div id="testcode-batch-result" class="alex-testcode-batch-result">${renderTestCodeBatchResultSummary(state.testCode.batchResults, state.testCode.batchSummary)}</div>
         <details class="alex-testcode-prompt-preview" id="testcode-prompt-preview">
           <summary>Prompt Preview — context sent to Copilot / API</summary>
           <div class="alex-testcode-prompt-preview__body" id="testcode-prompt-preview-body">${renderTestCodePromptPreviewPlaceholder()}</div>
@@ -7842,6 +8893,7 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
         </details>
       </div>
     </section>
+    </details>
 
     <section class="card alex-testcode-step alex-testcode-step--review">
       <header class="alex-testcode-step__header">
@@ -7859,22 +8911,18 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
             <button type="button" class="btn secondary" id="btn-testcode-validate">Validate Code</button>
             <button type="button" class="btn secondary" id="btn-testcode-apply-imported">Apply Imported Code</button>
             <button type="button" class="btn secondary" id="btn-testcode-export-cpp">Export .cpp</button>
-            <button type="button" class="btn secondary" id="btn-testcode-merge-saved">Merge Saved Code</button>
             <button type="button" class="btn" id="btn-testcode-save-draft">Save Code</button>
           </div>
         </div>
+        <div id="testcode-review-details" class="alex-testcode-review-details">${renderTestCodePerCaseReviewDetails(cid)}</div>
         <div id="testcode-merge-panel" class="alex-testcode-merge-panel" hidden></div>
       </div>
     </section>
 
     <details class="alex-testcode-advanced card">
-      <summary>Advanced</summary>
-      <div class="alex-testcode-advanced__body">
-        <label class="detail testcode-followup-label">
-          <input type="checkbox" id="testcode-copilot-followup" ${state.testCode.copilotWebFollowUp ? "checked" : ""} />
-          Shorter Copilot prompt for next testcase (same web chat)
-        </label>
-        <p class="detail">Workflow badges: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR]</p>
+      <summary>Advanced — Smart Mode, exemplar, config, local template (fallback)</summary>
+      <div class="alex-testcode-advanced__body" id="testcode-advanced-body">
+        ${renderTestCodeAdvancedBody(rows)}
       </div>
     </details>
   </div>`;
@@ -8361,9 +9409,632 @@ async function onTestCodeBatchApply() {
   if (statusEl) statusEl.textContent = "Select a test case with a generated draft to preview in editor.";
 }
 
+function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
+  const tc = state.testCode;
+
+  const handleCppUpload = async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    if (statusEl) statusEl.textContent = `Uploading ${file.name}…`;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/review/code-style-samples/upload?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        credentials: "same-origin",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "Upload failed");
+      tc.codeStyleSamples = data.samples || [];
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      tc.codeStyleSamples = tc.workspace.code_style_samples || tc.codeStyleSamples;
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = `Sample loaded (${tc.codeStyleSamples.length}).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+    ev.target.value = "";
+  };
+
+  bindOnChange("#testcode-cpp-upload-primary", handleCppUpload);
+  bindOnChange("#testcode-cpp-upload", handleCppUpload);
+  bindOnChange("#testcode-batch-size", (ev) => {
+    tc.copilotBatchSize = Number(ev.target.value) || 10;
+  });
+  bindOnChange("#testcode-skip-saved-batch", (ev) => {
+    tc.skipSavedOnBatch = !!ev.target.checked;
+  });
+
+  document.querySelectorAll('input[name="testcode-batch-scope"]').forEach((el) => {
+    el.addEventListener("change", (ev) => {
+      if (!ev.target.checked) return;
+      tc.batchScope = ev.target.value || "filter";
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      refreshTestCodeExemplarUi(rows, statusEl);
+    });
+  });
+
+  async function runCopilotBatchForScope(scope) {
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Authorize Copilot API first — or use Copy Prompt + Import.";
+      return;
+    }
+    tc.batchScope = scope || tc.batchScope || "filter";
+    const ids = testCodeBatchTargetIds(rows, tc.batchScope);
+    if (!ids.length) {
+      if (statusEl) statusEl.textContent = `No targets for ${testCodeBatchScopeLabel(tc.batchScope)}.`;
+      return;
+    }
+    try {
+      tc.batchRunProgress = { status: "running", batch_index: 0, batch_total: 0, saved: 0, needs_review: 0, error: 0 };
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      setTestCodeApiStatus("running");
+      await startM365Task({
+        kind: "code_copilot_batch",
+        label:
+          scope === "all"
+            ? `Copilot batch — all (${ids.length} TC)`
+            : `Copilot batch — ${testCodeBatchScopeLabel(tc.batchScope)} (${ids.length} TC)`,
+        targetPage: "test-code",
+        payload: testCodeCopilotBatchPayload(rows, tc.batchScope),
+      });
+      if (statusEl) statusEl.textContent = "Copilot API batch running — watch progress above.";
+    } catch (e) {
+      setTestCodeApiStatus("failed", e.message);
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  }
+
+  bindClick("#btn-testcode-copilot-batch-all", () => runCopilotBatchForScope("all"));
+  bindClick("#btn-testcode-copilot-batch-filter", () => runCopilotBatchForScope("filter"));
+  bindClick("#btn-testcode-copilot-batch-group", () => runCopilotBatchForScope("group"));
+  bindClick("#btn-testcode-copilot-batch-selected", () => runCopilotBatchForScope("selected"));
+
+  function selectedBatchApproveIds() {
+    const fromCb = [...document.querySelectorAll(".batch-approve-cb:checked")].map((el) => el.dataset.batchCid).filter(Boolean);
+    if (fromCb.length) return fromCb;
+    const cid = tc.selectedCandidateId;
+    return cid ? [cid] : [];
+  }
+
+  bindClick("#btn-testcode-approve-selected", async () => {
+    const ids = selectedBatchApproveIds();
+    if (!ids.length) {
+      if (statusEl) statusEl.textContent = "Select testcase(s) in batch result or case list.";
+      return;
+    }
+    try {
+      const data = await api(`/api/review/testcode-approve?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_ids: ids }),
+      });
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = `Approved ${data.approved_count ?? ids.length} testcase(s).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-approve-all-saved", async () => {
+    try {
+      const data = await api(`/api/review/testcode-approve-all-saved?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+      });
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = `Approved all SAVED (${data.approved_count ?? 0}).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-mark-reviewed", async () => {
+    const ids = selectedBatchApproveIds();
+    if (!ids.length) {
+      if (statusEl) statusEl.textContent = "Select testcase(s) to mark reviewed.";
+      return;
+    }
+    try {
+      await api(`/api/review/testcode-mark-reviewed?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_ids: ids }),
+      });
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Marked reviewed.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-reopen-edit", async () => {
+    const ids = selectedBatchApproveIds();
+    if (!ids.length) {
+      if (statusEl) statusEl.textContent = "Select testcase(s) to reopen.";
+      return;
+    }
+    try {
+      await api(`/api/review/testcode-reopen?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_ids: ids }),
+      });
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Reopened for edit (approval cleared).";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-export-final-cc", () => {
+    const lang = state.exportLanguage || "EN";
+    window.location.href = `/api/export/gtest-cc-final?job_id=${encodeURIComponent(state.jobId)}&language=${encodeURIComponent(lang)}`;
+    if (statusEl) statusEl.textContent = "Downloading merged final .cc (engineer-approved SAVED only)…";
+  });
+
+  document.getElementById("testcode-batch-result-primary")?.addEventListener("change", (ev) => {
+    const cb = ev.target.closest(".batch-approve-cb");
+    if (!cb) return;
+    if (!tc.batchApproveSelection) tc.batchApproveSelection = {};
+    tc.batchApproveSelection[cb.dataset.batchCid] = cb.checked;
+  });
+
+  bindClick("#btn-testcode-copy-copilot-batch-prompt", async () => {
+    try {
+      const data = await api(`/api/review/copilot-batch-prompt?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(testCodeCopilotBatchPayload(rows)),
+      });
+      if (!data.ok) throw new Error(data.error || data.detail || "Prompt failed");
+      tc.copilotBatchPrompt = data.combined_prompt || "";
+      await navigator.clipboard.writeText(tc.copilotBatchPrompt);
+      if (statusEl) {
+        statusEl.textContent = `Copied batch prompt (${data.batch_count || 1} batch(es), ${data.target_count || 0} TCs). Paste into Copilot web.`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-import-copilot-batch", async () => {
+    const content = ($("#testcode-copilot-batch-import")?.value || "").trim();
+    if (!content) {
+      if (statusEl) statusEl.textContent = "Paste Copilot batch output first.";
+      return;
+    }
+    if (statusEl) statusEl.textContent = "Importing Copilot batch…";
+    try {
+      const data = await api(`/api/review/import-copilot-batch?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content,
+          language: state.exportLanguage || "EN",
+          ...testCodeCopilotBatchPayload(rows),
+        }),
+      });
+      applyBatchWorkflowResults(data);
+      applyTestCodeRunReportFromResponse(data);
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      const s = data.summary || {};
+      if (statusEl) {
+        statusEl.textContent = `Import done — SAVED ${s.saved ?? 0}, review ${s.needs_review ?? 0}, error ${s.error ?? 0}`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-review-issues-primary", () => {
+    state.testCode.caseFilter = "needs_review";
+    document.querySelectorAll(".testcode-case-filter").forEach((b) => {
+      b.classList.toggle("active", b.dataset.caseFilter === "needs_review");
+    });
+    const next = testCodeRowOrder(rows).find((r) => {
+      const wf = computeTestCodeWorkflowStatus(r.candidate_id);
+      return wf === TC_WF.NEEDS_REVIEW || wf === TC_WF.ERROR;
+    });
+    if (next?.candidate_id) switchTestCodeCandidate(next.candidate_id, rows);
+    if (statusEl) statusEl.textContent = "Filtered to NEEDS_REVIEW / ERROR.";
+  });
+
+  bindClick("#btn-testcode-merge-saved-primary", () => openTestCodeMergePreview(rows));
+
+  bindClick("#btn-testcode-copy-run-report", async () => {
+    const text = tc.runReportMarkdown || formatTestCodeRunReportMarkdownClient(tc.runReport) || "";
+    if (!text) {
+      if (statusEl) statusEl.textContent = "Run batch generate first.";
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    if (statusEl) statusEl.textContent = "Run report copied.";
+  });
+
+  bindClick("#btn-testcode-export-run-report-md", () => {
+    const text = tc.runReportMarkdown || formatTestCodeRunReportMarkdownClient(tc.runReport) || "";
+    if (!text) {
+      if (statusEl) statusEl.textContent = "No run report yet.";
+      return;
+    }
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `alex-copilot-batch-report-${state.jobId || "job"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+function bindTestCodeExemplarHandlers(rows, statusEl) {
+  const tc = state.testCode;
+
+  function exemplarTargetPayload(scopeOverride) {
+    const scope = scopeOverride || tc.batchScope || "filter";
+    const groupKey = scope === "group" ? testCodeBatchGroupKey(rows) : "";
+    return {
+      language: state.exportLanguage || "EN",
+      candidate_ids: testCodeBatchTargetIds(rows, scope),
+      engineer_note: $("#testcode-user-request")?.value || tc.userRequest || "",
+      scope,
+      group_key: groupKey,
+      group_field: "test_group",
+    };
+  }
+
+  async function runExemplarBatchForScope(scope) {
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Authorize Copilot API first.";
+      return;
+    }
+    if (!tc.codeExemplar?.candidate_id) {
+      if (statusEl) statusEl.textContent = "Mark an exemplar testcase first.";
+      return;
+    }
+    tc.batchScope = scope || tc.batchScope || "filter";
+    const ids = testCodeBatchTargetIds(rows, tc.batchScope);
+    if (!ids.length) {
+      if (statusEl) statusEl.textContent = `No targets for ${testCodeBatchScopeLabel(tc.batchScope)}.`;
+      return;
+    }
+    try {
+      setTestCodeApiStatus("running");
+      await startM365Task({
+        kind: "code_exemplar_batch",
+        label: `Exemplar batch — ${testCodeBatchScopeLabel(tc.batchScope)} (${ids.length} TC)`,
+        targetPage: "test-code",
+        payload: exemplarTargetPayload(tc.batchScope),
+      });
+      if (statusEl) statusEl.textContent = "Exemplar batch API running — results attach per testcase with quality gate.";
+    } catch (e) {
+      setTestCodeApiStatus("failed", e.message);
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  }
+
+  bindClick("#btn-testcode-mark-exemplar", async () => {
+    const cid = tc.selectedCandidateId;
+    if (!cid) {
+      if (statusEl) statusEl.textContent = "Select a testcase with saved code first.";
+      return;
+    }
+    try {
+      const data = await api(`/api/review/mark-code-exemplar?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: cid, language: state.exportLanguage || "EN" }),
+      });
+      if (!data.ok) throw new Error(data.error || data.detail || "Mark failed");
+      tc.codeExemplar = data.exemplar || null;
+      refreshTestCodeExemplarUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = `Exemplar marked: ${cid}`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-clear-exemplar", async () => {
+    try {
+      await api(`/api/review/clear-code-exemplar?job_id=${encodeURIComponent(state.jobId)}`, { method: "POST" });
+      tc.codeExemplar = null;
+      tc.exemplarBatchPrompt = "";
+      refreshTestCodeExemplarUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = "Exemplar cleared.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-copy-exemplar-prompt", async () => {
+    try {
+      const data = await api(`/api/review/exemplar-batch-prompt?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exemplarTargetPayload()),
+      });
+      if (!data.ok) throw new Error(data.error || data.detail || "Prompt failed");
+      tc.exemplarBatchPrompt = data.combined_prompt || "";
+      const text = tc.exemplarBatchPrompt;
+      if (!text) throw new Error("Empty prompt");
+      await navigator.clipboard.writeText(text);
+      refreshTestCodeExemplarUi(rows, statusEl);
+      if (statusEl) {
+        statusEl.textContent = `Exemplar batch prompt copied (${data.batch_count || 1} batch(es), ${data.target_count || 0} TCs). Paste into Copilot web.`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-exemplar-batch-filter", () => runExemplarBatchForScope("filter"));
+  bindClick("#btn-testcode-exemplar-batch-group", () => runExemplarBatchForScope("group"));
+  bindClick("#btn-testcode-exemplar-batch-selected", () => runExemplarBatchForScope("selected"));
+
+  bindClick("#btn-testcode-import-exemplar-batch", async () => {
+    const content = ($("#testcode-exemplar-batch-import")?.value || "").trim();
+    if (!content) {
+      if (statusEl) statusEl.textContent = "Paste exemplar batch Copilot output first.";
+      return;
+    }
+    if (statusEl) statusEl.textContent = "Importing exemplar batch…";
+    try {
+      const data = await api(`/api/review/import-exemplar-batch?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content,
+          ...exemplarTargetPayload(),
+        }),
+      });
+      applyBatchWorkflowResults(data);
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      const s = data.summary || {};
+      if (statusEl) {
+        statusEl.textContent = `Exemplar import — SAVED ${s.saved ?? 0}, review ${s.needs_review ?? 0}, error ${s.error ?? 0}`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+}
+
+function bindTestCodeSmartHandlers(rows, statusEl) {
+  const tc = state.testCode;
+
+  async function runTestCodeCheckMapping() {
+    if (statusEl) statusEl.textContent = "Checking mapping coverage…";
+    const data = await api(`/api/review/mapping-coverage?job_id=${encodeURIComponent(state.jobId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: state.exportLanguage || "EN" }),
+    });
+    tc.mappingCoverage = data;
+    if (!tc.workspace) tc.workspace = {};
+    tc.workspace.mapping_coverage = data;
+    invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+    patchTestCodeCaseStatusUi();
+    applyTestCodeRunReportFromResponse(data);
+    refreshTestCodeConfigUi(rows, statusEl);
+    if (statusEl) {
+      const warn = (data.warnings || [])[0];
+      statusEl.textContent = `Mapping: ${data.ready_for_local_generation}/${data.total_testcase_count} ready · ${data.missing_mapping_count} missing · keys ${data.detected_mapping_count ?? "—"}${warn ? ` · ${warn}` : ""}`;
+    }
+    return data;
+  }
+
+  bindClick("#btn-testcode-check-mapping", async () => {
+    try {
+      await runTestCodeCheckMapping();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-analyze-context", async () => {
+    if (statusEl) statusEl.textContent = "Analyzing project context from samples…";
+    try {
+      const paste = state.testCode.samplePasteDraft || "";
+      const data = await api(`/api/review/analyze-project-context?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: state.exportLanguage || "EN",
+          force: false,
+          extra_snippets: paste ? [paste] : [],
+        }),
+      });
+      tc.contextAnalyzeResult = data;
+      applyTestCodeRunReportFromResponse(data);
+      if (!data.skipped) {
+        await ensureProjectCodeConfigLoaded(true);
+        await refreshTestCodeConfigDiagnostics(statusEl);
+      }
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) {
+        statusEl.textContent = data.skipped
+          ? data.reason || "Config already present."
+          : `Analyzed — ${data.mapping_keys_inferred ?? 0} mapping keys, fixture ${data.fixture_inferred || "—"}`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-propose-mappings", async () => {
+    if (statusEl) statusEl.textContent = "Proposing mappings from samples…";
+    try {
+      const data = await api(`/api/review/propose-missing-mappings?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: state.exportLanguage || "EN" }),
+      });
+      tc.mappingProposals = data.proposals || [];
+      tc.copilotMappingPrompt = data.copilot_mapping_prompt || "";
+      tc.mappingCoverage = data.coverage || tc.mappingCoverage;
+      applyTestCodeRunReportFromResponse(data);
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) {
+        statusEl.textContent = `${(data.proposals || []).length} proposed mapping(s) — review and Accept selected.`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-smart-generate", async () => {
+    if (statusEl) statusEl.textContent = "Smart Mode: analyze → propose → generate…";
+    try {
+      await ensureProjectCodeConfigLoaded(true);
+      const data = await api(`/api/review/generate-code-smart-mode?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: state.exportLanguage || "EN",
+          auto_accept_high_confidence: true,
+          analyze_if_sparse: true,
+          use_api_for_hard: false,
+        }),
+      });
+      tc.smartModeSummary = data.batch_summary || {};
+      tc.mappingCoverage = data.coverage || tc.mappingCoverage;
+      tc.mappingProposals = data.mapping_proposals || [];
+      applyTestCodeRunReportFromResponse(data);
+      applyBatchWorkflowResults(data);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodeConfigUi(rows, statusEl);
+      const s = data.batch_summary || {};
+      const rr = data.run_report || {};
+      if (statusEl) {
+        statusEl.textContent = `Smart Mode — SAVED ${rr.generated_saved_count ?? s.saved ?? 0}, review ${rr.needs_review_count ?? (data.review_cases || []).length}, ERROR ${rr.error_count ?? s.error ?? 0} · ${rr.verdict || ""}`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-review-issues", () => {
+    state.testCode.caseFilter = "needs_review";
+    state.testCode.qualityFilter = "all";
+    document.querySelectorAll(".testcode-case-filter").forEach((b) => {
+      b.classList.toggle("active", b.dataset.caseFilter === "needs_review");
+    });
+    const next = testCodeRowOrder(rows).find((r) => {
+      const wf = computeTestCodeWorkflowStatus(r.candidate_id);
+      return wf === TC_WF.NEEDS_REVIEW || wf === TC_WF.ERROR;
+    });
+    if (next?.candidate_id) switchTestCodeCandidate(next.candidate_id, rows);
+    if (statusEl) statusEl.textContent = "Filtered to issues — use Error filter for failures.";
+  });
+
+  bindClick("#btn-testcode-accept-proposals", async () => {
+    const items = [...document.querySelectorAll(".proposal-accept-cb")].map((cb) => {
+      const sig = cb.dataset.signal || "";
+      const code = document.querySelector(`.proposal-code-input[data-signal="${CSS.escape(sig)}"]`)?.value || "";
+      const prop = (tc.mappingProposals || []).find((p) => p.signal === sig);
+      return {
+        signal: sig,
+        proposed_code: code,
+        confidence: prop?.confidence ?? 0,
+        accept: cb.checked,
+      };
+    });
+    try {
+      const data = await api(`/api/review/accept-proposed-mappings?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      tc.mappingProposals = data.remaining_count
+        ? (tc.mappingProposals || []).filter((p) => !(data.accepted || []).some((a) => a.signal === p.signal))
+        : [];
+      tc.mappingCoverage = data.mapping_coverage || tc.mappingCoverage;
+      applyTestCodeRunReportFromResponse(data);
+      await ensureProjectCodeConfigLoaded(true);
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = `Accepted ${(data.accepted || []).length} mapping(s).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-reject-proposals", () => {
+    tc.mappingProposals = [];
+    refreshTestCodeConfigUi(rows, statusEl);
+    if (statusEl) statusEl.textContent = "Cleared mapping proposals.";
+  });
+
+  bindClick("#btn-testcode-copy-mapping-prompt", async () => {
+    const text = tc.copilotMappingPrompt || "";
+    if (!text) {
+      if (statusEl) statusEl.textContent = "Run Auto-propose missing mappings first.";
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    if (statusEl) statusEl.textContent = "Copilot mapping prompt copied.";
+  });
+
+  bindClick("#btn-testcode-copy-run-report", async () => {
+    const text =
+      tc.runReportMarkdown ||
+      formatTestCodeRunReportMarkdownClient(tc.runReport) ||
+      "";
+    if (!text) {
+      if (statusEl) statusEl.textContent = "Run Analyze, Check Coverage, or Smart Mode first.";
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    if (statusEl) statusEl.textContent = "Run report copied to clipboard.";
+  });
+
+  bindClick("#btn-testcode-export-run-report-md", () => {
+    const text =
+      tc.runReportMarkdown ||
+      formatTestCodeRunReportMarkdownClient(tc.runReport) ||
+      "";
+    if (!text) {
+      if (statusEl) statusEl.textContent = "No run report to export yet.";
+      return;
+    }
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `alex-smart-run-report-${state.jobId || "job"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (statusEl) statusEl.textContent = "Run report Markdown downloaded.";
+  });
+}
+
 function bindTestCodeHandlers(rows) {
   const tc = state.testCode;
   const statusEl = $("#testcode-status");
+  ensureProjectCodeConfigLoaded()
+    .then(() => {
+      refreshTestCodeConfigUi(rows, statusEl);
+    })
+    .catch(() => {});
 
   const userRequest = () => {
     const v = $("#testcode-user-request")?.value || "";
@@ -8469,11 +10140,33 @@ function bindTestCodeHandlers(rows) {
 
   bindClick("#btn-testcode-apply-imported", () => applyImportedCopilotToEditor(rows));
 
-  bindClick("#btn-testcode-validate", () => {
+  bindClick("#btn-testcode-validate", async () => {
+    const cid = tc.selectedCandidateId;
     const code = $("#testcode-code-editor")?.value || "";
     const sampleSnippet = tc.codeStyleSamples?.[0]?.snippet || tc.workspace?.code_style_samples?.[0]?.snippet || "";
-    showTestCodeValidationResult(validateGtestBeforeSave(code, tc.selectedCandidateId, sampleSnippet));
-    if (statusEl) statusEl.textContent = "Validation updated above editor.";
+    const clientVal = validateGtestBeforeSave(code, cid, sampleSnippet);
+    showTestCodeValidationResult(clientVal);
+    if (!cid || !state.jobId) {
+      if (statusEl) statusEl.textContent = "Client validation only — select testcase for quality gate.";
+      return;
+    }
+    try {
+      const qg = await api(`/api/review/gtest-quality-check?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_id: cid,
+          full_snippet: code,
+          language: state.exportLanguage || "EN",
+        }),
+      });
+      tc.lastQualityCheck = qg;
+      showTestCodeQualityGateResult(qg);
+      patchTestCodeReviewDetailsUi();
+      if (statusEl) statusEl.textContent = `Quality gate: ${qg.summary || "—"} — ${(qg.checks || []).filter((c) => c.severity !== "PASS").length} issue(s).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message || "Quality check failed.";
+    }
   });
 
   bindClick("#btn-testcode-export-cpp", () => {
@@ -8483,7 +10176,7 @@ function bindTestCodeHandlers(rows) {
       return;
     }
     window.open(
-      `/api/export/gtest-cpp?job_id=${encodeURIComponent(state.jobId)}&candidate_id=${encodeURIComponent(cid)}`,
+      `/api/export/gtest-cc?job_id=${encodeURIComponent(state.jobId)}&candidate_id=${encodeURIComponent(cid)}`,
       "_blank"
     );
   });
@@ -8583,6 +10276,7 @@ function bindTestCodeHandlers(rows) {
       });
       if (codeEl) codeEl.classList.remove("field-copilot-changed");
       clearTestCodeDirty(key, full);
+      clearTestCodeWorkflowError(key);
       if (!tc.generationSource) tc.generationSource = {};
       tc.generationSource[key] = genSrc;
       if (!tc.workspace) tc.workspace = {};
@@ -8602,7 +10296,18 @@ function bindTestCodeHandlers(rows) {
       await refreshTestCodeSyncStatus();
       tc.draft = resolveDraftForCandidate(key);
       applyTestCodeDraftToUi(tc.draft, rows.find((r) => r.candidate_id === key));
-      if (statusEl) statusEl.textContent = `Saved [SAVED] · ${genSrc}${saveRes.last_saved_at ? ` · ${formatTestCodeTimestamp(saveRes.last_saved_at)}` : ""}`;
+      const savedStatus = String(saveRes.code_status || "SAVED").toUpperCase();
+      if (savedStatus !== "SAVED") {
+        if (statusEl) {
+          statusEl.textContent = `Save blocked — ${savedStatus}${saveRes.review_reason ? `: ${saveRes.review_reason}` : ""}`;
+        }
+        if (saveRes.quality_results) {
+          showTestCodeQualityGateResult({ summary: saveRes.quality_summary, checks: saveRes.quality_results });
+        }
+      } else if (statusEl) {
+        statusEl.textContent = `Saved [SAVED] · ${genSrc}${saveRes.last_saved_at ? ` · ${formatTestCodeTimestamp(saveRes.last_saved_at)}` : ""}`;
+      }
+      patchTestCodeReviewDetailsUi();
       refreshTestCodePromptPreview(rows);
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
@@ -8612,6 +10317,478 @@ function bindTestCodeHandlers(rows) {
   bindOnInput("#testcode-code-editor", () => markTestCodeDirty());
 
   bindClick("#btn-testcode-merge-saved", () => openTestCodeMergePreview(rows));
+
+  bindTestCodeSmartHandlers(rows, statusEl);
+  bindTestCodeExemplarHandlers(rows, statusEl);
+  bindTestCodeCopilotPrimaryHandlers(rows, statusEl, state.testCode.codeStyleSamples);
+
+  document.querySelectorAll("[data-quality-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      state.testCode.qualityFilter = btn.dataset.qualityFilter || "all";
+      document.querySelectorAll("[data-quality-filter]").forEach((b) => b.classList.toggle("active", b === btn));
+      patchTestCodeCaseStatusUi();
+    };
+  });
+
+  bindOnChange("#testcode-batch-change-request", (ev) => {
+    state.testCode.batchChangeRequest = ev.target.value || "";
+  });
+
+  bindClick("#btn-testcode-local-template", async () => {
+    if (statusEl) statusEl.textContent = "Local template generation…";
+    try {
+      await ensureProjectCodeConfigLoaded(true);
+      const pool = testCodeRowsForFilter(rows);
+      const ids = pool.map((r) => r.candidate_id).filter(Boolean);
+      const data = await api(`/api/review/generate-local-template?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_ids: ids.length ? ids : null,
+          language: state.exportLanguage || "EN",
+        }),
+      });
+      applyBatchWorkflowResults(data);
+      if (data.mapping_coverage) {
+        tc.mappingCoverage = data.mapping_coverage;
+        tc.workspace.mapping_coverage = data.mapping_coverage;
+      }
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      patchTestCodeCaseStatusUi();
+      if (tc.selectedCandidateId) {
+        tc.draft = resolveDraftForCandidate(tc.selectedCandidateId);
+        applyTestCodeDraftToUi(tc.draft, rows.find((r) => r.candidate_id === tc.selectedCandidateId));
+      }
+      if (statusEl) {
+        const s = data.summary || {};
+        statusEl.textContent = `Local template: ${s.saved || 0} saved · ${s.needs_review || 0} review · ${s.error || 0} error · ${s.skipped || 0} skipped`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-copy-review-pack", async () => {
+    try {
+      const changeRequest = $("#testcode-batch-change-request")?.value || tc.batchChangeRequest || "";
+      tc.batchChangeRequest = changeRequest;
+      const pool = testCodeRowsForFilter(rows);
+      const ids = pool.map((r) => r.candidate_id).filter(Boolean);
+      const data = await api(`/api/review/ai-batch-review-pack?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidate_ids: ids,
+          change_request: changeRequest,
+          language: state.exportLanguage || "EN",
+          filter: ids.length ? "selected" : "all",
+        }),
+      });
+      const text = data.content || data.pack || "";
+      if (!text) throw new Error("Empty review pack");
+      await navigator.clipboard.writeText(text);
+      if (statusEl) statusEl.textContent = `Review pack copied (${data.testcase_count || ids.length} testcase(s), ${data.char_count || text.length} chars).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message || "Copy failed.";
+    }
+  });
+
+  bindClick("#btn-testcode-reload-config", async () => {
+    try {
+      const data = await ensureProjectCodeConfigLoaded(true);
+      tc.configFileSelected = $("#testcode-config-file-select")?.value || tc.configFileSelected;
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = `Config loaded from ${data.config_dir || "workspace"}.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-save-config", async () => {
+    const filename = $("#testcode-config-file-select")?.value || tc.configFileSelected;
+    const content = $("#testcode-config-editor")?.value ?? "";
+    try {
+      await api(`/api/review/project-code-config?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, content }),
+      });
+      tc.configFileSelected = filename;
+      await ensureProjectCodeConfigLoaded(true);
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = `Saved ${filename} to project overrides.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindTestCodeConfigPanelHandlers(rows, statusEl);
+  bindTestCodeConfigBundleHandlers(rows, statusEl);
+  bindTestCodeMappingFixHandlers(rows, statusEl);
+  bindTestCodeReviewActionHandlers(rows, statusEl);
+}
+
+function bindTestCodeReviewActionHandlers(rows, statusEl) {
+  bindClick("#btn-testcode-add-learned-rule", async () => {
+    const rule = $("#testcode-learned-rule-text")?.value?.trim();
+    if (!rule) {
+      if (statusEl) statusEl.textContent = "Enter a learned rule first.";
+      return;
+    }
+    try {
+      await api(`/api/review/config-bundle/learned-rule?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rule_text: rule, context: state.testCode.selectedCandidateId || "" }),
+      });
+      await ensureProjectCodeConfigLoaded(true);
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = "Learned rule added.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+}
+
+function bindTestCodeMappingFixHandlers(rows, statusEl) {
+  const tc = state.testCode;
+  document.querySelectorAll("[data-save-mapping]").forEach((btn) => {
+    btn.onclick = async () => {
+      const term = btn.getAttribute("data-save-mapping") || "";
+      const input = document.querySelector(`input[data-mapping-term="${CSS.escape(term)}"]`);
+      const code = input?.value?.trim() || "";
+      if (!code) {
+        if (statusEl) statusEl.textContent = `Enter code for ${term}.`;
+        return;
+      }
+      try {
+        const data = await api(`/api/review/config-bundle/learned-mapping?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ term, code, use_project_override: false }),
+        });
+        tc.mappingCoverage = data.mapping_coverage;
+        tc.workspace = tc.workspace || {};
+        tc.workspace.mapping_coverage = data.mapping_coverage;
+        if (tc.workspace) tc.workspace.code_variable_map = { ...(tc.workspace.code_variable_map || {}), [term]: code };
+        invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+        tc.workspace = await fetchGtestWorkspace(true);
+        refreshTestCodeConfigUi(rows, statusEl);
+        patchTestCodeCaseStatusUi();
+        if (statusEl) statusEl.textContent = `Mapping saved for ${term}.`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    };
+  });
+  document.querySelectorAll("[data-save-mapping-override]").forEach((btn) => {
+    btn.onclick = async () => {
+      const term = btn.getAttribute("data-save-mapping-override") || "";
+      const input = document.querySelector(`input[data-mapping-term="${CSS.escape(term)}"]`);
+      const code = input?.value?.trim() || "";
+      if (!code) return;
+      try {
+        const data = await api(`/api/review/config-bundle/learned-mapping?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ term, code, use_project_override: true }),
+        });
+        tc.mappingCoverage = data.mapping_coverage;
+        refreshTestCodeConfigUi(rows, statusEl);
+        if (statusEl) statusEl.textContent = `Override mapping saved for ${term}.`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    };
+  });
+}
+
+function applyConfigBundleSectionTextsToEditors(sectionTexts) {
+  if (!sectionTexts || typeof sectionTexts !== "object") return;
+  const cfg = state.testCode.projectCodeConfig;
+  if (!cfg?.files) return;
+  for (const [name, content] of Object.entries(sectionTexts)) {
+    if (cfg.files[name]) cfg.files[name].content = content;
+  }
+  const selected = state.testCode.configFileSelected || "code_rules.md";
+  const editor = $("#testcode-config-editor");
+  if (editor && cfg.files[selected]) editor.value = cfg.files[selected].content || "";
+}
+
+function bindTestCodeConfigBundleHandlers(rows, statusEl) {
+  const tc = state.testCode;
+  const importStatusEl = () => $("#testcode-config-import-status");
+
+  function showConfigImportStatus(msg, isError = false) {
+    const el = importStatusEl();
+    if (el) {
+      el.textContent = msg;
+      el.className = isError ? "detail tag error" : "detail";
+    }
+    if (statusEl) statusEl.textContent = msg;
+  }
+
+  bindClick("#btn-testcode-propose-bundle", async () => {
+    const md = $("#testcode-config-bundle-import")?.value || "";
+    tc.configBundlePaste = md;
+    if (!md.trim()) {
+      showConfigImportStatus("Paste bundle markdown first.", true);
+      return;
+    }
+    const pre = logConfigBundleImportPreflight(md);
+    const payload = pre.payload;
+    showConfigImportStatus("Parsing bundle (preview)…");
+    try {
+      tc.configProposalError = null;
+      const data = await api(
+        `/api/review/project-code-config/preview-bundle?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      tc.configProposal = {
+        ...data,
+        summary: data.diff_summary || data.summary,
+      };
+      applyConfigBundleSectionTextsToEditors(data.sections || data.section_texts || {});
+      refreshTestCodeConfigUi(rows, statusEl);
+      const ds = data.detected_sections || [];
+      const warnN = (data.warnings || []).length;
+      const diag = data.import_diagnostics || {};
+      showConfigImportStatus(
+        `Preview OK — ${ds.length} section(s): ${ds.join(", ")}${warnN ? ` · ${warnN} warning(s)` : ""} · diff ${(data.changes || []).length} item(s) · YAML validation: ${diag.yaml_validation || "not_performed"}`
+      );
+    } catch (e) {
+      tc.configProposal = null;
+      const msg = formatConfigBundleApiError(e);
+      tc.configProposalError = msg;
+      refreshTestCodeConfigUi(rows, statusEl);
+      showConfigImportStatus(msg, true);
+    }
+  });
+
+  async function ensureConfigBundlePending(md) {
+    const payload = getConfigBundleRequestPayload(md);
+    await api(`/api/review/config-bundle/propose?job_id=${encodeURIComponent(state.jobId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  bindClick("#btn-testcode-import-bundle", async () => {
+    const md = $("#testcode-config-bundle-import")?.value || "";
+    tc.configBundlePaste = md;
+    if (!md.trim()) {
+      showConfigImportStatus("Paste bundle markdown first.", true);
+      return;
+    }
+    let detected = tc.configProposal?.detected_sections || [];
+    if (!detected.length) {
+      try {
+        const preview = await api(
+          `/api/review/project-code-config/preview-bundle?job_id=${encodeURIComponent(state.jobId)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(getConfigBundleRequestPayload(md)),
+          }
+        );
+        tc.configProposal = { ...preview, summary: preview.diff_summary || preview.summary };
+        detected = preview.detected_sections || [];
+        applyConfigBundleSectionTextsToEditors(preview.sections || preview.section_texts || {});
+      } catch (e) {
+        showConfigImportStatus(formatConfigBundleApiError(e), true);
+        return;
+      }
+    }
+    if (!detected.length) {
+      showConfigImportStatus(
+        "No sections detected — fix bundle headings (e.g. ## 1. code_rules.md or 4. api_catalog.yaml).",
+        true
+      );
+      return;
+    }
+    if ((tc.configProposal?.missing_sections || []).length) {
+      const ok = window.confirm(
+        `Bundle is missing: ${(tc.configProposal.missing_sections || []).join(", ")}. Import detected sections only?`
+      );
+      if (!ok) return;
+    }
+    try {
+      showConfigImportStatus("Importing section text into config editors…");
+      const data = await api(
+        `/api/review/project-code-config/apply-bundle-import?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(getConfigBundleRequestPayload(md)),
+        }
+      );
+      const importedSections = { ...(data.sections || {}) };
+      applyConfigBundleSectionTextsToEditors(importedSections);
+      tc.configBundleImportedSections = importedSections;
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      await ensureProjectCodeConfigLoaded(true);
+      applyConfigBundleSectionTextsToEditors(tc.configBundleImportedSections || importedSections);
+      refreshTestCodeConfigUi(rows, statusEl);
+      tc.configProposalError = null;
+      showConfigImportStatus(
+        `Imported ${(data.applied_sections || []).length} section(s) as text. Fix YAML before Mapping Coverage if needed.`
+      );
+    } catch (e) {
+      showConfigImportStatus(formatConfigBundleApiError(e), true);
+    }
+  });
+
+  async function applyConfigProposal(mode, allowRemovals = false) {
+    const selected = [...document.querySelectorAll("[data-config-change-id]:checked")].map((el) => el.dataset.configChangeId);
+    const data = await api(`/api/review/config-bundle/apply?job_id=${encodeURIComponent(state.jobId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, selected_ids: selected, allow_removals: allowRemovals }),
+    });
+    tc.configProposal = null;
+    await ensureProjectCodeConfigLoaded(true);
+    refreshTestCodeConfigUi(rows, statusEl);
+    return data;
+  }
+
+  bindClick("#btn-config-apply-selected", async () => {
+    const md = $("#testcode-config-bundle-import")?.value || "";
+    if (!md.trim()) {
+      showConfigImportStatus("Paste bundle markdown first.", true);
+      return;
+    }
+    if (!(tc.configProposal?.detected_sections || []).length) {
+      showConfigImportStatus("Run Preview import diff before applying.", true);
+      return;
+    }
+    try {
+      await ensureConfigBundlePending(md);
+      await applyConfigProposal("apply_selected");
+      showConfigImportStatus("Applied selected proposal changes.");
+    } catch (e) {
+      showConfigImportStatus(formatConfigBundleApiError(e), true);
+    }
+  });
+
+  bindClick("#btn-config-apply-safe", async () => {
+    try {
+      await applyConfigProposal("apply_all", false);
+      if (statusEl) statusEl.textContent = "Applied safe proposal changes only.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-config-save-baseline", async () => {
+    if (!window.confirm("Replace baseline config with imported bundle? Overrides are kept.")) return;
+    try {
+      await applyConfigProposal("save_as_baseline");
+      if (statusEl) statusEl.textContent = "Saved proposal as new baseline.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-config-ignore-proposal", async () => {
+    try {
+      await applyConfigProposal("ignore");
+      tc.configProposal = null;
+      refreshTestCodeConfigUi(rows, statusEl);
+      if (statusEl) statusEl.textContent = "Proposal ignored.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  document.querySelectorAll("[data-config-rollback]").forEach((btn) => {
+    btn.onclick = async () => {
+      const vid = btn.getAttribute("data-config-rollback");
+      if (!vid || !window.confirm(`Rollback to ${vid}?`)) return;
+      try {
+        await api(`/api/review/config-bundle/rollback?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ config_version_id: vid }),
+        });
+        await ensureProjectCodeConfigLoaded(true);
+        refreshTestCodeConfigUi(rows, statusEl);
+        if (statusEl) statusEl.textContent = `Rolled back to ${vid}.`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    };
+  });
+
+  bindClick("#btn-testcode-export-config-bundle", async () => {
+    try {
+      const data = await api(`/api/review/config-bundle/export?job_id=${encodeURIComponent(state.jobId)}`);
+      const blob = new Blob([data.content || ""], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename || "alex_code_config_bundle.md";
+      a.click();
+      URL.revokeObjectURL(url);
+      if (statusEl) statusEl.textContent = `Exported ${a.download}.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-testcode-copy-config-prompt", async () => {
+    try {
+      const changeRequest = $("#testcode-batch-change-request")?.value || tc.batchChangeRequest || "";
+      const data = await api(`/api/review/config-bundle/improvement-prompt?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ change_request: changeRequest, language: state.exportLanguage || "EN" }),
+      });
+      await navigator.clipboard.writeText(data.content || "");
+      if (statusEl) statusEl.textContent = `Config improvement prompt copied (${data.char_count || 0} chars).`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+}
+
+async function refreshTestCodeConfigDiagnostics(statusEl) {
+  const data = await api(
+    `/api/review/project-code-config/diagnostics?job_id=${encodeURIComponent(state.jobId)}`
+  );
+  state.testCode.configDiagnostics = data;
+  if (statusEl) {
+    const sm = data.signal_mapping || {};
+    const api = data.api_catalog || {};
+    statusEl.textContent = `Config diagnostics: ${sm.keys_detected ?? 0} mapping keys · ${api.entries_detected ?? 0} API entries · YAML ${data.yaml_parse_status || "—"}`;
+  }
+  return data;
+}
+
+function bindTestCodeConfigPanelHandlers(rows, statusEl) {
+  bindOnChange("#testcode-config-file-select", (ev) => {
+    const name = ev.target.value;
+    state.testCode.configFileSelected = name;
+    const file = state.testCode.projectCodeConfig?.files?.[name];
+    const editor = $("#testcode-config-editor");
+    if (editor && file) editor.value = file.content || "";
+  });
+
+  bindClick("#btn-testcode-config-diagnostics", async () => {
+    try {
+      await ensureProjectCodeConfigLoaded(true);
+      await refreshTestCodeConfigDiagnostics(statusEl);
+      refreshTestCodeConfigUi(rows, statusEl);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message || "Config diagnostics failed.";
+    }
+  });
 }
 
 function renderTestCodeValidation(val) {
@@ -8626,6 +10803,27 @@ function renderTestCodeValidation(val) {
   </div>`;
 }
 
+function showTestCodeQualityGateResult(qg) {
+  const valEl = document.getElementById("testcode-validation");
+  if (!valEl) return;
+  valEl.hidden = false;
+  valEl.innerHTML = renderTestCodeQualityGateHtml(qg);
+}
+
+function renderTestCodeQualityGateHtml(qg) {
+  if (!qg) return "";
+  const summary = String(qg.summary || "").toUpperCase();
+  const cls = summary === "PASS" ? "ok" : summary === "WARNING" ? "warning" : "error";
+  const issues = (qg.checks || []).filter((c) => c.severity !== "PASS");
+  if (!issues.length) {
+    return `<span class="tag ${cls}">Quality gate ${esc(summary)} — ready to Save Code</span>`;
+  }
+  return `<div class="alex-testcode-validation-warn">
+    <span class="tag ${cls}">Quality gate ${esc(summary)} — review before save</span>
+    <ul class="alex-testcode-validation-list">${issues.map((c) => `<li><b>${esc(c.check_name)}</b> [${esc(c.severity)}]: ${esc(c.message)}</li>`).join("")}</ul>
+  </div>`;
+}
+
 function renderTestCodeMergePanel(preview) {
   if (!preview) return "";
   const included = preview.included || [];
@@ -8633,6 +10831,10 @@ function renderTestCodeMergePanel(preview) {
   const warnings = preview.warnings || [];
   const total = preview.total_count ?? included.length + skipped.length;
   const warnCount = preview.warning_count ?? warnings.length;
+  const mr = preview.merge_readiness || {};
+  const readiness = mr.saved_total != null
+    ? `<p class="detail"><b>Merge readiness:</b> ${mr.saved_quality_pass ?? 0} saved+PASS · ${mr.saved_quality_warning ?? 0} saved+WARNING · ${mr.skipped_count ?? skipped.length} skipped</p>`
+    : "";
   const skipList = skipped.length
     ? `<ul class="alex-testcode-merge-list">${skipped
         .map((s) => `<li><code>${esc(s.candidate_id)}</code> — ${esc(s.reason)}</li>`)
@@ -8646,7 +10848,9 @@ function renderTestCodeMergePanel(preview) {
     : `<p class="detail">—</p>`;
   return `<div class="alex-testcode-merge-summary">
       <p class="detail"><b>Total testcase:</b> ${total} · <b>Included:</b> ${included.length} · <b>Skipped:</b> ${skipped.length} · <b>Warnings:</b> ${warnCount}</p>
+      ${readiness}
       ${skipped.length ? `<p class="tag warning">Some testcases are not saved or have no code. Merge will include only SAVED code.</p>` : ""}
+      ${(mr.saved_quality_warning || 0) > 0 ? `<p class="tag warning">${mr.saved_quality_warning} saved testcase(s) have quality WARNING.</p>` : ""}
     </div>
     <section class="alex-testcode-merge-section">
       <h4 class="alex-testcode-panel-title">Included testcases (${included.length})</h4>
@@ -8666,7 +10870,7 @@ function renderTestCodeMergePanel(preview) {
     </section>
     <div class="alex-testcode-editor__actions">
       <button type="button" class="btn secondary" id="btn-testcode-merge-copy">Copy Merged Code</button>
-      <button type="button" class="btn" id="btn-testcode-merge-export">Export Merged .cpp</button>
+      <button type="button" class="btn" id="btn-testcode-merge-export">Export Merged .cc</button>
     </div>`;
 }
 
@@ -8713,6 +10917,8 @@ async function openTestCodeMergePreview(rows) {
     patchTestCodeCaseStatusUi();
   } catch (e) {
     if (statusEl) statusEl.textContent = e.message;
+    const cid = state.testCode.selectedCandidateId;
+    if (cid) setTestCodeWorkflowError(cid, e.message || "Merge preview failed");
   }
 }
 
@@ -8777,6 +10983,10 @@ async function renderTestCode(opts = {}) {
 
     const ws = forceRefresh ? await fetchGtestWorkspace(true) : await fetchGtestWorkspace();
     hydrateTestCodeWorkflowFromWorkspace(ws, { fullReset: !hasShell });
+    if (ws.copilot_batch?.last_results?.length && !state.testCode.batchResults?.length) {
+      state.testCode.batchResults = ws.copilot_batch.last_results;
+      state.testCode.batchSummary = summarizeBatchWorkflowResults(state.testCode.batchResults);
+    }
     const rows = ws.workbench_rows || [];
     const logicItems = ws.logic_items || [];
     if (!rows.length && !logicItems.length) {

@@ -14,7 +14,7 @@ from datetime import datetime
 import yaml
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -658,6 +658,166 @@ class GTestDraftSaveRequest(BaseModel):
     engineer_edited: bool = True
     code_status: Optional[str] = None
     generation_source: Optional[str] = None
+    quality_results: Optional[list[dict[str, Any]]] = None
+    quality_summary: Optional[str] = None
+    review_reason: Optional[str] = None
+
+
+class ProjectCodeConfigSaveRequest(BaseModel):
+    filename: str
+    content: str = ""
+
+
+class MappingCoverageRequest(BaseModel):
+    language: str = "EN"
+
+
+class LocalTemplateGenerateRequest(BaseModel):
+    candidate_ids: Optional[list[str]] = None
+    language: str = "EN"
+
+
+class AiBatchReviewPackRequest(BaseModel):
+    candidate_ids: Optional[list[str]] = None
+    change_request: str = ""
+    language: str = "EN"
+    filter: str = "selected"
+
+
+class GTestQualityCheckRequest(BaseModel):
+    candidate_id: str
+    full_snippet: str = ""
+    language: str = "EN"
+
+
+class ConfigBundleTextRequest(BaseModel):
+    """Accept bundle paste under several JSON keys (Copilot / UI variants)."""
+
+    bundle: str = ""
+    text: str = ""
+    content: str = ""
+    bundle_markdown: str = ""
+
+
+class ConfigBundleProposeRequest(ConfigBundleTextRequest):
+    pass
+
+
+class ConfigBundleApplyImportRequest(ConfigBundleTextRequest):
+    selected_sections: Optional[list[str]] = None
+
+
+class ConfigBundleApplyRequest(BaseModel):
+    mode: str = "apply_selected"
+    selected_ids: Optional[list[str]] = None
+    allow_removals: bool = False
+
+
+class AnalyzeProjectContextRequest(BaseModel):
+    language: str = "EN"
+    force: bool = False
+    extra_snippets: Optional[list[str]] = None
+
+
+class AcceptProposedMappingsRequest(BaseModel):
+    items: list[dict[str, Any]] = []
+    use_project_override: bool = False
+
+
+class SmartGenerateCodeRequest(BaseModel):
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    auto_accept_high_confidence: bool = True
+    analyze_if_sparse: bool = True
+    use_api_for_hard: bool = False
+
+
+class MarkCodeExemplarRequest(BaseModel):
+    candidate_id: str
+    language: str = "EN"
+
+
+class ExemplarBatchPromptRequest(BaseModel):
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    engineer_note: str = ""
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class ExemplarBatchImportRequest(BaseModel):
+    content: str
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class ExemplarBatchApiRequest(BaseModel):
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    engineer_note: str = ""
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class CopilotBatchPromptRequest(BaseModel):
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    engineer_note: str = ""
+    batch_size: int = 10
+    skip_saved: bool = False
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class CopilotBatchImportRequest(BaseModel):
+    content: str
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class CopilotBatchApiRequest(BaseModel):
+    language: str = "EN"
+    candidate_ids: Optional[list[str]] = None
+    engineer_note: str = ""
+    batch_size: int = 10
+    skip_saved: bool = False
+    scope: str = "filter"
+    group_key: str = ""
+    group_field: str = "test_group"
+
+
+class TestCodeApprovalRequest(BaseModel):
+    candidate_ids: Optional[list[str]] = None
+    language: str = "EN"
+
+
+class LearnedMappingRequest(BaseModel):
+    term: str
+    code: str
+    use_project_override: bool = False
+
+
+class LearnedRuleRequest(BaseModel):
+    rule_text: str
+    context: str = ""
+
+
+class ConfigVersionRollbackRequest(BaseModel):
+    config_version_id: str
+
+
+class ConfigImprovementPromptRequest(BaseModel):
+    change_request: str = ""
+    language: str = "EN"
 
 
 class GTestVariableMapRequest(BaseModel):
@@ -792,6 +952,32 @@ def _persist_job_gtest_state(job_id: str, gtest_state: dict[str, Any]) -> dict[s
     sync_gtest_to_bundle(bundle, gtest_state)
     _save_bundle_to_job(job_id, bundle)
     return gtest_state
+
+
+def _smart_workflow_run_report_payload(
+    job_id: str,
+    gtest_state: dict[str, Any],
+    bundle: dict[str, Any],
+    *,
+    event: str | None = None,
+    event_data: dict[str, Any] | None = None,
+    language: str = "EN",
+) -> dict[str, Any]:
+    from web.test_code_smart_workflow import (
+        build_smart_workflow_run_report,
+        format_smart_workflow_run_report_markdown,
+        record_smart_workflow_run,
+    )
+
+    if event:
+        record_smart_workflow_run(gtest_state, event, event_data or {})
+    report = build_smart_workflow_run_report(
+        bundle, gtest_state, _job_output_dir(job_id), language=language
+    )
+    return {
+        "run_report": report,
+        "run_report_markdown": format_smart_workflow_run_report_markdown(report, job_id=job_id),
+    }
 
 
 def _job_owner(job_id: str) -> str | None:
@@ -3174,7 +3360,7 @@ def api_export_gtest_cpp_marked(job_id: str, language: str = "EN") -> Response:
     return Response(
         content=content,
         media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="alex_marked_tests.cpp"'},
+        headers={"Content-Disposition": 'attachment; filename="alex_marked_tests.cc"'},
     )
 
 
@@ -3324,6 +3510,9 @@ def api_gtest_workspace(job_id: str, language: str = "EN") -> dict[str, Any]:
         _persist_job_gtest_state(job_id, gtest_state)
     if bundle_dirty:
         bundle_version = _save_bundle_to_job(job_id, bundle)
+    if not gtest_state.get("project_code_config_cache"):
+        _sync_project_code_config_cache(job_id, gtest_state)
+        _persist_job_gtest_state(job_id, gtest_state)
     payload = build_workspace_payload(
         bundle,
         gtest_state,
@@ -3371,7 +3560,7 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
     from datetime import datetime, timezone
 
     from src.importers.customer_testspec_importer import compute_body_hash, compute_spec_hash
-
+    from web.code_quality_gate import quality_to_code_status, run_quality_gate
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     structured = _structured_io_for_candidate(bundle, body.draft_key, language="EN")
@@ -3380,21 +3569,55 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
     code_status = str(body.code_status or "SAVED").strip().upper() or "SAVED"
     generation_source = str(body.generation_source or "MANUAL").strip().upper() or "MANUAL"
     last_saved_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if code_status == "SAVED" else None
+    quality_results = body.quality_results
+    quality_summary = body.quality_summary
+    review_reason = body.review_reason
+    if code_status == "SAVED" and body.full_snippet:
+        cfg_cache = gtest_state.get("project_code_config_cache") or {}
+        wb = _workbench_row_for_candidate(bundle, body.draft_key, language="EN") or {}
+        samples = load_code_style_samples(bundle)
+        sample_snippet = str((samples[0] or {}).get("snippet") or "") if samples else ""
+        qg = run_quality_gate(
+            body.full_snippet,
+            candidate_id=body.draft_key,
+            structured_io=structured,
+            code_rules_md=str(cfg_cache.get("code_rules.md") or ""),
+            api_catalog_yaml=str(cfg_cache.get("api_catalog.yaml") or ""),
+            sample_snippet=sample_snippet,
+            expected_input=str(wb.get("expected_input") or ""),
+            expected_output=str(wb.get("expected_output") or ""),
+        )
+        quality_results = qg.get("checks") or []
+        quality_summary = qg.get("summary")
+        gate_status = quality_to_code_status(quality_summary or "FAIL")
+        if gate_status != "SAVED":
+            code_status = gate_status
+            last_saved_at = None
+            review_reason = "; ".join(
+                c["message"] for c in quality_results if c.get("severity") in ("WARNING", "FAIL")
+            )[:500]
+    draft_payload: dict[str, Any] = {
+        "source_kind": body.source_kind,
+        "test_name": body.test_name,
+        "spec_comment_block": body.spec_comment_block,
+        "code_body": body.code_body,
+        "full_snippet": body.full_snippet,
+        "spec_hash": spec_hash,
+        "body_hash": body_hash,
+        "code_status": code_status,
+        "generation_source": generation_source,
+        "last_saved_at": last_saved_at,
+    }
+    if quality_results is not None:
+        draft_payload["quality_results"] = quality_results
+    if quality_summary:
+        draft_payload["quality_summary"] = quality_summary
+    if review_reason:
+        draft_payload["review_reason"] = review_reason
     gtest_state = save_draft(
         gtest_state,
         draft_key=body.draft_key,
-        draft={
-            "source_kind": body.source_kind,
-            "test_name": body.test_name,
-            "spec_comment_block": body.spec_comment_block,
-            "code_body": body.code_body,
-            "full_snippet": body.full_snippet,
-            "spec_hash": spec_hash,
-            "body_hash": body_hash,
-            "code_status": code_status,
-            "generation_source": generation_source,
-            "last_saved_at": last_saved_at,
-        },
+        draft=draft_payload,
         engineer_edited=body.engineer_edited,
     )
     _persist_job_gtest_state(job_id, gtest_state)
@@ -3407,11 +3630,728 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
         "code_status": saved.get("code_status") or code_status,
         "generation_source": saved.get("generation_source") or generation_source,
         "last_saved_at": saved.get("last_saved_at") or last_saved_at,
+        "quality_summary": saved.get("quality_summary") or quality_summary,
+        "review_reason": saved.get("review_reason") or review_reason,
+        "quality_results": saved.get("quality_results") or quality_results,
     }
 
 
+def _sync_project_code_config_cache(job_id: str, gtest_state: dict[str, Any]) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    from web.project_code_config import load_project_code_config
+
+    config = load_project_code_config(_job_output_dir(job_id))
+    cache = {name: str((meta or {}).get("content") or "") for name, meta in (config.get("files") or {}).items()}
+    gtest_state["project_code_config_cache"] = cache
+    gtest_state["project_code_config_meta"] = {
+        "loaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "files": list(cache.keys()),
+        "current_version_id": config.get("current_version_id"),
+        "current_version": config.get("current_version"),
+        "layers": config.get("layers"),
+        "pending_proposal": config.get("pending_proposal"),
+    }
+    return config
+
+
+@app.get("/api/review/project-code-config")
+def api_get_project_code_config(job_id: str) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    config = _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **config}
+
+
+@app.get("/api/review/project-code-config/diagnostics")
+def api_project_code_config_diagnostics(job_id: str) -> dict[str, Any]:
+    from web.project_code_config import diagnose_project_code_config_files, load_project_code_config
+
+    config = load_project_code_config(_job_output_dir(job_id))
+    files = config.get("files") or {}
+    sm = str((files.get("signal_mapping.yaml") or {}).get("content") or "")
+    api = str((files.get("api_catalog.yaml") or {}).get("content") or "")
+    diag = diagnose_project_code_config_files(sm, api)
+    return {"job_id": job_id, **diag}
+
+
+@app.put("/api/review/project-code-config")
+def api_put_project_code_config(job_id: str, body: ProjectCodeConfigSaveRequest) -> dict[str, Any]:
+    from web.project_code_config import save_project_code_config_file
+
+    result = save_project_code_config_file(_job_output_dir(job_id), body.filename, body.content)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "save failed")
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+def _config_bundle_text_from_body(body: ConfigBundleTextRequest) -> tuple[str, list[str]]:
+    from web.config_bundle_layers import extract_bundle_text_from_payload
+
+    return extract_bundle_text_from_payload(body.model_dump())
+
+
+@app.post("/api/review/project-code-config/preview-bundle")
+def api_project_code_config_preview_bundle(job_id: str, body: ConfigBundleTextRequest) -> Any:
+    from web.config_bundle_layers import bundle_error_payload, preview_config_bundle
+
+    text, payload_keys = _config_bundle_text_from_body(body)
+    if not text:
+        return JSONResponse(
+            status_code=400,
+            content=bundle_error_payload(
+                "Bundle text is required (use JSON key: bundle, text, content, or bundle_markdown)",
+                text=text,
+                payload_keys=payload_keys,
+            ),
+        )
+    result = preview_config_bundle(_job_output_dir(job_id), text)
+    if not result.get("ok"):
+        if payload_keys and "payload_keys" in (result.get("details") or {}):
+            result["details"]["payload_keys"] = payload_keys
+        elif result.get("details") is not None:
+            result["details"]["payload_keys"] = payload_keys
+        return JSONResponse(status_code=400, content=result)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/project-code-config/apply-bundle-import")
+def api_project_code_config_apply_bundle_import(
+    job_id: str, body: ConfigBundleApplyImportRequest
+) -> Any:
+    from web.config_bundle_layers import apply_bundle_import_sections, bundle_error_payload
+
+    text, payload_keys = _config_bundle_text_from_body(body)
+    if not text:
+        return JSONResponse(
+            status_code=400,
+            content=bundle_error_payload(
+                "Bundle text is required (use JSON key: bundle, text, content, or bundle_markdown)",
+                text=text,
+                payload_keys=payload_keys,
+            ),
+        )
+    result = apply_bundle_import_sections(
+        _job_output_dir(job_id),
+        text,
+        selected_sections=body.selected_sections,
+    )
+    if not result.get("ok"):
+        if isinstance(result.get("details"), dict):
+            result["details"]["payload_keys"] = payload_keys
+        return JSONResponse(status_code=400, content=result)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/config-bundle/propose")
+def api_config_bundle_propose(job_id: str, body: ConfigBundleProposeRequest) -> Any:
+    from web.config_bundle_layers import bundle_error_payload, propose_config_bundle
+
+    text, payload_keys = _config_bundle_text_from_body(body)
+    if not text:
+        return JSONResponse(
+            status_code=400,
+            content=bundle_error_payload(
+                "Bundle text is required (use JSON key: bundle, text, content, or bundle_markdown)",
+                text=text,
+                payload_keys=payload_keys,
+            ),
+        )
+    result = propose_config_bundle(_job_output_dir(job_id), text)
+    if not result.get("ok"):
+        if isinstance(result.get("details"), dict):
+            result["details"]["payload_keys"] = payload_keys
+        return JSONResponse(status_code=400, content=result)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/config-bundle/apply")
+def api_config_bundle_apply(job_id: str, body: ConfigBundleApplyRequest) -> dict[str, Any]:
+    from web.config_bundle_layers import apply_config_bundle_proposal
+
+    result = apply_config_bundle_proposal(
+        _job_output_dir(job_id),
+        mode=body.mode,
+        selected_ids=body.selected_ids,
+        allow_removals=body.allow_removals,
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "apply failed")
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.get("/api/review/config-bundle/export")
+def api_config_bundle_export(job_id: str) -> dict[str, Any]:
+    from web.config_bundle_layers import export_effective_config_bundle
+
+    return {"job_id": job_id, **export_effective_config_bundle(_job_output_dir(job_id))}
+
+
+@app.post("/api/review/config-bundle/improvement-prompt")
+def api_config_bundle_improvement_prompt(
+    job_id: str, body: ConfigImprovementPromptRequest | None = None
+) -> dict[str, Any]:
+    from web.config_bundle_layers import build_config_improvement_prompt
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    lang = (body.language if body else None) or "EN"
+    cr = (body.change_request if body else None) or ""
+    return {
+        "job_id": job_id,
+        **build_config_improvement_prompt(
+            _job_output_dir(job_id),
+            gtest_state,
+            change_request=cr,
+            bundle=bundle,
+            language=lang,
+        ),
+    }
+
+
+@app.post("/api/review/config-bundle/learned-mapping")
+def api_config_learned_mapping(job_id: str, body: LearnedMappingRequest) -> dict[str, Any]:
+    from web.config_bundle_layers import add_learned_mapping
+    from web.local_template_codegen import check_mapping_coverage
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    result = add_learned_mapping(
+        _job_output_dir(job_id),
+        body.term,
+        body.code,
+        use_project_override=body.use_project_override,
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "failed")
+    cmap = dict(gtest_state.get("code_variable_map") or {})
+    cmap[body.term] = body.code
+    gtest_state["code_variable_map"] = cmap
+    cov = check_mapping_coverage(bundle, gtest_state, _job_output_dir(job_id), language="EN")
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "mapping_coverage": cov, **result}
+
+
+@app.post("/api/review/config-bundle/learned-rule")
+def api_config_learned_rule(job_id: str, body: LearnedRuleRequest) -> dict[str, Any]:
+    from web.config_bundle_layers import add_learned_rule
+
+    if not (body.rule_text or "").strip():
+        raise HTTPException(400, "rule_text is required")
+    result = add_learned_rule(_job_output_dir(job_id), body.rule_text, context=body.context)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "failed")
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/config-bundle/rollback")
+def api_config_bundle_rollback(job_id: str, body: ConfigVersionRollbackRequest) -> dict[str, Any]:
+    from web.config_bundle_layers import rollback_config_version
+
+    result = rollback_config_version(_job_output_dir(job_id), body.config_version_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "rollback failed")
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/analyze-project-context")
+def api_analyze_project_context(job_id: str, body: AnalyzeProjectContextRequest | None = None) -> dict[str, Any]:
+    from web.test_code_smart_workflow import analyze_project_context
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    lang = (body.language if body else None) or "EN"
+    extra = (body.extra_snippets if body else None) or []
+    paste = str(gtest_state.get("sample_paste") or "").strip()
+    if paste:
+        extra = list(extra) + [paste]
+    result = analyze_project_context(
+        _job_output_dir(job_id),
+        bundle,
+        gtest_state,
+        language=lang,
+        extra_snippets=extra or None,
+        force=bool(body.force) if body else False,
+    )
+    _sync_project_code_config_cache(job_id, gtest_state)
+    report_payload = _smart_workflow_run_report_payload(
+        job_id,
+        gtest_state,
+        bundle,
+        event="analyze_project_context",
+        event_data=result,
+        language=lang,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result, **report_payload}
+
+
+@app.post("/api/review/propose-missing-mappings")
+def api_propose_missing_mappings(job_id: str, body: MappingCoverageRequest | None = None) -> dict[str, Any]:
+    from web.code_style_samples import load_code_style_samples
+    from web.test_code_smart_workflow import build_copilot_mapping_prompt, propose_missing_mappings
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    lang = (body.language if body else None) or "EN"
+    result = propose_missing_mappings(bundle, gtest_state, _job_output_dir(job_id), language=lang)
+    samples = load_code_style_samples(bundle)
+    excerpt = str((samples[0] or {}).get("snippet") or "") if samples else ""
+    proposals = result.get("proposals") or []
+    report_payload = _smart_workflow_run_report_payload(
+        job_id,
+        gtest_state,
+        bundle,
+        event="propose_missing_mappings",
+        event_data=result,
+        language=lang,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {
+        "job_id": job_id,
+        **result,
+        "copilot_mapping_prompt": build_copilot_mapping_prompt(proposals, sample_excerpt=excerpt),
+        **report_payload,
+    }
+
+
+@app.post("/api/review/accept-proposed-mappings")
+def api_accept_proposed_mappings(job_id: str, body: AcceptProposedMappingsRequest) -> dict[str, Any]:
+    from web.test_code_smart_workflow import accept_proposed_mappings
+
+    gtest_state = _load_job_gtest_state(job_id)
+    result = accept_proposed_mappings(
+        _job_output_dir(job_id),
+        gtest_state,
+        body.items or [],
+        use_project_override=body.use_project_override,
+    )
+    bundle = _bundle_for_job(job_id)
+    from web.local_template_codegen import check_mapping_coverage
+
+    cov = check_mapping_coverage(bundle, gtest_state, _job_output_dir(job_id), language="EN")
+    _sync_project_code_config_cache(job_id, gtest_state)
+    report_payload = _smart_workflow_run_report_payload(
+        job_id,
+        gtest_state,
+        bundle,
+        event="accept_proposed_mappings",
+        event_data={"mapping_coverage": cov, **result},
+        language="EN",
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "mapping_coverage": cov, **result, **report_payload}
+
+
+@app.post("/api/review/generate-code-smart-mode")
+def api_generate_code_smart_mode(job_id: str, body: SmartGenerateCodeRequest | None = None) -> dict[str, Any]:
+    from web.test_code_smart_workflow import smart_generate_code
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    lang = (body.language if body else None) or "EN"
+    result = smart_generate_code(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        language=lang,
+        candidate_ids=body.candidate_ids if body else None,
+        auto_accept_high_confidence=body.auto_accept_high_confidence if body else True,
+        analyze_if_sparse=body.analyze_if_sparse if body else True,
+        use_api_for_hard=bool(body.use_api_for_hard) if body else False,
+        cfg=_cfg(),
+        library_root=_library_root(),
+    )
+    _sync_project_code_config_cache(job_id, gtest_state)
+    report_payload = _smart_workflow_run_report_payload(
+        job_id,
+        gtest_state,
+        bundle,
+        event="smart_generate",
+        event_data=result,
+        language=lang,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result, **report_payload}
+
+
+@app.get("/api/review/smart-workflow-run-report")
+def api_smart_workflow_run_report(job_id: str, language: str = "EN") -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    report_payload = _smart_workflow_run_report_payload(
+        job_id, gtest_state, bundle, language=language or "EN"
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **report_payload}
+
+
+@app.post("/api/review/mark-code-exemplar")
+def api_mark_code_exemplar(job_id: str, body: MarkCodeExemplarRequest) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import mark_code_exemplar
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    result = mark_code_exemplar(
+        bundle, gtest_state, body.candidate_id, language=body.language or "EN"
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "mark exemplar failed")
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/clear-code-exemplar")
+def api_clear_code_exemplar(job_id: str) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import clear_code_exemplar
+
+    gtest_state = _load_job_gtest_state(job_id)
+    result = clear_code_exemplar(gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/exemplar-batch-prompt")
+def api_exemplar_batch_prompt(job_id: str, body: ExemplarBatchPromptRequest | None = None) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import build_exemplar_batch_prompts
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    result = build_exemplar_batch_prompts(
+        bundle,
+        gtest_state,
+        candidate_ids=body.candidate_ids if body else None,
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        scope=str(body.scope if body else "filter") or "filter",
+        group_key=str(body.group_key if body else "") or "",
+        group_field=str(body.group_field if body else "test_group") or "test_group",
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "exemplar prompt failed")
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/import-exemplar-batch")
+def api_import_exemplar_batch(job_id: str, body: ExemplarBatchImportRequest) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import apply_exemplar_batch_import, resolve_exemplar_target_ids
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    targets = resolve_exemplar_target_ids(
+        bundle,
+        gtest_state,
+        candidate_ids=body.candidate_ids,
+        language=body.language or "EN",
+        scope=body.scope or "filter",
+        group_key=body.group_key or "",
+        group_field=body.group_field or "test_group",
+    )
+    expected = body.candidate_ids if body.candidate_ids else targets
+    result = apply_exemplar_batch_import(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        content=body.content,
+        expected_candidate_ids=expected,
+        language=body.language or "EN",
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/copilot-batch-prompt")
+def api_copilot_batch_prompt(job_id: str, body: CopilotBatchPromptRequest | None = None) -> dict[str, Any]:
+    from web.copilot_batch_codegen import build_copilot_batch_prompts
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    result = build_copilot_batch_prompts(
+        bundle,
+        gtest_state,
+        candidate_ids=body.candidate_ids if body else None,
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        batch_size=body.batch_size if body else 10,
+        skip_saved=bool(body.skip_saved) if body else False,
+        scope=str(body.scope if body else "filter") or "filter",
+        group_key=str(body.group_key if body else "") or "",
+        group_field=str(body.group_field if body else "test_group") or "test_group",
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "copilot batch prompt failed")
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/import-copilot-batch")
+def api_import_copilot_batch(job_id: str, body: CopilotBatchImportRequest) -> dict[str, Any]:
+    from web.copilot_batch_codegen import apply_copilot_batch_import, resolve_copilot_batch_targets
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    targets = resolve_copilot_batch_targets(
+        bundle,
+        gtest_state,
+        candidate_ids=body.candidate_ids,
+        language=body.language or "EN",
+        scope=body.scope or "filter",
+        group_key=body.group_key or "",
+        group_field=body.group_field or "test_group",
+    )
+    expected = body.candidate_ids if body.candidate_ids else targets
+    result = apply_copilot_batch_import(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        content=body.content,
+        expected_candidate_ids=expected,
+        language=body.language or "EN",
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/run-copilot-batch-api")
+def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None = None) -> dict[str, Any]:
+    from web.copilot_batch_codegen import run_copilot_batch_api
+
+    cfg = _cfg()
+    uid = _m365_user_id()
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    result = run_copilot_batch_api(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        cfg=cfg,
+        candidate_ids=body.candidate_ids if body else None,
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        batch_size=body.batch_size if body else 10,
+        skip_saved=bool(body.skip_saved) if body else False,
+        scope=str(body.scope if body else "filter") or "filter",
+        group_key=str(body.group_key if body else "") or "",
+        group_field=str(body.group_field if body else "test_group") or "test_group",
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/run-exemplar-batch-api")
+def api_run_exemplar_batch_api(job_id: str, body: ExemplarBatchApiRequest | None = None) -> dict[str, Any]:
+    from web.exemplar_batch_codegen import run_exemplar_batch_api
+
+    cfg = _cfg()
+    uid = _m365_user_id()
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    result = run_exemplar_batch_api(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        cfg=cfg,
+        candidate_ids=body.candidate_ids if body else None,
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        scope=str(body.scope if body else "filter") or "filter",
+        group_key=str(body.group_key if body else "") or "",
+        group_field=str(body.group_field if body else "test_group") or "test_group",
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/mapping-coverage")
+def api_mapping_coverage(job_id: str, body: MappingCoverageRequest | None = None) -> dict[str, Any]:
+    from web.local_template_codegen import check_mapping_coverage
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    result = check_mapping_coverage(bundle, gtest_state, _job_output_dir(job_id), language=lang)
+    report_payload = _smart_workflow_run_report_payload(
+        job_id,
+        gtest_state,
+        bundle,
+        event="mapping_coverage",
+        event_data={"coverage": result, **result},
+        language=lang,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result, **report_payload}
+
+
+@app.post("/api/review/generate-local-template")
+def api_generate_local_template(job_id: str, body: LocalTemplateGenerateRequest | None = None) -> dict[str, Any]:
+    from web.code_text_transform import load_code_style_samples
+    from web.local_template_codegen import batch_generate_local_template
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+    cids = body.candidate_ids if body else None
+    samples = load_code_style_samples(bundle)
+    sample_snippet = str((samples[0] or {}).get("snippet") or "") if samples else ""
+    result = batch_generate_local_template(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        candidate_ids=cids,
+        language=lang,
+        sample_snippet=sample_snippet,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/ai-batch-review-pack")
+def api_ai_batch_review_pack(job_id: str, body: AiBatchReviewPackRequest | None = None) -> dict[str, Any]:
+    from web.ai_review_pack import build_ai_batch_review_pack
+    from web.gtest_workspace import classify_sync_status
+    from web.local_template_codegen import check_mapping_coverage
+    from web.project_code_config import load_project_code_config
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    config = load_project_code_config(_job_output_dir(job_id))
+    lang = (body.language if body else None) or "EN"
+    change_request = (body.change_request if body else "") or ""
+    filt = (body.filter if body else "selected") or "selected"
+    if body and body.candidate_ids:
+        target_ids = list(body.candidate_ids)
+    elif filt == "all":
+        from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
+
+        preview = build_customer_testspec_preview(bundle, language=lang)
+        target_ids = [str(r.get("candidate_id") or "") for r in preview.get("rows") or [] if r.get("candidate_id")]
+    elif filt == "needs_review":
+        target_ids = [
+            cid
+            for cid, d in (gtest_state.get("drafts") or {}).items()
+            if str(d.get("code_status") or "").upper() == "NEEDS_REVIEW"
+        ]
+    elif filt == "error":
+        target_ids = [
+            cid
+            for cid, d in (gtest_state.get("drafts") or {}).items()
+            if str(d.get("code_status") or "").upper() == "ERROR"
+        ]
+    elif filt == "missing_mapping":
+        cov = check_mapping_coverage(bundle, gtest_state, _job_output_dir(job_id), language=lang)
+        target_ids = list(cov.get("affected_testcase_ids") or [])
+    else:
+        sync = classify_sync_status(bundle, gtest_state, language=lang)
+        target_ids = [
+            str(r.get("candidate_id") or "")
+            for r in sync.get("rows") or []
+            if str(r.get("candidate_id") or "")
+        ]
+    pack = build_ai_batch_review_pack(
+        bundle,
+        gtest_state,
+        candidate_ids=target_ids,
+        config=config,
+        change_request=change_request,
+        language=lang,
+    )
+    return {"job_id": job_id, "candidate_count": len(target_ids), **pack}
+
+
+@app.post("/api/review/gtest-quality-check")
+def api_gtest_quality_check(job_id: str, body: GTestQualityCheckRequest) -> dict[str, Any]:
+    from web.code_quality_gate import run_quality_gate
+    from web.code_text_transform import load_code_style_samples
+    from web.gtest_workspace import _structured_io_for_candidate, _workbench_row_for_candidate
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    cfg_cache = gtest_state.get("project_code_config_cache") or {}
+    if not cfg_cache:
+        _sync_project_code_config_cache(job_id, gtest_state)
+        cfg_cache = gtest_state.get("project_code_config_cache") or {}
+    lang = body.language or "EN"
+    wb = _workbench_row_for_candidate(bundle, body.candidate_id, language=lang) or {}
+    structured = _structured_io_for_candidate(bundle, body.candidate_id, language=lang)
+    samples = load_code_style_samples(bundle)
+    sample_snippet = str((samples[0] or {}).get("snippet") or "") if samples else ""
+    qg = run_quality_gate(
+        body.full_snippet,
+        candidate_id=body.candidate_id,
+        structured_io=structured,
+        code_rules_md=str(cfg_cache.get("code_rules.md") or ""),
+        api_catalog_yaml=str(cfg_cache.get("api_catalog.yaml") or ""),
+        sample_snippet=sample_snippet,
+        expected_input=str(wb.get("expected_input") or ""),
+        expected_output=str(wb.get("expected_output") or ""),
+    )
+    return {"job_id": job_id, "candidate_id": body.candidate_id, **qg}
+
+
 @app.get("/api/review/gtest-merge-saved-preview")
-def api_gtest_merge_saved_preview(job_id: str, language: str = "EN") -> dict[str, Any]:
+def api_gtest_merge_saved_preview(
+    job_id: str,
+    language: str = "EN",
+    require_engineer_approved: bool = False,
+) -> dict[str, Any]:
     from web.code_text_transform import merge_saved_code_preview
 
     bundle = _bundle_for_job(job_id)
@@ -3423,8 +4363,67 @@ def api_gtest_merge_saved_preview(job_id: str, language: str = "EN") -> dict[str
         bundle,
         language=language or "EN",
         sync_map=sync_map,
+        require_engineer_approved=require_engineer_approved,
+        job_id=job_id,
     )
     return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/testcode-approve")
+def api_testcode_approve(job_id: str, body: TestCodeApprovalRequest) -> dict[str, Any]:
+    from web.test_code_approval import approve_test_code_drafts
+
+    gtest_state = _load_job_gtest_state(job_id)
+    ids = [c for c in (body.candidate_ids or []) if c]
+    if not ids:
+        raise HTTPException(400, "candidate_ids required")
+    result = approve_test_code_drafts(gtest_state, ids, only_saved=True)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/testcode-approve-all-saved")
+def api_testcode_approve_all_saved(job_id: str) -> dict[str, Any]:
+    from web.test_code_approval import approve_all_saved_test_code
+
+    gtest_state = _load_job_gtest_state(job_id)
+    result = approve_all_saved_test_code(gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/testcode-mark-reviewed")
+def api_testcode_mark_reviewed(job_id: str, body: TestCodeApprovalRequest) -> dict[str, Any]:
+    from web.test_code_approval import mark_test_code_reviewed
+
+    gtest_state = _load_job_gtest_state(job_id)
+    ids = [c for c in (body.candidate_ids or []) if c]
+    if not ids:
+        raise HTTPException(400, "candidate_ids required")
+    result = mark_test_code_reviewed(gtest_state, ids)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/testcode-reopen")
+def api_testcode_reopen(job_id: str, body: TestCodeApprovalRequest) -> dict[str, Any]:
+    from web.test_code_approval import reopen_test_code_drafts
+
+    gtest_state = _load_job_gtest_state(job_id)
+    ids = [c for c in (body.candidate_ids or []) if c]
+    if not ids:
+        raise HTTPException(400, "candidate_ids required")
+    result = reopen_test_code_drafts(gtest_state, ids)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, **result}
+
+
+@app.get("/api/review/testcode-workflow-counts")
+def api_testcode_workflow_counts(job_id: str) -> dict[str, Any]:
+    from web.test_code_approval import count_workflow_statuses
+
+    gtest_state = _load_job_gtest_state(job_id)
+    return {"job_id": job_id, "counts": count_workflow_statuses(gtest_state)}
 
 
 @app.put("/api/review/code-variable-map")
@@ -3444,11 +4443,13 @@ def api_gtest_harness(job_id: str, body: GTestHarnessRequest) -> dict[str, Any]:
 
 
 @app.get("/api/export/gtest-cpp")
-def api_export_gtest_cpp(job_id: str, candidate_id: str) -> Response:
+@app.get("/api/export/gtest-cc")
+def api_export_gtest_cc(job_id: str, candidate_id: str) -> Response:
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     content = export_single_snippet(bundle, gtest_state, candidate_id)
-    filename = f"{candidate_id}.cpp"
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(candidate_id or "testcase"))[:80]
+    filename = f"{safe_id}.cc"
     return Response(
         content=content,
         media_type="text/plain; charset=utf-8",
@@ -3457,14 +4458,38 @@ def api_export_gtest_cpp(job_id: str, candidate_id: str) -> Response:
 
 
 @app.get("/api/export/gtest-cpp-bundle")
-def api_export_gtest_cpp_bundle(job_id: str) -> Response:
+def api_export_gtest_cc_bundle(job_id: str) -> Response:
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     content = export_approved_bundle(bundle, gtest_state)
     return Response(
         content=content,
         media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="alex_generated_tests.cpp"'},
+        headers={"Content-Disposition": 'attachment; filename="alex_generated_tests.cc"'},
+    )
+
+
+@app.get("/api/export/gtest-cc-final")
+def api_export_gtest_cc_final(job_id: str, language: str = "EN") -> Response:
+    from web.code_text_transform import merge_saved_code_preview
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    sync = classify_sync_status(bundle, gtest_state, language=language or "EN")
+    sync_map = {str(r.get("candidate_id") or ""): str(r.get("status") or "") for r in sync.get("rows") or []}
+    merged = merge_saved_code_preview(
+        gtest_state,
+        bundle,
+        language=language or "EN",
+        sync_map=sync_map,
+        require_engineer_approved=True,
+        job_id=job_id,
+    )
+    filename = str(merged.get("export_filename") or "ALEX_GTest_export.cc")
+    return Response(
+        content=str(merged.get("content") or ""),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

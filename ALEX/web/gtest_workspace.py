@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -91,6 +92,8 @@ def load_gtest_state(job_output: Path, cfg: dict[str, Any] | None = None) -> dic
     base["code_variable_map"] = dict(data.get("code_variable_map") or {})
     base["drafts"] = dict(data.get("drafts") or {})
     base["tc_code_index"] = dict(data.get("tc_code_index") or {})
+    base["mapping_coverage"] = dict(data.get("mapping_coverage") or {})
+    base["project_code_config_meta"] = dict(data.get("project_code_config_meta") or {})
     base["updated_at"] = data.get("updated_at") or base["updated_at"]
     return base
 
@@ -103,6 +106,8 @@ def save_gtest_state(job_output: Path, state: dict[str, Any]) -> None:
         "code_variable_map": state.get("code_variable_map") or {},
         "drafts": state.get("drafts") or {},
         "tc_code_index": state.get("tc_code_index") or {},
+        "mapping_coverage": state.get("mapping_coverage") or {},
+        "project_code_config_meta": state.get("project_code_config_meta") or {},
         "updated_at": _now_iso(),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -373,6 +378,11 @@ def build_workspace_payload(
         "tc_code_index": gtest_state.get("tc_code_index") or {},
         "code_style_samples": load_code_style_samples(bundle),
         "copilot_batch": gtest_state.get("copilot_batch") or {},
+        "mapping_coverage": gtest_state.get("mapping_coverage") or {},
+        "smart_workflow_run_report": gtest_state.get("smart_workflow_run_report") or {},
+        "code_exemplar": gtest_state.get("code_exemplar") or {},
+        "exemplar_batch": gtest_state.get("exemplar_batch") or {},
+        "project_code_config_meta": gtest_state.get("project_code_config_meta") or {},
         "logic_items": logic_items,
         "workbench_rows": preview.get("rows") or [],
         "code_references": bundle.get("code_references") or [],
@@ -474,10 +484,23 @@ def save_draft(
         payload = wrap_draft_markers(cid, payload, spec_hash=str(payload.get("spec_hash") or ""))
     drafts = dict(gtest_state.get("drafts") or {})
     meta: dict[str, Any] = {}
-    for key in ("code_status", "generation_source", "last_saved_at"):
+    for key in (
+        "code_status",
+        "generation_source",
+        "last_saved_at",
+        "workflow_error",
+        "workflow_message",
+        "quality_summary",
+        "review_reason",
+        "mapping_ready",
+    ):
         val = payload.get(key)
-        if val:
+        if val is not None and val != "":
             meta[key] = val
+    if payload.get("quality_results"):
+        meta["quality_results"] = payload.get("quality_results")
+    if payload.get("mapping_missing"):
+        meta["mapping_missing"] = payload.get("mapping_missing")
     drafts[draft_key] = {
         **payload,
         **meta,
@@ -487,6 +510,237 @@ def save_draft(
     gtest_state["drafts"] = drafts
     gtest_state["updated_at"] = _now_iso()
     return gtest_state
+
+
+def inject_testcase_id_comment(snippet: str, candidate_id: str) -> str:
+    """Ensure testcase id appears in spec comments when missing."""
+    cid = str(candidate_id or "").strip()
+    text = str(snippet or "")
+    if not cid or cid in text:
+        return text
+    match = re.search(r"\bTEST(?:_F)?\s*\(", text)
+    if not match:
+        return f"// Testcase: {cid}\n{text}".strip()
+    idx = match.start()
+    prefix = text[:idx].rstrip()
+    inject = f"// Testcase: {cid}"
+    if prefix:
+        return f"{prefix}\n{inject}\n{text[idx:]}".strip()
+    return f"{inject}\n{text[idx:]}".strip()
+
+
+def _workflow_result(
+    code_status: str,
+    workflow_message: str,
+    prepared_snippet: str,
+    validation: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "code_status": code_status,
+        "workflow_status": code_status,
+        "workflow_message": workflow_message,
+        "prepared_snippet": prepared_snippet,
+        "validation": validation,
+        "ok": code_status == "SAVED",
+    }
+
+
+def classify_generated_code_workflow(
+    code: str,
+    *,
+    candidate_id: str = "",
+    sample_snippet: str = "",
+    structured_io: dict[str, Any] | None = None,
+    code_rules_md: str = "",
+    api_catalog_yaml: str = "",
+    expected_input: str = "",
+    expected_output: str = "",
+) -> dict[str, Any]:
+    """Map generated code to SAVED / NEEDS_REVIEW / ERROR using quality gate."""
+    from web.code_quality_gate import quality_to_code_status, run_quality_gate
+
+    prepared = inject_testcase_id_comment(str(code or "").strip(), candidate_id)
+    qg = run_quality_gate(
+        prepared,
+        candidate_id=candidate_id,
+        structured_io=structured_io,
+        code_rules_md=code_rules_md,
+        api_catalog_yaml=api_catalog_yaml,
+        sample_snippet=sample_snippet,
+        expected_input=expected_input,
+        expected_output=expected_output,
+    )
+    if not prepared.strip():
+        return _workflow_result("ERROR", "empty result", "", qg)
+    status = quality_to_code_status(qg["summary"])
+    msg = "generated by API" if status == "SAVED" else "; ".join(
+        c["message"] for c in qg.get("checks") or [] if c.get("severity") in ("WARNING", "FAIL")
+    )[:400]
+    out = _workflow_result(status, msg or status, prepared, qg)
+    out["quality_results"] = qg.get("checks") or []
+    out["quality_summary"] = qg.get("summary")
+    return out
+
+
+def _split_snippet_for_save(full: str) -> tuple[str, str]:
+    body_start = re.search(r"\bTEST(?:_F)?\s*\(", full or "")
+    if body_start and body_start.start() > 0:
+        return full[: body_start.start()].strip(), full[body_start.start() :].strip()
+    if body_start:
+        return "", full[body_start.start() :].strip()
+    return full.strip(), ""
+
+
+def persist_generated_draft_workflow(
+    bundle: dict[str, Any],
+    gtest_state: dict[str, Any],
+    *,
+    candidate_id: str,
+    draft_payload: dict[str, Any],
+    generation_source: str = "API",
+    language: str = "EN",
+    sample_snippet: str = "",
+    code_rules_md: str = "",
+    api_catalog_yaml: str = "",
+    persist: bool = True,
+) -> dict[str, Any]:
+    """Validate, classify, and optionally persist a generated draft with workflow metadata."""
+    cid = str(candidate_id or "").strip()
+    full = str(draft_payload.get("full_snippet") or "").strip()
+    if not full:
+        body = str(draft_payload.get("code_body") or "").strip()
+        spec = str(draft_payload.get("spec_comment_block") or "").strip()
+        if spec and body:
+            full = f"{spec}\n{body}".strip()
+        elif body:
+            full = body
+
+    wb = _workbench_row_for_candidate(bundle, cid, language=language) if cid else None
+    structured = _structured_io_for_candidate(bundle, cid, language=language) if cid else {}
+    cfg_cache = gtest_state.get("project_code_config_cache") or {}
+    rules = code_rules_md or str(cfg_cache.get("code_rules.md") or "")
+    catalog = api_catalog_yaml or str(cfg_cache.get("api_catalog.yaml") or "")
+    wf = classify_generated_code_workflow(
+        full,
+        candidate_id=cid,
+        sample_snippet=sample_snippet,
+        structured_io=structured,
+        code_rules_md=rules,
+        api_catalog_yaml=catalog,
+        expected_input=str(wb.get("expected_input") or "") if wb else "",
+        expected_output=str(wb.get("expected_output") or "") if wb else "",
+    )
+    prepared = str(wf.get("prepared_snippet") or "").strip()
+    code_status = str(wf.get("code_status") or "ERROR")
+
+    if not prepared and code_status == "ERROR":
+        if persist and cid:
+            save_draft(
+                gtest_state,
+                draft_key=cid,
+                draft={
+                    "full_snippet": "",
+                    "code_body": "",
+                    "code_status": "ERROR",
+                    "workflow_error": wf.get("workflow_message") or "empty result",
+                    "generation_source": generation_source,
+                },
+                engineer_edited=False,
+                wrap_markers=False,
+            )
+        return {**wf, "candidate_id": cid, "draft": {}}
+
+    spec_block, code_body = _split_snippet_for_save(prepared)
+    structured = _structured_io_for_candidate(bundle, cid, language=language) if cid else {}
+    spec_hash = compute_spec_hash(structured) if structured else ""
+    body_hash = compute_body_hash(structured) if structured else ""
+
+    draft_to_save: dict[str, Any] = {
+        **draft_payload,
+        "full_snippet": prepared,
+        "spec_comment_block": spec_block,
+        "code_body": code_body,
+        "spec_hash": spec_hash,
+        "body_hash": body_hash,
+        "code_status": code_status,
+        "workflow_message": wf.get("workflow_message") or "",
+        "generation_source": generation_source,
+        "last_saved_at": _now_iso() if code_status == "SAVED" else None,
+        "quality_results": wf.get("quality_results") or wf.get("validation", {}).get("checks") or [],
+        "quality_summary": wf.get("quality_summary") or draft_payload.get("quality_summary") or "",
+        "review_reason": (wf.get("workflow_message") or "") if code_status != "SAVED" else "",
+    }
+    for extra in ("mapping_ready", "mapping_missing"):
+        if draft_payload.get(extra) is not None:
+            draft_to_save[extra] = draft_payload.get(extra)
+    if code_status == "ERROR":
+        draft_to_save["workflow_error"] = wf.get("workflow_message") or "save blocked"
+
+    if persist and cid:
+        try:
+            save_draft(
+                gtest_state,
+                draft_key=cid,
+                draft=draft_to_save,
+                engineer_edited=False,
+                wrap_markers=bool(prepared),
+            )
+        except Exception as exc:
+            err = f"save failed: {exc}"
+            save_draft(
+                gtest_state,
+                draft_key=cid,
+                draft={
+                    "full_snippet": prepared,
+                    "code_body": code_body,
+                    "spec_comment_block": spec_block,
+                    "code_status": "ERROR",
+                    "workflow_error": err,
+                    "generation_source": generation_source,
+                },
+                engineer_edited=False,
+                wrap_markers=bool(prepared),
+            )
+            return {
+                "candidate_id": cid,
+                "code_status": "ERROR",
+                "workflow_status": "ERROR",
+                "workflow_message": err,
+                "prepared_snippet": prepared,
+                "validation": wf.get("validation") or {},
+                "ok": False,
+                "draft": (gtest_state.get("drafts") or {}).get(cid) or {},
+            }
+
+    saved = (gtest_state.get("drafts") or {}).get(cid) or draft_to_save
+    return {**wf, "candidate_id": cid, "draft": saved}
+
+
+def persist_batch_generation_error(
+    gtest_state: dict[str, Any],
+    *,
+    candidate_id: str,
+    error_message: str,
+    generation_source: str = "API",
+    persist: bool = True,
+) -> None:
+    cid = str(candidate_id or "").strip()
+    if not cid or not persist:
+        return
+    save_draft(
+        gtest_state,
+        draft_key=cid,
+        draft={
+            "full_snippet": "",
+            "code_body": "",
+            "code_status": "ERROR",
+            "workflow_error": str(error_message or "API failed")[:500],
+            "workflow_message": str(error_message or "API failed")[:500],
+            "generation_source": generation_source,
+        },
+        engineer_edited=False,
+        wrap_markers=False,
+    )
 
 
 def export_single_snippet(

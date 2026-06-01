@@ -18,6 +18,8 @@ TASK_KINDS = frozenset(
         "code_generate",
         "code_refine",
         "code_batch",
+        "code_exemplar_batch",
+        "code_copilot_batch",
         "copilot_plan",
         "copilot_write",
         "copilot_context_plan",

@@ -337,7 +337,12 @@ def _dedupe_includes_merge(parts: list[str]) -> str:
 _TEST_SIG_RE = re.compile(r"\bTEST(?:_F)?\s*\([^)]+\)")
 
 
-def _merge_skip_reason(draft: dict[str, Any], sync_status: str) -> str:
+def _merge_skip_reason(
+    draft: dict[str, Any],
+    sync_status: str,
+    *,
+    require_engineer_approved: bool = False,
+) -> str:
     full = str(draft.get("full_snippet") or draft.get("code_body") or "").strip()
     if not full:
         return "NO_CODE"
@@ -352,7 +357,15 @@ def _merge_skip_reason(draft: dict[str, Any], sync_status: str) -> str:
         return "DRAFT_NOT_SAVED"
     if sync_status in ("stale_comment", "stale_body", "orphan_code"):
         return "NEEDS_REVIEW"
+    if require_engineer_approved and not draft.get("engineer_approved"):
+        return "NOT_APPROVED"
     return "SAVED"
+
+
+def merge_export_filename(job_id: str, *, timestamp: str | None = None) -> str:
+    ts = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_job = re.sub(r"[^A-Za-z0-9_-]+", "_", str(job_id or "job"))[:48]
+    return f"ALEX_GTest_{safe_job}_{ts}.cc"
 
 
 def _block_body_signature(part: str) -> str:
@@ -397,8 +410,10 @@ def merge_saved_code_preview(
     language: str = "EN",
     sync_map: dict[str, str] | None = None,
     timestamp: str | None = None,
+    require_engineer_approved: bool = False,
+    job_id: str = "",
 ) -> dict[str, Any]:
-    """Merge only drafts with persisted code_status SAVED and in-sync spec."""
+    """Merge drafts with code_status SAVED (and optionally engineer_approved) in import order."""
     from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
 
     preview = build_customer_testspec_preview(bundle, language=language)
@@ -424,7 +439,9 @@ def merge_saved_code_preview(
     for cid in ordered_ids:
         draft = drafts.get(cid) or {}
         sync_status = str(sync_map.get(cid) or "no_code")
-        reason = _merge_skip_reason(draft, sync_status)
+        reason = _merge_skip_reason(
+            draft, sync_status, require_engineer_approved=require_engineer_approved
+        )
         if reason != "SAVED":
             skipped.append({"candidate_id": cid, "reason": reason})
             continue
@@ -443,10 +460,26 @@ def merge_saved_code_preview(
         code_parts.append(full)
         included.append(cid)
 
+    saved_quality_pass = 0
+    saved_quality_warning = 0
+    for cid in included:
+        draft = drafts.get(cid) or {}
+        qs = str(draft.get("quality_summary") or "PASS").upper()
+        if qs == "WARNING":
+            saved_quality_warning += 1
+            rr = str(draft.get("review_reason") or "quality warnings")[:120]
+            warnings.append(f"{cid}: SAVED with unresolved quality WARNING — {rr}")
+        else:
+            saved_quality_pass += 1
+
     code_parts, dedupe_warnings = _dedupe_test_blocks(code_parts)
     warnings.extend(dedupe_warnings)
     if skipped and included:
         warnings.append("Some testcases are not saved or have no code. Merge includes only SAVED code.")
+    if saved_quality_warning:
+        warnings.append(
+            f"{saved_quality_warning} saved testcase(s) have quality WARNING; review before shipping merged file."
+        )
     if not included:
         warnings.append("No saved testcase code available to merge.")
 
@@ -460,6 +493,7 @@ def merge_saved_code_preview(
         " */\n"
     )
     merged = header + _dedupe_includes_merge(code_parts)
+    export_name = merge_export_filename(job_id)
     return {
         "ok": True,
         "content": merged,
@@ -471,4 +505,12 @@ def merge_saved_code_preview(
         "skipped_count": len(skipped),
         "warning_count": len(warnings),
         "timestamp": ts,
+        "export_filename": export_name,
+        "require_engineer_approved": require_engineer_approved,
+        "merge_readiness": {
+            "saved_quality_pass": saved_quality_pass,
+            "saved_quality_warning": saved_quality_warning,
+            "saved_total": len(included),
+            "skipped_count": len(skipped),
+        },
     }

@@ -8,7 +8,11 @@ from typing import Any, Callable
 
 from web.copilot_code_context_pack import build_code_context_pack
 from web.copilot_code_writer import code_write_batch_size, run_code_refine, run_code_write
-from web.gtest_workspace import generate_draft_for_request, save_draft
+from web.gtest_workspace import (
+    generate_draft_for_request,
+    persist_batch_generation_error,
+    persist_generated_draft_workflow,
+)
 
 _PACK_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PACK_CACHE_TTL_S = 300.0
@@ -245,8 +249,16 @@ def run_copilot_code_generate_batch(
     preview = build_customer_testspec_preview(bundle, language=language)
     row_by_id = {str(r.get("candidate_id") or ""): r for r in preview.get("rows") or []}
     batch_size = code_write_batch_size(cfg)
+    sample_snippet = ""
+    if library_code_samples:
+        sample_snippet = str((library_code_samples[0] or {}).get("snippet") or "")
+    cfg_cache = gtest_state.get("project_code_config_cache") or {}
+    code_rules_md = str(cfg_cache.get("code_rules.md") or "")
+    api_catalog_yaml = str(cfg_cache.get("api_catalog.yaml") or "")
     results: list[dict[str, Any]] = []
-    ok_count = 0
+    saved_count = 0
+    needs_review_count = 0
+    error_count = 0
     skip_count = 0
 
     for idx, cid in enumerate(candidate_ids):
@@ -261,6 +273,8 @@ def run_copilot_code_generate_batch(
                     "candidate_id": cid,
                     "ok": False,
                     "skipped": True,
+                    "workflow_status": "skipped",
+                    "workflow_message": "missing expected I/O",
                     "reason": "missing_expected_io",
                 }
             )
@@ -284,28 +298,90 @@ def run_copilot_code_generate_batch(
                 bundle_version=bundle_version,
             )
         except KeyError as exc:
-            results.append({"candidate_id": cid, "ok": False, "error": str(exc)})
+            msg = str(exc)
+            if persist_drafts:
+                persist_batch_generation_error(gtest_state, candidate_id=cid, error_message=msg)
+            results.append(
+                {
+                    "candidate_id": cid,
+                    "ok": False,
+                    "error": msg,
+                    "workflow_status": "ERROR",
+                    "workflow_message": msg,
+                    "code_status": "ERROR",
+                }
+            )
+            error_count += 1
             continue
 
-        entry: dict[str, Any] = {
+        copilot_draft = one.get("copilot_draft") or one.get("draft") or {}
+        if not one.get("ok") or not (
+            copilot_draft.get("full_snippet") or copilot_draft.get("code_body")
+        ):
+            msg = str(one.get("error") or "API failed")
+            if persist_drafts:
+                persist_batch_generation_error(gtest_state, candidate_id=cid, error_message=msg)
+            results.append(
+                {
+                    "candidate_id": cid,
+                    "ok": False,
+                    "error": msg,
+                    "copilot_draft": copilot_draft,
+                    "validation": one.get("validation") or {},
+                    "workflow_status": "ERROR",
+                    "workflow_message": msg,
+                    "code_status": "ERROR",
+                }
+            )
+            error_count += 1
+            continue
+
+        wf: dict[str, Any]
+        if persist_drafts:
+            wf = persist_generated_draft_workflow(
+                bundle,
+                gtest_state,
+                candidate_id=cid,
+                draft_payload={**copilot_draft, "source_kind": "copilot"},
+                generation_source="API",
+                language=language,
+                sample_snippet=sample_snippet,
+                code_rules_md=code_rules_md,
+                api_catalog_yaml=api_catalog_yaml,
+                persist=True,
+            )
+        else:
+            from web.gtest_workspace import classify_generated_code_workflow
+
+            full = str(copilot_draft.get("full_snippet") or copilot_draft.get("code_body") or "")
+            wf = classify_generated_code_workflow(
+                full,
+                candidate_id=cid,
+                sample_snippet=sample_snippet,
+                code_rules_md=code_rules_md,
+                api_catalog_yaml=api_catalog_yaml,
+            )
+            wf = {**wf, "candidate_id": cid, "draft": copilot_draft}
+
+        wf_status = str(wf.get("workflow_status") or wf.get("code_status") or "ERROR")
+        if wf_status == "SAVED":
+            saved_count += 1
+        elif wf_status == "NEEDS_REVIEW":
+            needs_review_count += 1
+        elif wf_status == "ERROR":
+            error_count += 1
+
+        entry = {
             "candidate_id": cid,
-            "ok": one.get("ok"),
-            "copilot_draft": one.get("copilot_draft") or {},
-            "validation": one.get("validation") or {},
+            "ok": wf_status == "SAVED",
+            "copilot_draft": wf.get("draft") or copilot_draft,
+            "validation": wf.get("validation") or one.get("validation") or {},
             "error": one.get("error"),
+            "workflow_status": wf_status,
+            "workflow_message": wf.get("workflow_message") or "",
+            "code_status": wf.get("code_status") or wf_status,
+            "generation_source": "API" if wf_status == "SAVED" else "",
         }
-        if one.get("ok"):
-            ok_count += 1
-            if persist_drafts and entry["copilot_draft"].get("full_snippet"):
-                save_draft(
-                    gtest_state,
-                    draft_key=cid,
-                    draft={
-                        **entry["copilot_draft"],
-                        "source_kind": "copilot",
-                    },
-                    engineer_edited=False,
-                )
         results.append(entry)
 
         if len([r for r in results if not r.get("skipped")]) % batch_size == 0:
@@ -315,11 +391,21 @@ def run_copilot_code_generate_batch(
     gtest_state["updated_at"] = gtest_state.get("updated_at") or ""
 
     return {
-        "ok": ok_count > 0,
+        "ok": saved_count > 0,
         "total": len(candidate_ids),
-        "generated": ok_count,
+        "generated": saved_count,
+        "saved": saved_count,
+        "needs_review": needs_review_count,
         "skipped": skip_count,
-        "failed": len(candidate_ids) - ok_count - skip_count,
+        "failed": error_count,
+        "error": error_count,
         "results": results,
         "batch_size": batch_size,
+        "summary": {
+            "saved": saved_count,
+            "needs_review": needs_review_count,
+            "error": error_count,
+            "skipped": skip_count,
+            "total": len(candidate_ids),
+        },
     }
