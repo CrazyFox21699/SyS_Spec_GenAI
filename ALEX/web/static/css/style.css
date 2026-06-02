@@ -445,6 +445,9 @@ a:hover {
   align-items: center;
   gap: var(--space-3) var(--space-5);
 }
+body.page-test-code .topbar-stats {
+  display: none;
+}
 #topbar .stat {
   color: var(--text-muted);
   font-family: var(--font-sans);

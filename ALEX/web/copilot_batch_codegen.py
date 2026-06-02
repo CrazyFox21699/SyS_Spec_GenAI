@@ -277,8 +277,14 @@ def build_copilot_batch_prompt(
             f"After (expected_output):\n{str(row.get('expected_output') or '').strip()[:2800]}\n"
         )
 
-    note = str(engineer_note or "").strip()
-    note_block = f"Engineer note:\n{note[:2000]}\n\n" if note else ""
+    instruction = str(engineer_note or "").strip()
+    instruction_block = (
+        "Project instruction markdown from current editor (primary generation rules — follow exactly):\n"
+        f"{instruction[:120_000]}\n\n"
+        if instruction
+        else ""
+    )
+    stored_instruction_block = "" if instruction_block else str(context.get("project_instruction") or "")
 
     scope_bits = [
         "Use the imported testcase group/order exactly as provided. "
@@ -295,28 +301,28 @@ def build_copilot_batch_prompt(
     grouping_block = " ".join(scope_bits) + "\n\n"
 
     return (
-        "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX (API chunk mode).\n"
+        "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX.\n"
         "ALEX is a Copilot orchestrator — use testcase rows + sample code; do NOT invent new helper APIs.\n\n"
         f"{grouping_block}"
         "Rules (mandatory):\n"
         "- Follow sample .cc / project GTest style EXACTLY (fixture, EXPECT_CALL, timing, comments).\n"
-        "- Generate only the testcase IDs listed in this API chunk.\n"
+        "- Generate only the testcase IDs listed below.\n"
         "- Return code mapped exactly to testcase_id.\n"
         "- One TEST_F (or TEST) per testcase_id.\n"
         "- Spec comment must include testcase_id (e.g. // TC_PM_004 …).\n"
         "- Map Given:/When: from expected_input; Then: from expected_output.\n"
         "- If uncertain, return UNRESOLVED instead of inventing code.\n"
         "- No TODO, no placeholders.\n\n"
-        f"{context.get('project_instruction') or ''}"
+        f"{instruction_block}"
+        f"{stored_instruction_block}"
         f"{context.get('spec_context') or ''}"
         f"{context.get('config_hints') or ''}"
-        f"{note_block}"
         f"{folder_block}"
         f"Primary sample .cc (style anchor):\n{samples_text or '(none — use saved examples)'}\n"
         f"{saved_text}"
         f"{exemplar_block}"
         f"{ref_block}"
-        f"API chunk testcase IDs ({len(target_rows)}):\n"
+        f"Selected testcase IDs ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
         + "\n\nRequired output format:\n"
         "[TESTCASE_CODE]\n"
@@ -358,9 +364,15 @@ def build_copilot_batch_prompts(
     group_key: str = "",
     group_field: str = "test_group",
     exclude_candidate_ids: list[str] | None = None,
+    allow_missing_sample: bool = False,
 ) -> dict[str, Any]:
     context = collect_copilot_project_context(bundle, gtest_state, language=language)
-    if not context.get("sample_blocks") and not context.get("saved_examples") and not context.get("exemplar"):
+    if (
+        not allow_missing_sample
+        and not context.get("sample_blocks")
+        and not context.get("saved_examples")
+        and not context.get("exemplar")
+    ):
         return {
             "ok": False,
             "error": "Load sample .cc or save at least one good testcase before Generate All with Copilot API.",

@@ -773,6 +773,7 @@ class CopilotBatchPromptRequest(BaseModel):
     scope: str = "filter"
     group_key: str = ""
     group_field: str = "test_group"
+    allow_missing_sample: bool = False
 
 
 class CopilotBatchImportRequest(BaseModel):
@@ -4106,6 +4107,7 @@ def api_copilot_batch_prompt(job_id: str, body: CopilotBatchPromptRequest | None
         scope=str(body.scope if body else "filter") or "filter",
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
+        allow_missing_sample=bool(body.allow_missing_sample) if body else False,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "copilot batch prompt failed")

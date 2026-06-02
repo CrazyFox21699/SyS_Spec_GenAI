@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Start ALEX in one terminal: optional Ollama + worker (production) + web UI."""
+"""Start ALEX in one terminal: optional worker (production) + web UI."""
 
 from __future__ import annotations
 
 import atexit
-import shutil
 import signal
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,40 +22,6 @@ from src.utils.config_path import get_config_path
 from src.utils.yaml_utils import load_yaml  # noqa: E402
 
 _CHILDREN: list[subprocess.Popen] = []
-
-
-def _ollama_up(base_url: str) -> bool:
-    url = f"{base_url.rstrip('/')}/api/tags"
-    try:
-        with urllib.request.urlopen(url, timeout=2) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False
-
-
-def _start_ollama_if_needed(base_url: str) -> subprocess.Popen | None:
-    if _ollama_up(base_url):
-        print("Ollama already running.")
-        return None
-    if not shutil.which("ollama"):
-        print("Ollama not installed — skipping (AI assist offline until Ollama is installed).")
-        print("  Install: curl -fsSL https://ollama.com/install.sh | sh")
-        print("  Web + analyze still start with: ./chay.sh  (Ubuntu)  or  ./dev.sh  (Mac)")
-        return None
-    print("Starting Ollama in background (log: /tmp/alex-ollama.log)...")
-    log = open("/tmp/alex-ollama.log", "ab")  # noqa: SIM115
-    proc = subprocess.Popen(
-        ["ollama", "serve"],
-        cwd=str(ROOT),
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
-    for _ in range(15):
-        if _ollama_up(base_url):
-            return proc
-        time.sleep(0.4)
-    print("Warning: Ollama did not respond yet — continuing anyway.")
-    return proc
 
 
 def _shutdown_children() -> None:
@@ -87,7 +50,6 @@ def main() -> int:
     cfg = load_yaml(cfg_path) if cfg_path.exists() else {}
     dep = cfg.get("deployment") or {}
     mode = str(dep.get("mode", "local")).lower()
-    llm_base = str((cfg.get("llm") or {}).get("base_url") or "http://127.0.0.1:11434")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -98,10 +60,6 @@ def main() -> int:
     print(f" Folder: {ROOT}")
     print(f" Mode: {mode}")
     print("")
-
-    ollama_proc = _start_ollama_if_needed(llm_base)
-    if ollama_proc is not None:
-        _CHILDREN.append(ollama_proc)
 
     if mode == "production":
         print("Starting analyze worker in background (log: /tmp/alex-worker.log)...")

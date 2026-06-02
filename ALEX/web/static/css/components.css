@@ -1030,7 +1030,7 @@ textarea:focus-visible {
 }
 .gtest-editor--main {
   flex: 1;
-  min-height: 420px;
+  min-height: 560px;
   resize: vertical;
 }
 .gtest-spec-preview {
@@ -1126,6 +1126,12 @@ textarea.field-manual-changed,
 .alex-testcode-copilot-primary__actions {
   margin: 0.5rem 0 0.75rem;
 }
+.alex-testcode-step1-controls .alex-testcode-generate-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 0;
+}
 .alex-testcode-primary-sample-row {
   display: flex;
   flex-wrap: wrap;
@@ -1217,8 +1223,24 @@ textarea.field-manual-changed,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.65rem;
-  margin-bottom: 0.65rem;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.alex-testcode-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-strong, #8b949e);
+  border-radius: 6px;
+  background: var(--surface-input, #fff);
+  color: var(--text-primary, #111);
+  font: inherit;
+  font-weight: 600;
+}
+.alex-testcode-select-all input {
+  margin: 0;
 }
 .alex-testcode-step1-controls .tcase-select {
   min-width: 16rem;
@@ -1237,6 +1259,117 @@ textarea.field-manual-changed,
 }
 .alex-testcode-filters .testcode-case-filter.active {
   outline: 1px solid var(--accent, #4da3ff);
+}
+
+.alex-testcode-case-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.65rem 0 0.85rem;
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.alex-testcode-case-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 2.25rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--surface, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alex-testcode-case-row:hover,
+.alex-testcode-case-row.is-active {
+  border-color: var(--accent, #4da3ff);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+}
+
+.alex-testcode-case-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.alex-testcode-case-row__main > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.testcode-generate-cb {
+  margin: 0;
+}
+
+.alex-testcode-case-row__spin {
+  justify-self: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid var(--border, #555);
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.alex-testcode-case-row__spin.is-running {
+  opacity: 1;
+  border-color: var(--accent, #4da3ff);
+  border-top-color: transparent;
+  animation: alex-testcode-spin 0.75s linear infinite;
+}
+.alex-testcode-case-row__mark {
+  justify-self: center;
+  min-width: 2.25rem;
+  color: var(--text-muted, #6b7280);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+}
+.alex-testcode-case-row__mark.is-done {
+  color: var(--success, #17803d);
+}
+.alex-testcode-case-row__mark.is-failed {
+  color: var(--danger, #b42318);
+}
+.alex-testcode-progress-summary {
+  color: var(--text-muted, #667085);
+  font-size: 0.86rem;
+  margin-left: auto;
+}
+
+@keyframes alex-testcode-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.alex-testcode-stream {
+  min-height: 5rem;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.12));
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.alex-testcode-stream__list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.alex-testcode-stream__list li {
+  margin: 0.15rem 0;
 }
 
 .alex-testcode-io-context {
@@ -1258,7 +1391,7 @@ textarea.field-manual-changed,
 }
 .alex-testcode-io-readonly {
   resize: vertical;
-  min-height: 10rem;
+  min-height: 18rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
   line-height: 1.45;
@@ -1289,6 +1422,9 @@ textarea.field-manual-changed,
 .alex-testcode-rules {
   min-height: 12rem;
   resize: vertical;
+}
+.alex-testcode-instruction-actions {
+  margin-top: 0.45rem;
 }
 .alex-testcode-sample-actions {
   display: flex;
@@ -1401,9 +1537,9 @@ textarea.field-manual-changed,
   border-top: 1px solid var(--border, #333);
 }
 .testcode-wf-badge {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: inherit;
   font-size: 0.78rem;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 .alex-testcode-review-dash__grid {
   display: flex;
