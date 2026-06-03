@@ -195,6 +195,7 @@ def _run_code_copilot_batch(
         group_key=str(payload.get("group_key") or ""),
         group_field=str(payload.get("group_field") or "test_group"),
         retry_count=int(payload.get("retry_count") or 0),
+        user_id=str(payload.get("m365_user_id") or "") or None,
         progress_callback=lambda cur, tot, msg, **extra: progress(
             msg, current=cur + 1, total=tot, **extra
         ),

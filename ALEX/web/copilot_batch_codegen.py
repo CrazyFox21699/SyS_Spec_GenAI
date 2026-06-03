@@ -727,6 +727,7 @@ def run_copilot_batch_api(
     cancel_check: Any | None = None,
     retry_count: int = 0,
     allow_missing_sample: bool = False,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     built = build_copilot_batch_prompts(
         bundle,
@@ -800,6 +801,7 @@ def run_copilot_batch_api(
             cfg,
             str(batch.get("prompt") or ""),
             reuse_session_conversation=idx > 0,
+            user_id=user_id,
         )
         run["last_response_s"] = round(perf_counter() - response_started, 1)
         if not chat.get("ok"):

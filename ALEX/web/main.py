@@ -3427,6 +3427,7 @@ def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[
     bundle_version = _get_bundle_version(job_id)
     payload = dict(body.payload or {})
     payload.setdefault("bundle_version", bundle_version)
+    payload.setdefault("m365_user_id", _m365_user_id())
 
     def save_bundle(updated: dict[str, Any]) -> None:
         _save_bundle_to_job(job_id, updated)
@@ -4055,6 +4056,7 @@ def api_exemplar_batch_prompt(job_id: str, body: ExemplarBatchPromptRequest | No
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
         allow_missing_sample=bool(body.allow_missing_sample) if body else False,
+        user_id=uid,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "exemplar prompt failed")
