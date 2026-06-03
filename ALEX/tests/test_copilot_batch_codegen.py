@@ -211,15 +211,15 @@ def test_slim_prompt_limits_long_instruction_and_source() -> None:
         batch_size=1,
         allow_missing_sample=True,
         slim_prompt=True,
-        prompt_budget=18000,
+        prompt_budget=9000,
     )
 
     assert out["ok"] is True
     assert out["batch_size"] == 1
     assert out["batch_count"] == 2
     assert out["context_summary"]["slim_prompt"] is True
-    assert out["context_summary"]["max_prompt_chars"] <= 18000
-    assert all(p["char_count"] <= 18000 for p in out["prompts"])
+    assert out["context_summary"]["max_prompt_chars"] <= 9000
+    assert all(p["char_count"] <= 9000 for p in out["prompts"])
     assert "source_api_999" not in out["combined_prompt"]
     assert "strict rule 799" not in out["combined_prompt"]
     assert "[TESTCASE_CODE]" in out["combined_prompt"]

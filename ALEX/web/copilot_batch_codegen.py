@@ -20,7 +20,7 @@ _BATCH_MAX_PROMPT_CHARS = 30_000
 _BATCH_TARGET_CHARS = 1_350
 _DEFAULT_BATCH_SIZE = 1
 _ALLOWED_BATCH_SIZES = (1, 5, 10, 20)
-_SLIM_PROMPT_BUDGET = 18_000
+_SLIM_PROMPT_BUDGET = 9_000
 _FULL_PROMPT_BUDGET = 26_000
 
 _TESTCASE_CODE_SECTION_RE = re.compile(
@@ -177,7 +177,7 @@ def collect_copilot_project_context(
     samples = load_code_style_samples(bundle)
     sample_blocks: list[dict[str, str]] = []
     sample_limit = 1 if slim_prompt else 3
-    sample_chars = 3200 if slim_prompt else 10_000
+    sample_chars = 1400 if slim_prompt else 10_000
     for row in samples[:sample_limit]:
         snip = str(row.get("snippet") or "").strip()
         if snip:
@@ -190,7 +190,7 @@ def collect_copilot_project_context(
 
     saved_examples: list[dict[str, str]] = []
     saved_limit = 1 if slim_prompt else 2
-    saved_chars = 2500 if slim_prompt else 6000
+    saved_chars = 1200 if slim_prompt else 6000
     for cid, draft in (gtest_state.get("drafts") or {}).items():
         if not isinstance(draft, dict):
             continue
@@ -202,8 +202,8 @@ def collect_copilot_project_context(
 
     exemplar = get_code_exemplar(gtest_state)
     ref_snippets: list[str] = []
-    ref_limit = 1 if slim_prompt else 2
-    ref_chars = 1200 if slim_prompt else 4000
+    ref_limit = 0 if slim_prompt else 2
+    ref_chars = 0 if slim_prompt else 4000
     for ref in (bundle.get("code_references") or [])[:ref_limit]:
         if not isinstance(ref, dict):
             continue
@@ -225,7 +225,7 @@ def collect_copilot_project_context(
         "saved_examples": saved_examples,
         "exemplar": exemplar,
         "reference_snippets": ref_snippets[: (1 if slim_prompt else 4)],
-        "folder_files": folder_notes[: (12 if slim_prompt else 30)],
+        "folder_files": folder_notes[: (6 if slim_prompt else 30)],
         "project_instruction": _project_instruction_block(gtest_state, slim_prompt=slim_prompt),
         "spec_context": _bundle_spec_context(bundle, language=language),
         "config_hints": _optional_config_hints(gtest_state, slim_prompt=slim_prompt),
@@ -308,8 +308,8 @@ def build_copilot_batch_prompt(
     exemplar = context.get("exemplar")
     exemplar_block = ""
     if exemplar and exemplar.get("generated_code"):
-        exemplar_code_chars = 2500 if slim_prompt else 9000
-        exemplar_io_chars = 900 if slim_prompt else 2500
+        exemplar_code_chars = 1200 if slim_prompt else 9000
+        exemplar_io_chars = 500 if slim_prompt else 2500
         exemplar_block = (
             f"Accepted exemplar testcase_id: {exemplar.get('candidate_id')}\n"
             f"Before:\n{_clip(exemplar.get('expected_input'), exemplar_io_chars)}\n"
@@ -327,10 +327,10 @@ def build_copilot_batch_prompt(
     folder_files = context.get("folder_files") or []
     folder_block = ""
     if folder_files:
-        folder_block = "Project code files (context): " + ", ".join(folder_files[: (12 if slim_prompt else 20)]) + "\n\n"
+        folder_block = "Project code files (context): " + ", ".join(folder_files[: (6 if slim_prompt else 20)]) + "\n\n"
 
     targets_block: list[str] = []
-    target_chars = 1600 if slim_prompt else 2800
+    target_chars = 1200 if slim_prompt else 2800
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
@@ -342,7 +342,7 @@ def build_copilot_batch_prompt(
         )
 
     instruction = str(engineer_note or "").strip()
-    instruction_chars = 6000 if slim_prompt else 12_000
+    instruction_chars = 2500 if slim_prompt else 12_000
     instruction_block = (
         "Project instruction markdown from current editor (primary generation rules — follow exactly):\n"
         f"{_clip(instruction, instruction_chars)}\n\n"

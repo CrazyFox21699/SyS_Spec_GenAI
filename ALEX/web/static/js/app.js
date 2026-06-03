@@ -8466,7 +8466,7 @@ function testCodeCopilotBatchPayload(rows, scopeOverride) {
     group_field: "test_group",
     allow_missing_sample: true,
     slim_prompt: true,
-    prompt_budget: 18000,
+    prompt_budget: 9000,
   };
 }
 
@@ -9402,7 +9402,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         group_field: "test_group",
         allow_missing_sample: true,
         slim_prompt: true,
-        prompt_budget: 18000,
+        prompt_budget: 9000,
       },
     });
     tc.activeGenerationTaskId = started.task_id;
@@ -9539,7 +9539,7 @@ async function copySelectedTestCodeWebPrompt(rows, statusEl) {
         scope: "selected",
         allow_missing_sample: true,
         slim_prompt: true,
-        prompt_budget: 18000,
+        prompt_budget: 9000,
       }),
     });
     const prompts = data.prompts || [];
