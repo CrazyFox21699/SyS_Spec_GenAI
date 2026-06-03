@@ -7352,6 +7352,28 @@ function forceOpenTestCodeCandidateInEditor(candidateId, rows = state.testCode.r
   refreshTestCodePromptPreview(rows);
 }
 
+function testCodeFallbackScaffold(candidateId, rows = state.testCode.rows || [], reason = "Copilot API did not return concrete code.") {
+  const row = rows.find((r) => r.candidate_id === candidateId) || {};
+  const ident = String(candidateId || "Generated")
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "Generated";
+  const safeIdent = /^\d/.test(ident) ? `TC_${ident}` : ident;
+  const lines = [];
+  lines.push(`// ${candidateId || "UNKNOWN"} ${row.event || row.test_function || ""}`.trim());
+  lines.push("// NEEDS_REVIEW: Copilot API fallback scaffold. Replace with project-specific RTE/mock calls.");
+  lines.push(`// Reason: ${reason}`);
+  lines.push("//");
+  lines.push("// Expected input:");
+  String(row.expected_input || "").split(/\r\n|\r|\n/).forEach((line) => lines.push(`// ${line}`));
+  lines.push("//");
+  lines.push("// Expected output:");
+  String(row.expected_output || "").split(/\r\n|\r|\n/).forEach((line) => lines.push(`// ${line}`));
+  lines.push(`TEST(AlexGeneratedFallback, ${safeIdent}) {`);
+  lines.push(`  GTEST_SKIP() << "NEEDS_REVIEW: ${String(reason).replace(/"/g, "'")}";`);
+  lines.push("}");
+  return lines.join("\n");
+}
+
 function renderTestCodeHelpCard(title, bodyHtml, primaryLabel, primaryAction) {
   return `<div class="card alex-testcode-empty">
     <h3>${esc(title)}</h3>
@@ -9446,9 +9468,12 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         const resultRows = done.result?.results || [];
         const firstId = ids[0] || resultRows[0]?.candidate_id || "";
         const firstResult = resultRows.find((r) => r.candidate_id === firstId) || resultRows[0] || {};
-        if (firstId && firstResult.full_snippet) {
+        const scaffold = firstId
+          ? (firstResult.full_snippet || testCodeFallbackScaffold(firstId, rows, firstResult.workflow_message || "Copilot API did not return concrete code."))
+          : "";
+        if (firstId && scaffold) {
           if (!tc.stashedEdits) tc.stashedEdits = {};
-          tc.stashedEdits[firstId] = firstResult.full_snippet;
+          tc.stashedEdits[firstId] = scaffold;
         }
         tc.copilotBatchPrompt = fallbackPrompt;
         tc.copilotBatchPromptIds = ids;
@@ -9460,7 +9485,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         });
         setTestCodeApiStatus("idle");
         appendTestCodeStreamLine("Copilot API did not return concrete code. A NEEDS_REVIEW scaffold is shown in the editor.");
-        if (firstId) forceOpenTestCodeCandidateInEditor(firstId, rows, firstResult.full_snippet || "");
+        if (firstId) forceOpenTestCodeCandidateInEditor(firstId, rows, scaffold);
         if (statusEl) statusEl.textContent = "Fallback scaffold loaded in editor. Review/edit code, then Confirm when OK.";
         return;
       }
