@@ -13,6 +13,7 @@ from web.gtest_workspace import (
     _workbench_row_for_candidate,
     persist_batch_generation_error,
     persist_generated_draft_workflow,
+    save_draft,
 )
 from web.m365_copilot import run_copilot_chat_result
 
@@ -37,6 +38,71 @@ _BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 _TEST_F_RE = re.compile(r"TEST_F\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,", re.I)
+
+
+def _cpp_ident(value: str, fallback: str = "Generated") -> str:
+    ident = re.sub(r"[^A-Za-z0-9_]+", "_", str(value or "")).strip("_")
+    if not ident:
+        ident = fallback
+    if ident[0].isdigit():
+        ident = f"TC_{ident}"
+    return ident
+
+
+def _review_scaffold_code(row: dict[str, Any], reason: str) -> str:
+    cid = str(row.get("candidate_id") or row.get("id") or "").strip()
+    event = str(row.get("event") or row.get("test_function") or "").strip()
+    test_name = _cpp_ident(cid or event, "GeneratedTestcase")
+    before = _clip(row.get("expected_input"), 1800)
+    after = _clip(row.get("expected_output"), 1800)
+    reason_text = str(reason or "Copilot API did not return concrete code.").replace('"', "'")
+    return (
+        f"// {cid} {event}".rstrip() + "\n"
+        "// NEEDS_REVIEW: Copilot API fallback scaffold. Replace with project-specific RTE/mock calls.\n"
+        f"// Reason: {reason_text}\n"
+        "//\n"
+        "// Expected input:\n"
+        + "\n".join(f"// {line}" for line in before.splitlines())
+        + "\n//\n"
+        "// Expected output:\n"
+        + "\n".join(f"// {line}" for line in after.splitlines())
+        + "\n"
+        f"TEST(AlexGeneratedFallback, {test_name}) {{\n"
+        f"  GTEST_SKIP() << \"NEEDS_REVIEW: {reason_text}\";\n"
+        "}\n"
+    )
+
+
+def _persist_review_scaffold(
+    gtest_state: dict[str, Any],
+    *,
+    row: dict[str, Any],
+    reason: str,
+    generation_source: str = "COPILOT_BATCH_FALLBACK",
+) -> str:
+    cid = str(row.get("candidate_id") or row.get("id") or "").strip()
+    if not cid:
+        return ""
+    full = _review_scaffold_code(row, reason)
+    body_start = re.search(r"\bTEST\s*\(", full)
+    spec = full[: body_start.start()].strip() if body_start else ""
+    body = full[body_start.start() :].strip() if body_start else full
+    save_draft(
+        gtest_state,
+        draft_key=cid,
+        draft={
+            "full_snippet": full,
+            "spec_comment_block": spec,
+            "code_body": body,
+            "code_status": "NEEDS_REVIEW",
+            "workflow_message": "Copilot API fallback scaffold; review and replace project-specific calls.",
+            "review_reason": reason,
+            "generation_source": generation_source,
+        },
+        engineer_edited=False,
+        wrap_markers=True,
+    )
+    return full
 
 
 def _now_iso() -> str:
@@ -981,21 +1047,29 @@ def run_copilot_batch_api(
             run["completed_chunks"] = idx + 1
             run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
+                row = next((r for r in list(batch.get("_target_rows") or []) if str(r.get("candidate_id") or "") == str(cid)), {})
                 if not fallback_mode:
                     persist_batch_generation_error(
                         gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
                     )
+                scaffold = _persist_review_scaffold(
+                    gtest_state,
+                    row=row or {"candidate_id": cid},
+                    reason=msg,
+                ) if fallback_mode else ""
                 all_results.append(
                     {
                         "candidate_id": cid,
                         "ok": False,
-                        "workflow_status": "OPEN" if fallback_mode else "ERROR",
+                        "workflow_status": "NEEDS_REVIEW" if fallback_mode else "ERROR",
                         "workflow_message": msg,
-                        "code_status": "OPEN" if fallback_mode else "ERROR",
+                        "code_status": "NEEDS_REVIEW" if fallback_mode else "ERROR",
+                        "full_snippet": scaffold,
                         "fallback_prompt": prompt_for_web_fallback,
                     }
                 )
                 if fallback_mode:
+                    total_review += 1
                     total_fallback += 1
                 else:
                     total_error += 1
@@ -1069,10 +1143,22 @@ def run_copilot_batch_api(
                 converted = 0
                 for r in chunk_results:
                     if str(r.get("workflow_status") or r.get("code_status") or "").upper() == "ERROR":
-                        r["workflow_status"] = "OPEN"
-                        r["code_status"] = "OPEN"
+                        cid = str(r.get("candidate_id") or "")
+                        row = next(
+                            (rr for rr in list(batch.get("_target_rows") or []) if str(rr.get("candidate_id") or "") == cid),
+                            {"candidate_id": cid},
+                        )
+                        scaffold = _persist_review_scaffold(
+                            gtest_state,
+                            row=row,
+                            reason=str(r.get("workflow_message") or reason),
+                        )
+                        r["workflow_status"] = "NEEDS_REVIEW"
+                        r["code_status"] = "NEEDS_REVIEW"
+                        r["full_snippet"] = scaffold
                         r["fallback_prompt"] = prompt_for_web_fallback
                         converted += 1
+                s["needs_review"] = converted
                 s["fallback"] = converted
                 s["error"] = 0
         for r in chunk_results:

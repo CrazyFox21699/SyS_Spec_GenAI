@@ -1467,9 +1467,9 @@ function refreshM365TaskBanner() {
     const fallback = !!t.result?.fallback_required;
     lines.push(
       `<div class="m365-task-banner__row m365-task-banner__row--done">
-        <span class="tag ${fallback ? "warning" : "high"}">${fallback ? "Prompt web" : "Xong"}</span>
-        <span>${esc(m365TaskLabel(t))}${fallback ? " — API chưa sinh code, dùng Copilot Web prompt" : ""}</span>
-        <button type="button" class="btn btn-inline" data-m365-view="${esc(t.task_id)}">${fallback ? "Xem prompt" : "Xem kết quả"}</button>
+        <span class="tag ${fallback ? "warning" : "high"}">${fallback ? "Needs review" : "Xong"}</span>
+        <span>${esc(m365TaskLabel(t))}${fallback ? " — fallback scaffold created in editor" : ""}</span>
+        <button type="button" class="btn btn-inline" data-m365-view="${esc(t.task_id)}">Xem kết quả</button>
         <button type="button" class="btn secondary btn-inline" data-m365-dismiss="${esc(t.task_id)}">Đóng</button>
       </div>`
     );
@@ -8698,7 +8698,7 @@ function testCodeGenerateStatusLabel(candidateId) {
   if (st === "running") return "Generating";
   if (st === "done") return "Done";
   if (st === "failed") return "Failed";
-  if (st === "fallback") return "Web prompt";
+  if (st === "fallback") return "Needs review";
   if (st === "confirmed") return "Confirmed";
   return "";
 }
@@ -8710,7 +8710,7 @@ function renderTestCodeProgressMarker(candidateId) {
   if (st === "queued") return `<span class="alex-testcode-case-row__mark is-queued" title="Queued">Q</span>`;
   if (st === "done") return `<span class="alex-testcode-case-row__mark is-done" title="Done">OK</span>`;
   if (st === "failed") return `<span class="alex-testcode-case-row__mark is-failed" title="Failed">ERR</span>`;
-  if (st === "fallback") return `<span class="alex-testcode-case-row__mark is-queued" title="Copilot Web prompt ready">WEB</span>`;
+  if (st === "fallback") return `<span class="alex-testcode-case-row__mark is-queued" title="Needs review">REV</span>`;
   if (st === "confirmed") return `<span class="alex-testcode-case-row__mark is-done" title="Confirmed">OK</span>`;
   return `<span class="alex-testcode-case-row__mark is-idle" title="Not generated"></span>`;
 }
@@ -8735,7 +8735,7 @@ function renderTestCodeProgressSummary(rows) {
     `Complete ${p.pct}%`,
     p.running ? `Generating ${p.running}` : "",
     p.queued ? `Queued ${p.queued}` : "",
-    p.fallback ? `Web prompt ${p.fallback}` : "",
+    p.fallback ? `Needs review ${p.fallback}` : "",
     p.failed ? `Failed ${p.failed}` : "",
   ].filter(Boolean);
   return `<span class="alex-testcode-progress-summary" id="testcode-progress-summary">${esc(parts.join(" · "))}</span>`;
@@ -8854,7 +8854,7 @@ function applyBatchWorkflowResults(result) {
   const s = tc.batchSummary || {};
   if (statusEl) {
     statusEl.textContent = result.fallback_required || s.fallback
-      ? `Copilot API did not return code — Web prompt ready: ${s.fallback ?? 0}, Error: ${s.error ?? 0}`
+      ? `Fallback scaffold created — Needs review: ${s.needs_review ?? s.fallback ?? 0}, Error: ${s.error ?? 0}`
       : `Generation done — Saved: ${s.saved ?? 0}, Needs review: ${s.needs_review ?? 0}, Error: ${s.error ?? 0}`;
   }
 }
@@ -9433,8 +9433,8 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
           clearTestCodeWorkflowError(cid);
         });
         setTestCodeApiStatus("idle");
-        appendTestCodeStreamLine("Copilot API did not return code. Copilot Web prompt is copied and shown above.");
-        if (statusEl) statusEl.textContent = "No code was generated. Copilot Web prompt is copied; paste it into Copilot Web, then paste/import the code.";
+        appendTestCodeStreamLine("Copilot API did not return concrete code. A NEEDS_REVIEW scaffold is shown in the editor.");
+        if (statusEl) statusEl.textContent = "Fallback scaffold created. Click the testcase to review/edit code, then Confirm when OK.";
         return;
       }
       const resultRows = done.result?.results || [];
