@@ -895,7 +895,7 @@ def _job_output_dir(job_id: str) -> Path:
 
 def _m365_copilot_gate() -> dict[str, Any]:
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     return m365_auth.m365_status(cfg, user_id=uid)
 
 
@@ -1022,6 +1022,22 @@ def _assert_job_access(job_id: str) -> None:
 def _m365_user_id() -> str | None:
     user = _current_team_user()
     return user.username if user else None
+
+
+def _m365_effective_user_id(cfg: dict[str, Any] | None = None) -> str | None:
+    """Prefer signed-in team user, but use legacy default M365 session if that is the only valid token."""
+    uid = _m365_user_id()
+    if not uid:
+        return None
+    c = cfg or _cfg()
+    try:
+        if m365_auth.is_api_ready(c, user_id=uid):
+            return uid
+        if m365_auth.is_api_ready(c, user_id=None):
+            return None
+    except Exception:
+        return uid
+    return uid
 
 
 def _m365_api_error(exc: Exception) -> HTTPException:
@@ -2629,7 +2645,8 @@ def api_llm_status(light: bool = Query(False)) -> dict[str, Any]:
 @app.get("/api/m365/status")
 def api_m365_status() -> dict[str, Any]:
     try:
-        return m365_auth.m365_status(_cfg(), user_id=_m365_user_id())
+        cfg = _cfg()
+        return m365_auth.m365_status(cfg, user_id=_m365_effective_user_id(cfg))
     except Exception as exc:
         raise _m365_api_error(exc) from exc
 
@@ -2640,7 +2657,7 @@ def api_m365_copilot_probe() -> dict[str, Any]:
     from web.m365_copilot import probe_copilot_api
 
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     st = m365_auth.m365_status(cfg, user_id=uid)
     if not st.get("api_ready"):
         return {"ok": False, **classify_copilot_error(m365_ready=False)}
@@ -3197,7 +3214,7 @@ def api_copilot_code_generate(job_id: str, body: CopilotCodeGenerateRequest) -> 
 @app.post("/api/review/copilot/code/generate-batch")
 def api_copilot_code_generate_batch(job_id: str, body: CopilotCodeBatchRequest) -> dict[str, Any]:
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     m365_st = m365_auth.m365_status(cfg, user_id=uid)
     if not m365_st.get("api_ready"):
         return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
@@ -3439,7 +3456,7 @@ def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[
     bundle_version = _get_bundle_version(job_id)
     payload = dict(body.payload or {})
     payload.setdefault("bundle_version", bundle_version)
-    payload.setdefault("m365_user_id", _m365_user_id())
+    payload.setdefault("m365_user_id", _m365_effective_user_id(cfg))
 
     def save_bundle(updated: dict[str, Any]) -> None:
         _save_bundle_to_job(job_id, updated)
@@ -4165,7 +4182,7 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
     from web.copilot_batch_codegen import run_copilot_batch_api
 
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     m365_st = m365_auth.m365_status(cfg, user_id=uid)
     if not m365_st.get("api_ready"):
         return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
@@ -4210,7 +4227,7 @@ def api_run_exemplar_batch_api(job_id: str, body: ExemplarBatchApiRequest | None
     from web.exemplar_batch_codegen import run_exemplar_batch_api
 
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     m365_st = m365_auth.m365_status(cfg, user_id=uid)
     if not m365_st.get("api_ready"):
         return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
@@ -5184,7 +5201,7 @@ def api_copilot_follow_up(body: CopilotFollowUpRequest, job_id: str) -> dict[str
     if not msg:
         return {"job_id": job_id, "ok": False, "error": "Message is required."}
     cfg = _cfg()
-    uid = _m365_user_id()
+    uid = _m365_effective_user_id(cfg)
     prefix = ""
     if body.logic_id:
         bundle = _bundle_for_job(job_id)
