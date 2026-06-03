@@ -130,6 +130,60 @@ def test_run_progress_records_failed_chunk_reason() -> None:
     assert progress_events[-1]["failed_chunk_reason"] == "graph timeout"
 
 
+def test_slim_prompt_limits_long_instruction_and_source() -> None:
+    long_instruction = "\n".join([f"- strict rule {i}: copy and map only" for i in range(800)])
+    long_sample = "TEST_F(F, T) {\n" + "\n".join([f"  // sample line {i}" for i in range(1200)]) + "\n}"
+    long_ref = "\n".join([f"void source_api_{i}();" for i in range(1000)])
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+            {
+                "id": "TC_B",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "2"}]},
+                "expectation": [{"signal": "B", "value": "1"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": long_sample, "label": "sample.cc"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+                "TC_B": {"expected_input": "Given: A=2", "expected_output": "Then: B=1"},
+            },
+        },
+        "code_references": [{"file": "src/main.cc", "snippet_preview": long_ref}],
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}}
+
+    out = build_copilot_batch_prompts(
+        bundle,
+        gtest_state,
+        candidate_ids=["TC_A", "TC_B"],
+        engineer_note=long_instruction,
+        batch_size=1,
+        allow_missing_sample=True,
+        slim_prompt=True,
+        prompt_budget=18000,
+    )
+
+    assert out["ok"] is True
+    assert out["batch_size"] == 1
+    assert out["batch_count"] == 2
+    assert out["context_summary"]["slim_prompt"] is True
+    assert out["context_summary"]["max_prompt_chars"] <= 18000
+    assert all(p["char_count"] <= 18000 for p in out["prompts"])
+    assert "source_api_999" not in out["combined_prompt"]
+    assert "strict rule 799" not in out["combined_prompt"]
+    assert "[TESTCASE_CODE]" in out["combined_prompt"]
+    assert "[UNRESOLVED]" in out["combined_prompt"]
+
+
 def test_run_batch_uses_copilot_reply_field(tmp_path: Path) -> None:
     bundle = {
         "test_candidates": [

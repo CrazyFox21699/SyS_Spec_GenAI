@@ -196,6 +196,9 @@ def _run_code_copilot_batch(
         group_field=str(payload.get("group_field") or "test_group"),
         retry_count=int(payload.get("retry_count") or 0),
         user_id=str(payload.get("m365_user_id") or "") or None,
+        allow_missing_sample=bool(payload.get("allow_missing_sample")),
+        slim_prompt=bool(payload.get("slim_prompt", True)),
+        prompt_budget=int(payload.get("prompt_budget") or 18000),
         progress_callback=lambda cur, tot, msg, **extra: progress(
             msg, current=cur + 1, total=tot, **extra
         ),

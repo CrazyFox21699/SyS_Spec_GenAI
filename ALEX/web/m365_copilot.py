@@ -186,6 +186,48 @@ def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str
     return _extract_assistant_text(r.json())
 
 
+def _is_graph_unauthorized(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "(401)" in text or "invalidauthenticationtoken" in text or "not authenticated" in text
+
+
+def _user_id_candidates(user_id: str | None) -> list[str | None]:
+    uid = str(user_id or "").strip() or None
+    if uid:
+        return [uid, None]
+    return [None]
+
+
+def _run_chat_once(
+    cfg: dict[str, Any],
+    prompt: str,
+    *,
+    uid: str | None,
+    conversation_id: str | None,
+    reuse_session_conversation: bool,
+    persist_conversation: bool,
+) -> dict[str, Any]:
+    token = m365_auth.require_api_token(cfg, user_id=uid)
+    conv_id = str(conversation_id or "").strip()
+    if not conv_id and reuse_session_conversation:
+        conv_id = m365_auth.get_copilot_conversation_id(user_id=uid)
+    if conv_id:
+        created = False
+    else:
+        conv_id = _create_conversation(token)
+        created = True
+    reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg))
+    if persist_conversation and conv_id:
+        m365_auth.set_copilot_conversation_id(conv_id, user_id=uid)
+    return {
+        "ok": True,
+        "reply": reply,
+        "conversation_id": conv_id,
+        "conversation_created": created,
+        "chat_ok": bool(reply.strip()),
+    }
+
+
 def _strict_procedure_prompt(brief: str) -> str:
     return (
         "You are Microsoft 365 Copilot assisting an automotive test-spec tool (ALEX).\n"
@@ -316,31 +358,54 @@ def run_copilot_chat_result(
     persist_conversation: bool = True,
 ) -> dict[str, Any]:
     """Single-turn M365 Copilot chat; returns structured result (never raises)."""
-    uid = user_id or _m365_user_id_from_context()
+    requested_uid = user_id or _m365_user_id_from_context()
+    last_exc: Exception | None = None
     try:
-        token = m365_auth.require_api_token(cfg, user_id=uid)
-        conv_id = str(conversation_id or "").strip()
-        if not conv_id and reuse_session_conversation:
-            conv_id = m365_auth.get_copilot_conversation_id(user_id=uid)
-        if conv_id:
-            created = False
-        else:
-            conv_id = _create_conversation(token)
-            created = True
-        reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg))
-        if persist_conversation and conv_id:
-            m365_auth.set_copilot_conversation_id(conv_id, user_id=uid)
-        return {
-            "ok": True,
-            "reply": reply,
-            "conversation_id": conv_id,
-            "conversation_created": created,
-            "chat_ok": bool(reply.strip()),
-        }
+        for uid in _user_id_candidates(requested_uid):
+            try:
+                return _run_chat_once(
+                    cfg,
+                    prompt,
+                    uid=uid,
+                    conversation_id=conversation_id,
+                    reuse_session_conversation=reuse_session_conversation,
+                    persist_conversation=persist_conversation,
+                )
+            except PermissionError as exc:
+                last_exc = exc
+                if uid is not None:
+                    continue
+                raise
+            except Exception as exc:
+                if isinstance(exc, (M365CopilotNotEntitledError, M365CopilotMissingScopesError)):
+                    raise
+                if _is_graph_unauthorized(exc):
+                    last_exc = exc
+                    if reuse_session_conversation:
+                        m365_auth.clear_copilot_conversation_id(user_id=uid)
+                    try:
+                        m365_auth.refresh_access_token(cfg, user_id=uid)
+                        return _run_chat_once(
+                            cfg,
+                            prompt,
+                            uid=uid,
+                            conversation_id=None,
+                            reuse_session_conversation=False,
+                            persist_conversation=persist_conversation,
+                        )
+                    except Exception as retry_exc:  # noqa: BLE001
+                        last_exc = retry_exc
+                        if uid is not None:
+                            continue
+                        raise
+                raise
+        if last_exc:
+            raise last_exc
+        raise PermissionError("Sign in to Microsoft 365 Copilot first.")
     except Exception as exc:
         if isinstance(exc, (M365CopilotNotEntitledError, M365CopilotMissingScopesError)):
             if reuse_session_conversation:
-                m365_auth.clear_copilot_conversation_id(user_id=uid)
+                m365_auth.clear_copilot_conversation_id(user_id=requested_uid)
         return _copilot_error_payload(exc)
 
 

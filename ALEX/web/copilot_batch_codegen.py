@@ -18,8 +18,10 @@ from web.m365_copilot import run_copilot_chat_result
 
 _BATCH_MAX_PROMPT_CHARS = 30_000
 _BATCH_TARGET_CHARS = 1_350
-_DEFAULT_BATCH_SIZE = 10
-_ALLOWED_BATCH_SIZES = (5, 10, 20)
+_DEFAULT_BATCH_SIZE = 1
+_ALLOWED_BATCH_SIZES = (1, 5, 10, 20)
+_SLIM_PROMPT_BUDGET = 18_000
+_FULL_PROMPT_BUDGET = 26_000
 
 _TESTCASE_CODE_SECTION_RE = re.compile(
     r"\[TESTCASE_CODE\](.*?)(?=\[ASSUMPTIONS\]|\[UNRESOLVED\]|$)",
@@ -45,11 +47,57 @@ def _normalize_batch_size(size: int | None) -> int:
     n = int(size or _DEFAULT_BATCH_SIZE)
     if n in _ALLOWED_BATCH_SIZES:
         return n
+    if n <= 1:
+        return 1
     if n <= 5:
         return 5
     if n <= 10:
         return 10
     return 20
+
+
+def _positive_limit(value: int | None, default: int) -> int:
+    try:
+        n = int(value or default)
+    except (TypeError, ValueError):
+        return default
+    return max(4000, min(n, _FULL_PROMPT_BUDGET))
+
+
+def _clip(text: Any, limit: int) -> str:
+    s = str(text or "").strip()
+    if len(s) <= limit:
+        return s
+    return s[:limit].rstrip() + "\n...[trimmed for Copilot latency]"
+
+
+def _budget_join(
+    *,
+    required_parts: list[str],
+    optional_parts: list[tuple[str, str]],
+    tail_parts: list[str],
+    budget: int,
+) -> str:
+    """Keep mandatory rules/targets/output intact; drop optional context first."""
+    required = "".join(p for p in required_parts if p)
+    tail = "".join(p for p in tail_parts if p)
+    remaining = max(budget - len(required) - len(tail), 0)
+    selected: list[str] = []
+    for label, part in optional_parts:
+        if not part:
+            continue
+        if len(part) <= remaining:
+            selected.append(part)
+            remaining -= len(part)
+        elif remaining > 800:
+            selected.append(f"{label}\n{_clip(part, remaining)}\n")
+            remaining = 0
+            break
+    prompt = required + "".join(selected) + tail
+    if len(prompt) <= budget:
+        return prompt
+    head_budget = max(budget - len(tail), 4000)
+    return _clip(required + "".join(selected), head_budget) + "\n\n" + tail
 
 
 def _draft_full_snippet(draft: dict[str, Any]) -> str:
@@ -68,23 +116,25 @@ def get_code_exemplar(gtest_state: dict[str, Any]) -> dict[str, Any] | None:
     return ex if isinstance(ex, dict) and ex.get("candidate_id") else None
 
 
-def _optional_config_hints(gtest_state: dict[str, Any]) -> str:
+def _optional_config_hints(gtest_state: dict[str, Any], *, slim_prompt: bool = True) -> str:
     cache = gtest_state.get("project_code_config_cache") or {}
     rules = str(cache.get("code_rules.md") or "").strip()
     if not rules or len(rules) < 40 or "Inferred" in rules[:200]:
         return ""
+    limit = 1200 if slim_prompt else 3500
     return (
         "Optional internal hints (do not treat as strict rules — sample .cc style wins):\n"
-        f"{rules[:3500]}\n\n"
+        f"{_clip(rules, limit)}\n\n"
     )
 
 
-def _project_instruction_block(gtest_state: dict[str, Any]) -> str:
+def _project_instruction_block(gtest_state: dict[str, Any], *, slim_prompt: bool = True) -> str:
     cache = gtest_state.get("project_code_config_cache") or {}
     instr = str(cache.get("project_instruction.md") or "").strip()
     if not instr:
         return ""
-    return f"Engineer project instruction (primary — follow this):\n{instr[:8000]}\n\n"
+    limit = 5000 if slim_prompt else 8000
+    return f"Engineer project instruction (primary — follow this):\n{_clip(instr, limit)}\n\n"
 
 
 def _bundle_spec_context(bundle: dict[str, Any], *, language: str = "EN") -> str:
@@ -121,42 +171,49 @@ def collect_copilot_project_context(
     gtest_state: dict[str, Any],
     *,
     language: str = "EN",
+    slim_prompt: bool = True,
 ) -> dict[str, Any]:
     """Gather style/context from samples, drafts, exemplar, references — no YAML required."""
     samples = load_code_style_samples(bundle)
     sample_blocks: list[dict[str, str]] = []
-    for row in samples[:3]:
+    sample_limit = 1 if slim_prompt else 3
+    sample_chars = 3200 if slim_prompt else 10_000
+    for row in samples[:sample_limit]:
         snip = str(row.get("snippet") or "").strip()
         if snip:
             sample_blocks.append(
                 {
                     "label": str(row.get("label") or row.get("source_file") or "sample.cc"),
-                    "snippet": snip[:10_000],
+                    "snippet": _clip(snip, sample_chars),
                 }
             )
 
     saved_examples: list[dict[str, str]] = []
+    saved_limit = 1 if slim_prompt else 2
+    saved_chars = 2500 if slim_prompt else 6000
     for cid, draft in (gtest_state.get("drafts") or {}).items():
         if not isinstance(draft, dict):
             continue
         code = _draft_full_snippet(draft)
         if str(draft.get("code_status") or "").upper() == "SAVED" and re.search(r"\bTEST(?:_F)?\s*\(", code):
-            saved_examples.append({"candidate_id": str(cid), "code": code[:6000]})
-        if len(saved_examples) >= 2:
+            saved_examples.append({"candidate_id": str(cid), "code": _clip(code, saved_chars)})
+        if len(saved_examples) >= saved_limit:
             break
 
     exemplar = get_code_exemplar(gtest_state)
     ref_snippets: list[str] = []
-    for ref in (bundle.get("code_references") or [])[:2]:
+    ref_limit = 1 if slim_prompt else 2
+    ref_chars = 1200 if slim_prompt else 4000
+    for ref in (bundle.get("code_references") or [])[:ref_limit]:
         if not isinstance(ref, dict):
             continue
         prev = str(ref.get("snippet_preview") or "")
         if prev:
-            ref_snippets.append(prev[:4000])
-        for block in (ref.get("test_blocks") or [])[:2]:
+            ref_snippets.append(_clip(prev, ref_chars))
+        for block in (ref.get("test_blocks") or [])[: (1 if slim_prompt else 2)]:
             sn = str(block.get("snippet") or block.get("code_body") or "")
             if sn:
-                ref_snippets.append(sn[:4000])
+                ref_snippets.append(_clip(sn, ref_chars))
 
     folder_notes: list[str] = []
     for ref in bundle.get("code_references") or []:
@@ -167,12 +224,13 @@ def collect_copilot_project_context(
         "sample_blocks": sample_blocks,
         "saved_examples": saved_examples,
         "exemplar": exemplar,
-        "reference_snippets": ref_snippets[:4],
-        "folder_files": folder_notes[:30],
-        "project_instruction": _project_instruction_block(gtest_state),
+        "reference_snippets": ref_snippets[: (1 if slim_prompt else 4)],
+        "folder_files": folder_notes[: (12 if slim_prompt else 30)],
+        "project_instruction": _project_instruction_block(gtest_state, slim_prompt=slim_prompt),
         "spec_context": _bundle_spec_context(bundle, language=language),
-        "config_hints": _optional_config_hints(gtest_state),
+        "config_hints": _optional_config_hints(gtest_state, slim_prompt=slim_prompt),
         "language": language,
+        "slim_prompt": bool(slim_prompt),
     }
 
 
@@ -235,7 +293,10 @@ def build_copilot_batch_prompt(
     engineer_note: str = "",
     scope_label: str = "",
     import_group_label: str = "",
+    slim_prompt: bool = True,
+    prompt_budget: int | None = None,
 ) -> str:
+    budget = _positive_limit(prompt_budget, _SLIM_PROMPT_BUDGET if slim_prompt else _FULL_PROMPT_BUDGET)
     samples_text = ""
     for block in context.get("sample_blocks") or []:
         samples_text += f"\n### {block['label']}\n```cpp\n{block['snippet']}\n```\n"
@@ -247,11 +308,13 @@ def build_copilot_batch_prompt(
     exemplar = context.get("exemplar")
     exemplar_block = ""
     if exemplar and exemplar.get("generated_code"):
+        exemplar_code_chars = 2500 if slim_prompt else 9000
+        exemplar_io_chars = 900 if slim_prompt else 2500
         exemplar_block = (
             f"Accepted exemplar testcase_id: {exemplar.get('candidate_id')}\n"
-            f"Before:\n{str(exemplar.get('expected_input') or '')[:2500]}\n"
-            f"After:\n{str(exemplar.get('expected_output') or '')[:2500]}\n"
-            f"```cpp\n{str(exemplar.get('generated_code') or '')[:9000]}\n```\n\n"
+            f"Before:\n{_clip(exemplar.get('expected_input'), exemplar_io_chars)}\n"
+            f"After:\n{_clip(exemplar.get('expected_output'), exemplar_io_chars)}\n"
+            f"```cpp\n{_clip(exemplar.get('generated_code'), exemplar_code_chars)}\n```\n\n"
         )
 
     refs = context.get("reference_snippets") or []
@@ -264,23 +327,25 @@ def build_copilot_batch_prompt(
     folder_files = context.get("folder_files") or []
     folder_block = ""
     if folder_files:
-        folder_block = "Project code files (context): " + ", ".join(folder_files[:20]) + "\n\n"
+        folder_block = "Project code files (context): " + ", ".join(folder_files[: (12 if slim_prompt else 20)]) + "\n\n"
 
     targets_block: list[str] = []
+    target_chars = 1600 if slim_prompt else 2800
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
         targets_block.append(
             f"testcase_id: {cid}\n"
             f"event: {event}\n"
-            f"Before (expected_input):\n{str(row.get('expected_input') or '').strip()[:2800]}\n"
-            f"After (expected_output):\n{str(row.get('expected_output') or '').strip()[:2800]}\n"
+            f"Before (expected_input):\n{_clip(row.get('expected_input'), target_chars)}\n"
+            f"After (expected_output):\n{_clip(row.get('expected_output'), target_chars)}\n"
         )
 
     instruction = str(engineer_note or "").strip()
+    instruction_chars = 6000 if slim_prompt else 12_000
     instruction_block = (
         "Project instruction markdown from current editor (primary generation rules — follow exactly):\n"
-        f"{instruction[:120_000]}\n\n"
+        f"{_clip(instruction, instruction_chars)}\n\n"
         if instruction
         else ""
     )
@@ -300,7 +365,7 @@ def build_copilot_batch_prompt(
     )
     grouping_block = " ".join(scope_bits) + "\n\n"
 
-    return (
+    required_head = (
         "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX.\n"
         "ALEX is a Copilot orchestrator — use testcase rows + sample code; do NOT invent new helper APIs.\n\n"
         f"{grouping_block}"
@@ -316,12 +381,16 @@ def build_copilot_batch_prompt(
         f"{instruction_block}"
         f"{stored_instruction_block}"
         f"{context.get('spec_context') or ''}"
-        f"{context.get('config_hints') or ''}"
         f"{folder_block}"
-        f"Primary sample .cc (style anchor):\n{samples_text or '(none — use saved examples)'}\n"
-        f"{saved_text}"
-        f"{exemplar_block}"
-        f"{ref_block}"
+    )
+    optional_parts = [
+        ("Optional internal hints:\n", str(context.get("config_hints") or "")),
+        ("Primary sample .cc (style anchor):\n", f"Primary sample .cc (style anchor):\n{samples_text}\n" if samples_text else ""),
+        ("Saved examples:\n", saved_text),
+        ("Accepted exemplar:\n", exemplar_block),
+        ("Additional project GTest snippets:\n", ref_block),
+    ]
+    tail = (
         f"Selected testcase IDs ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
         + "\n\nRequired output format:\n"
@@ -337,6 +406,12 @@ def build_copilot_batch_prompt(
         "(or write \"none\")\n\n"
         "[ASSUMPTIONS]\n"
         "- bullet list (max 8 lines)\n"
+    )
+    return _budget_join(
+        required_parts=[required_head],
+        optional_parts=optional_parts,
+        tail_parts=[tail],
+        budget=budget,
     )
 
 
@@ -365,8 +440,10 @@ def build_copilot_batch_prompts(
     group_field: str = "test_group",
     exclude_candidate_ids: list[str] | None = None,
     allow_missing_sample: bool = False,
+    slim_prompt: bool = True,
+    prompt_budget: int | None = None,
 ) -> dict[str, Any]:
-    context = collect_copilot_project_context(bundle, gtest_state, language=language)
+    context = collect_copilot_project_context(bundle, gtest_state, language=language, slim_prompt=slim_prompt)
     if (
         not allow_missing_sample
         and not context.get("sample_blocks")
@@ -414,6 +491,8 @@ def build_copilot_batch_prompts(
             engineer_note=engineer_note,
             scope_label=scope_label,
             import_group_label=import_group,
+            slim_prompt=slim_prompt,
+            prompt_budget=prompt_budget,
         )
         prompts.append(
             {
@@ -444,6 +523,11 @@ def build_copilot_batch_prompts(
             "saved_examples": len(context.get("saved_examples") or []),
             "has_exemplar": bool(context.get("exemplar")),
             "reference_snippets": len(context.get("reference_snippets") or []),
+            "slim_prompt": bool(slim_prompt),
+            "prompt_budget": _positive_limit(
+                prompt_budget, _SLIM_PROMPT_BUDGET if slim_prompt else _FULL_PROMPT_BUDGET
+            ),
+            "max_prompt_chars": max([int(p.get("char_count") or 0) for p in prompts] or [0]),
         },
     }
 
@@ -728,6 +812,8 @@ def run_copilot_batch_api(
     retry_count: int = 0,
     allow_missing_sample: bool = False,
     user_id: str | None = None,
+    slim_prompt: bool = True,
+    prompt_budget: int | None = None,
 ) -> dict[str, Any]:
     built = build_copilot_batch_prompts(
         bundle,
@@ -742,6 +828,8 @@ def run_copilot_batch_api(
         group_field=group_field,
         exclude_candidate_ids=exclude_candidate_ids,
         allow_missing_sample=allow_missing_sample,
+        slim_prompt=slim_prompt,
+        prompt_budget=prompt_budget,
     )
     if not built.get("ok"):
         return built
@@ -800,7 +888,7 @@ def run_copilot_batch_api(
         chat = run_copilot_chat_result(
             cfg,
             str(batch.get("prompt") or ""),
-            reuse_session_conversation=idx > 0,
+            reuse_session_conversation=(idx > 0 and not slim_prompt),
             user_id=user_id,
         )
         run["last_response_s"] = round(perf_counter() - response_started, 1)

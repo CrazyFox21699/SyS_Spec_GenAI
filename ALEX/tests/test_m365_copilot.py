@@ -72,6 +72,56 @@ def test_run_copilot_chat_result_missing_scopes() -> None:
     assert out["error_category"] == "m365_missing_scopes"
 
 
+def test_run_copilot_chat_result_refreshes_after_graph_401() -> None:
+    with patch(
+        "web.m365_copilot.m365_auth.require_api_token",
+        side_effect=["old-token", "new-token"],
+    ) as token_mock, patch(
+        "web.m365_copilot._create_conversation",
+        side_effect=[
+            RuntimeError("M365 create conversation failed (401): not authenticated"),
+            "conv-1",
+        ],
+    ) as conv_mock, patch(
+        "web.m365_copilot.m365_auth.refresh_access_token",
+        return_value={"access_token": "new-token"},
+    ) as refresh_mock, patch(
+        "web.m365_copilot._chat",
+        return_value="ok",
+    ):
+        out = run_copilot_chat_result({}, "ping", user_id="alice")
+
+    assert out["ok"] is True
+    assert out["reply"] == "ok"
+    assert token_mock.call_count == 2
+    assert conv_mock.call_count == 2
+    refresh_mock.assert_called_once()
+
+
+def test_run_copilot_chat_result_falls_back_to_default_session() -> None:
+    def token_side_effect(cfg, *, user_id=None):
+        if user_id == "alice":
+            raise PermissionError("Sign in to Microsoft 365 Copilot first.")
+        return "default-token"
+
+    with patch(
+        "web.m365_copilot.m365_auth.require_api_token",
+        side_effect=token_side_effect,
+    ) as token_mock, patch(
+        "web.m365_copilot._create_conversation",
+        return_value="conv-1",
+    ), patch(
+        "web.m365_copilot._chat",
+        return_value="ok",
+    ):
+        out = run_copilot_chat_result({}, "ping", user_id="alice")
+
+    assert out["ok"] is True
+    assert out["reply"] == "ok"
+    assert token_mock.call_args_list[0].kwargs["user_id"] == "alice"
+    assert token_mock.call_args_list[1].kwargs["user_id"] is None
+
+
 def test_probe_copilot_api_ok() -> None:
     cfg = {"assist": {"m365": {"timezone": "UTC"}}}
     with patch(

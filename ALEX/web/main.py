@@ -768,12 +768,14 @@ class CopilotBatchPromptRequest(BaseModel):
     language: str = "EN"
     candidate_ids: Optional[list[str]] = None
     engineer_note: str = ""
-    batch_size: int = 10
+    batch_size: int = 1
     skip_saved: bool = False
     scope: str = "filter"
     group_key: str = ""
     group_field: str = "test_group"
     allow_missing_sample: bool = False
+    slim_prompt: bool = True
+    prompt_budget: int = 18000
 
 
 class CopilotBatchImportRequest(BaseModel):
@@ -789,12 +791,14 @@ class CopilotBatchApiRequest(BaseModel):
     language: str = "EN"
     candidate_ids: Optional[list[str]] = None
     engineer_note: str = ""
-    batch_size: int = 10
+    batch_size: int = 1
     skip_saved: bool = False
     scope: str = "filter"
     group_key: str = ""
     group_field: str = "test_group"
     allow_missing_sample: bool = False
+    slim_prompt: bool = True
+    prompt_budget: int = 18000
 
 
 class TestCodeApprovalRequest(BaseModel):
@@ -4120,6 +4124,8 @@ def api_copilot_batch_prompt(job_id: str, body: CopilotBatchPromptRequest | None
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
         allow_missing_sample=bool(body.allow_missing_sample) if body else False,
+        slim_prompt=bool(body.slim_prompt) if body else True,
+        prompt_budget=int(body.prompt_budget) if body else 18000,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "copilot batch prompt failed")
@@ -4182,6 +4188,9 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
         scope=str(body.scope if body else "filter") or "filter",
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
+        allow_missing_sample=bool(body.allow_missing_sample) if body else False,
+        slim_prompt=bool(body.slim_prompt) if body else True,
+        prompt_budget=int(body.prompt_budget) if body else 18000,
     )
     _persist_job_gtest_state(job_id, gtest_state)
     if not result.get("ok"):

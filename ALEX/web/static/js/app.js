@@ -8457,13 +8457,16 @@ function testCodeCopilotBatchPayload(rows, scopeOverride) {
     candidate_ids: state.testCode.batchRetryIds?.length
       ? state.testCode.batchRetryIds
       : testCodeBatchTargetIds(rows, scope),
-    engineer_note: "",
-    batch_size: Number(state.testCode.copilotBatchSize) || 10,
+    engineer_note: getTestCodeProjectInstruction(),
+    batch_size: 1,
     skip_saved: !!state.testCode.skipSavedOnBatch,
     retry_count: Number(state.testCode.batchRetryCount) || 0,
     scope,
     group_key: groupKey,
     group_field: "test_group",
+    allow_missing_sample: true,
+    slim_prompt: true,
+    prompt_budget: 18000,
   };
 }
 
@@ -9383,7 +9386,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
   appendTestCodeStreamLine(`Generate selected started: ${ids.length} testcase(s).`);
   try {
     const projectInstruction = getTestCodeProjectInstruction();
-    appendTestCodeStreamLine(`Sending ${ids.length} selected testcase(s) to Copilot API.`);
+    appendTestCodeStreamLine(`Sending ${ids.length} selected testcase(s) to Copilot API with slim one-testcase prompts.`);
     setTestCodeApiStatus("running");
     const started = await startM365Task({
       kind: "code_copilot_batch",
@@ -9393,11 +9396,13 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         candidate_ids: ids,
         language: state.exportLanguage || "EN",
         engineer_note: projectInstruction,
-        batch_size: 10,
+        batch_size: 1,
         skip_saved: false,
         scope: "selected",
         group_field: "test_group",
         allow_missing_sample: true,
+        slim_prompt: true,
+        prompt_budget: 18000,
       },
     });
     tc.activeGenerationTaskId = started.task_id;
@@ -9529,10 +9534,12 @@ async function copySelectedTestCodeWebPrompt(rows, statusEl) {
         language: state.exportLanguage || "EN",
         candidate_ids: ids,
         engineer_note: instruction,
-        batch_size: 20,
+        batch_size: 1,
         skip_saved: false,
         scope: "selected",
         allow_missing_sample: true,
+        slim_prompt: true,
+        prompt_budget: 18000,
       }),
     });
     const prompts = data.prompts || [];
