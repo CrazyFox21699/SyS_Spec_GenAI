@@ -9424,6 +9424,13 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
       await handleM365TaskComplete(done, { fromView: true });
       const fallbackPrompt = done.result?.fallback_prompt || "";
       if (done.result?.fallback_required && fallbackPrompt) {
+        const resultRows = done.result?.results || [];
+        const firstId = ids[0] || resultRows[0]?.candidate_id || "";
+        const firstResult = resultRows.find((r) => r.candidate_id === firstId) || resultRows[0] || {};
+        if (firstId && firstResult.full_snippet) {
+          if (!tc.stashedEdits) tc.stashedEdits = {};
+          tc.stashedEdits[firstId] = firstResult.full_snippet;
+        }
         tc.copilotBatchPrompt = fallbackPrompt;
         tc.copilotBatchPromptIds = ids;
         refreshTestCodeCopiedPromptPanel();
@@ -9434,7 +9441,8 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         });
         setTestCodeApiStatus("idle");
         appendTestCodeStreamLine("Copilot API did not return concrete code. A NEEDS_REVIEW scaffold is shown in the editor.");
-        if (statusEl) statusEl.textContent = "Fallback scaffold created. Click the testcase to review/edit code, then Confirm when OK.";
+        if (firstId) await switchTestCodeCandidate(firstId, rows);
+        if (statusEl) statusEl.textContent = "Fallback scaffold loaded in editor. Review/edit code, then Confirm when OK.";
         return;
       }
       const resultRows = done.result?.results || [];
@@ -9444,6 +9452,8 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         const st = String(r.workflow_status || r.code_status || "").toUpperCase();
         tc.generateStatus[cid] = st === "ERROR" ? "failed" : "done";
       });
+      const firstDoneId = ids.find((cid) => byId[cid]) || ids[0] || "";
+      if (firstDoneId) await switchTestCodeCandidate(firstDoneId, rows);
       appendTestCodeStreamLine(`Generate selected completed.`);
     } else {
       const err = done.error || done.result?.error || done.status || "failed";
