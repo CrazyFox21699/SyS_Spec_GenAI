@@ -167,11 +167,12 @@ def test_run_batch_preserves_m365_timeout_category() -> None:
             batch_size=1,
         )
 
-    assert out["ok"] is False
-    assert out["error_category"] == "m365_graph_timeout"
+    assert out["ok"] is True
+    assert out["fallback_required"] is True
     assert gtest_state["copilot_batch"]["run"]["failed_chunk_error_category"] == "m365_graph_timeout"
     assert out["fallback_prompt"]
-    assert "Fast mode" in out["fallback_prompt"]
+    assert "[TESTCASE_CODE]" in out["fallback_prompt"]
+    assert "TC_A" in out["fallback_prompt"]
 
 
 def test_run_batch_retries_timeout_with_minimal_prompt(tmp_path: Path) -> None:

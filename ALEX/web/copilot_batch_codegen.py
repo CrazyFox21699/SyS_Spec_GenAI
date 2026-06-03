@@ -665,6 +665,7 @@ def apply_copilot_batch_import(
     expected_candidate_ids: list[str] | None = None,
     language: str = "EN",
     generation_source: str = "COPILOT_BATCH",
+    persist_errors: bool = True,
 ) -> dict[str, Any]:
     parsed = parse_copilot_batch_response(content)
     unresolved_by_id = dict(parsed.get("unresolved_by_id") or {})
@@ -699,9 +700,10 @@ def apply_copilot_batch_import(
     for cid in target_ids:
         if cid in unresolved_by_id:
             msg = f"unresolved: {unresolved_by_id[cid]}"
-            persist_batch_generation_error(
-                gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
-            )
+            if persist_errors:
+                persist_batch_generation_error(
+                    gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
+                )
             results.append(
                 {
                     "candidate_id": cid,
@@ -716,9 +718,10 @@ def apply_copilot_batch_import(
 
         if cid not in parsed_by_id:
             msg = "testcase_id not found in Copilot API chunk output"
-            persist_batch_generation_error(
-                gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
-            )
+            if persist_errors:
+                persist_batch_generation_error(
+                    gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
+                )
             results.append(
                 {
                     "candidate_id": cid,
@@ -735,9 +738,10 @@ def apply_copilot_batch_import(
         full = str(item.get("full_snippet") or "").strip()
         if not full or not re.search(r"\bTEST(?:_F)?\s*\(", full):
             msg = "parse failed — no TEST_F in block"
-            persist_batch_generation_error(
-                gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
-            )
+            if persist_errors:
+                persist_batch_generation_error(
+                    gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
+                )
             results.append(
                 {
                     "candidate_id": cid,
@@ -865,6 +869,7 @@ def run_copilot_batch_api(
 
     all_results: list[dict[str, Any]] = []
     total_saved = total_review = total_error = 0
+    total_fallback = 0
     prompts = built.get("prompts") or []
 
     gtest_state.setdefault("copilot_batch", {})["run"] = {
@@ -915,6 +920,7 @@ def run_copilot_batch_api(
             )
         response_started = perf_counter()
         prompt_for_api = str(batch.get("prompt") or "")
+        prompt_for_web_fallback = prompt_for_api
         chat = run_copilot_chat_result(
             cfg,
             prompt_for_api,
@@ -955,13 +961,14 @@ def run_copilot_batch_api(
             msg = str(chat.get("error") or "M365 API failed")
             category = str(chat.get("error_category") or "m365_copilot_api")
             failed_ids = list(batch.get("candidate_ids") or [])
+            fallback_mode = category == "m365_graph_timeout"
             detail = {
                 "batch_index": idx + 1,
                 "candidate_ids": failed_ids,
                 "reason": msg,
                 "error_category": category,
                 "last_response_s": run.get("last_response_s"),
-                "fallback_prompt": prompt_for_api,
+                "fallback_prompt": prompt_for_web_fallback,
             }
             details = list(run.get("failed_chunk_details") or [])
             details.append(detail)
@@ -970,27 +977,32 @@ def run_copilot_batch_api(
             run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
             run["failed_chunk_reason"] = msg
             run["failed_chunk_error_category"] = category
-            run["fallback_prompt"] = prompt_for_api
+            run["fallback_prompt"] = prompt_for_web_fallback
             run["completed_chunks"] = idx + 1
             run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
-                persist_batch_generation_error(
-                    gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
-                )
+                if not fallback_mode:
+                    persist_batch_generation_error(
+                        gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
+                    )
                 all_results.append(
                     {
                         "candidate_id": cid,
                         "ok": False,
-                        "workflow_status": "ERROR",
+                        "workflow_status": "OPEN" if fallback_mode else "ERROR",
                         "workflow_message": msg,
-                        "code_status": "ERROR",
-                        "fallback_prompt": prompt_for_api,
+                        "code_status": "OPEN" if fallback_mode else "ERROR",
+                        "fallback_prompt": prompt_for_web_fallback,
                     }
                 )
-                total_error += 1
+                if fallback_mode:
+                    total_fallback += 1
+                else:
+                    total_error += 1
             run["saved"] = total_saved
             run["needs_review"] = total_review
             run["error"] = total_error
+            run["fallback"] = total_fallback
             if progress_callback:
                 progress_callback(
                     idx,
@@ -1023,16 +1035,13 @@ def run_copilot_batch_api(
             expected_candidate_ids=batch.get("candidate_ids"),
             language=language,
             generation_source="COPILOT_BATCH",
+            persist_errors=False,
         )
-        for r in one.get("results") or []:
-            all_results.append(r)
-        s = one.get("summary") or {}
-        total_saved += int(s.get("saved") or 0)
-        total_review += int(s.get("needs_review") or 0)
-        total_error += int(s.get("error") or 0)
+        chunk_results = list(one.get("results") or [])
+        s = dict(one.get("summary") or {})
         run = gtest_state.setdefault("copilot_batch", {}).setdefault("run", {})
         chunk_error_results = [
-            r for r in (one.get("results") or [])
+            r for r in chunk_results
             if str(r.get("workflow_status") or r.get("code_status") or "").upper() == "ERROR"
         ]
         if chunk_error_results:
@@ -1047,6 +1056,7 @@ def run_copilot_batch_api(
                 "candidate_ids": failed_ids,
                 "reason": reason,
                 "last_response_s": run.get("last_response_s"),
+                "fallback_prompt": prompt_for_web_fallback,
             }
             details = list(run.get("failed_chunk_details") or [])
             details.append(detail)
@@ -1054,11 +1064,29 @@ def run_copilot_batch_api(
             run["failed_chunks"] = len(details)
             run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
             run["failed_chunk_reason"] = reason
+            run["fallback_prompt"] = prompt_for_web_fallback
+            if not int(s.get("saved") or 0) and not int(s.get("needs_review") or 0):
+                converted = 0
+                for r in chunk_results:
+                    if str(r.get("workflow_status") or r.get("code_status") or "").upper() == "ERROR":
+                        r["workflow_status"] = "OPEN"
+                        r["code_status"] = "OPEN"
+                        r["fallback_prompt"] = prompt_for_web_fallback
+                        converted += 1
+                s["fallback"] = converted
+                s["error"] = 0
+        for r in chunk_results:
+            all_results.append(r)
+        total_saved += int(s.get("saved") or 0)
+        total_review += int(s.get("needs_review") or 0)
+        total_error += int(s.get("error") or 0)
+        total_fallback += int(s.get("fallback") or 0)
         run.update(
             {
                 "saved": total_saved,
                 "needs_review": total_review,
                 "error": total_error,
+                "fallback": total_fallback,
                 "batch_index": idx + 1,
                 "completed_chunks": idx + 1,
                 "queued_chunks": max(len(prompts) - idx - 1, 0),
@@ -1101,10 +1129,11 @@ def run_copilot_batch_api(
         "saved": total_saved,
         "needs_review": total_review,
         "error": total_error,
+        "fallback": total_fallback,
         "skipped": 0,
         "total": built.get("target_count") or len(all_results),
     }
-    ok = total_saved > 0 or total_review > 0
+    ok = total_saved > 0 or total_review > 0 or total_fallback > 0
     failure_reason = ""
     failure_category = ""
     if not ok:
@@ -1125,7 +1154,8 @@ def run_copilot_batch_api(
         "ok": ok,
         "error": failure_reason if not ok else "",
         "error_category": failure_category or ("m365_copilot_batch" if not ok else ""),
-        "fallback_prompt": str(run.get("fallback_prompt") or "") if not ok else "",
+        "fallback_required": bool(total_fallback),
+        "fallback_prompt": str(run.get("fallback_prompt") or ""),
         "batch_count": len(prompts),
         "batch_size": built.get("batch_size"),
         "results": all_results,

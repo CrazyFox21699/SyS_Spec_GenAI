@@ -171,7 +171,7 @@ def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str
             "message": {"text": prompt[:28000]},
             "locationHint": {"timeZone": timezone},
         },
-        timeout=75,
+        timeout=35,
     )
     if r.status_code != 200:
         body = r.text or ""

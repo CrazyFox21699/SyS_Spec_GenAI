@@ -9411,6 +9411,21 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
     const done = await waitForM365Task(started.task_id);
     if (done.status === "completed") {
       await handleM365TaskComplete(done, { fromView: true });
+      const fallbackPrompt = done.result?.fallback_prompt || "";
+      if (done.result?.fallback_required && fallbackPrompt) {
+        tc.copilotBatchPrompt = fallbackPrompt;
+        tc.copilotBatchPromptIds = ids;
+        refreshTestCodeCopiedPromptPanel();
+        await copyTextToClipboard(fallbackPrompt);
+        ids.forEach((cid) => {
+          tc.generateStatus[cid] = "queued";
+          clearTestCodeWorkflowError(cid);
+        });
+        setTestCodeApiStatus("idle");
+        appendTestCodeStreamLine("Copilot API could not generate code. Copilot Web prompt is copied and shown above.");
+        if (statusEl) statusEl.textContent = "Copilot Web prompt copied. Paste it into Copilot Web, then import or paste generated code.";
+        return;
+      }
       const resultRows = done.result?.results || [];
       const byId = Object.fromEntries(resultRows.map((r) => [r.candidate_id, r]));
       ids.forEach((cid) => {
