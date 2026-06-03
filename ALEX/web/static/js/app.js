@@ -492,6 +492,19 @@ function api(path, opts = {}) {
   }
   return fetch(path, { ...opts, headers, credentials: "same-origin" }).then(async (r) => {
     if (r.status === 401) {
+      let body = null;
+      try {
+        body = await r.clone().json();
+      } catch (_) {
+        body = null;
+      }
+      const category = body?.error_category || body?.detail?.error_category || "";
+      const msg = body?.error || body?.detail?.error || body?.detail || body?.message || "";
+      if (String(category).startsWith("m365_")) {
+        const err = new Error(String(msg || "Microsoft 365 authentication failed."));
+        err.apiBody = body?.ok === false ? body : body?.detail || body;
+        throw err;
+      }
       if (!window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
@@ -1687,7 +1700,11 @@ async function startM365Task({ kind, payload = {}, label = "", logicId = "", can
       target_page: targetPage,
     }),
   });
-  if (res.ok === false) throw new Error(res.error || "Could not start Copilot task");
+  if (res.ok === false) {
+    const err = new Error([res.error, res.user_action].filter(Boolean).join(" — ") || "Could not start Copilot task");
+    err.apiBody = res;
+    throw err;
+  }
   const taskId = res.task_id;
   state.m365Tasks.byId[taskId] = { ...res, kind, payload, logic_id: logicId, candidate_id: candidateId, target_page: targetPage };
   state.m365Tasks.activeIds = [...new Set([...(state.m365Tasks.activeIds || []), taskId])];
@@ -9419,6 +9436,16 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
       appendTestCodeStreamLine("Generate selected finished.");
       if (statusEl) statusEl.textContent = "Generate selected finished. Select each testcase and Confirm if OK.";
     }
+  } catch (e) {
+    const body = e?.apiBody || {};
+    const msg = [e?.message || "Generate selected failed.", body.user_action || ""].filter(Boolean).join(" ");
+    ids.forEach((cid) => {
+      tc.generateStatus[cid] = "failed";
+      setTestCodeWorkflowError(cid, msg);
+    });
+    setTestCodeApiStatus("failed", msg);
+    appendTestCodeStreamLine(`Generate selected failed: ${msg}`);
+    if (statusEl) statusEl.textContent = msg;
   } finally {
     tc.sequentialRunning = false;
     tc.activeGenerationTaskId = "";

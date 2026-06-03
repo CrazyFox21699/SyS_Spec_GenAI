@@ -263,6 +263,24 @@ def _copilot_error_payload(exc: Exception) -> dict[str, Any]:
             "error_category": "m365_not_ready",
             "user_action": "Open Review tab and complete Microsoft 365 sign-in.",
         }
+    text = str(exc) or ""
+    lower_text = text.lower()
+    if "m365" in lower_text and "(401)" in lower_text:
+        return {
+            "ok": False,
+            "error": text,
+            "error_category": "m365_not_ready",
+            "graph_status": 401,
+            "user_action": "Sign out of M365 on the Review tab, sign in again, then Authorize/Test Copilot API.",
+        }
+    if "m365" in lower_text and "(403)" in lower_text:
+        return {
+            "ok": False,
+            "error": text,
+            "error_category": "m365_missing_scopes",
+            "graph_status": 403,
+            "user_action": "Authorize Copilot API again. If it still fails, ask IT to admin-consent the required Graph scopes.",
+        }
     if isinstance(exc, requests.RequestException):
         msg = str(exc) or "Microsoft Graph network error."
         lower = msg.lower()

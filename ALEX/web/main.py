@@ -2727,6 +2727,14 @@ def api_assist_improve_io(body: AssistImproveIoRequest, job_id: str) -> dict[str
         return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
     if m365_st.get("copilot_chat_entitled") is False:
         return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+    if m365_st.get("copilot_api_probe_ok") is not True:
+        return {
+            "job_id": job_id,
+            "ok": False,
+            "error_category": "m365_missing_scopes" if m365_st.get("copilot_scopes_granted") is False else "m365_not_ready",
+            "error": str(m365_st.get("copilot_api_probe_error") or "Copilot API is not authorized or has not passed probe."),
+            "user_action": "Open Review tab, Authorize Copilot API, then Test Copilot API before Generate selected.",
+        }
     cfg = _cfg()
     result = improve_io(
         cfg,
