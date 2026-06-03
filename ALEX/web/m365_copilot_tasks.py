@@ -66,6 +66,20 @@ def _task_error_message(result: dict[str, Any]) -> str:
     raw = str(result.get("raw_preview") or "").strip()
     if raw:
         return f"Copilot response could not be applied. Preview: {raw[:200]}"
+    details = ((result.get("progress") or {}).get("failed_chunk_details") or result.get("failed_chunk_details") or [])
+    if details and isinstance(details, list):
+        reason = str((details[-1] or {}).get("reason") or "").strip()
+        if reason:
+            return reason
+    for row in result.get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        msg = str(row.get("workflow_message") or row.get("error") or "").strip()
+        if msg:
+            return msg
+    summary = result.get("summary") or {}
+    if summary:
+        return f"Copilot task failed: {summary}"
     return "Task failed — no error detail from Copilot."
 
 

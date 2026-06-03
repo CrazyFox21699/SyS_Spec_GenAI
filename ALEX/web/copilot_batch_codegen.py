@@ -861,7 +861,7 @@ def run_copilot_batch_api(
                 )
             continue
 
-        raw = str(chat.get("content") or chat.get("text") or "")
+        raw = str(chat.get("reply") or chat.get("content") or chat.get("text") or "")
         one = apply_copilot_batch_import(
             bundle,
             gtest_state,
@@ -951,8 +951,24 @@ def run_copilot_batch_api(
         "skipped": 0,
         "total": built.get("target_count") or len(all_results),
     }
+    ok = total_saved > 0 or total_review > 0
+    failure_reason = ""
+    if not ok:
+        details = run.get("failed_chunk_details") or []
+        if details:
+            failure_reason = str(details[-1].get("reason") or "")
+        failure_reason = failure_reason or str(run.get("failed_chunk_reason") or "")
+        if not failure_reason and all_results:
+            failure_reason = str(
+                all_results[0].get("workflow_message")
+                or all_results[0].get("error")
+                or ""
+            )
+        failure_reason = failure_reason or "Copilot response did not contain usable [TESTCASE_CODE] or [UNRESOLVED] output."
     return {
-        "ok": total_saved > 0 or total_review > 0,
+        "ok": ok,
+        "error": failure_reason if not ok else "",
+        "error_category": "m365_copilot_batch" if not ok else "",
         "batch_count": len(prompts),
         "batch_size": built.get("batch_size"),
         "results": all_results,

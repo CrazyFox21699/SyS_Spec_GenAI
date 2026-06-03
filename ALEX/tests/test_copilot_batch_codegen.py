@@ -128,3 +128,40 @@ def test_run_progress_records_failed_chunk_reason() -> None:
     assert run["completed_chunks"] == 1
     assert progress_events[-1]["failed_chunks"] == 1
     assert progress_events[-1]["failed_chunk_reason"] == "graph timeout"
+
+
+def test_run_batch_uses_copilot_reply_field(tmp_path: Path) -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}}
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": True, "reply": BATCH_OUT},
+    ):
+        out = run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            tmp_path,
+            cfg={},
+            candidate_ids=["TC_A"],
+            batch_size=1,
+        )
+
+    assert out["ok"] is True
+    assert out["summary"]["saved"] + out["summary"]["needs_review"] >= 1
