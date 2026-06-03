@@ -378,6 +378,8 @@ let state = {
     generateSelection: {},
     generateStatus: {},
     sequentialRunning: false,
+    activeGenerationTaskId: "",
+    pauseRequested: false,
     streamLines: [],
   },
   _suppressTestCodeEditorInput: false,
@@ -1039,34 +1041,7 @@ function renderM365EntitlementBanner(m, { compact = false } = {}) {
 }
 
 function renderM365KnowledgeBanner() {
-  if (m365KnowledgeReady()) return "";
-  const st = state.m365Status || {};
-  if (st.copilot_chat_entitled === false) {
-    return renderM365EntitlementBanner(st, { compact: true });
-  }
-  if ((st.api_ready || st.connected) && st.copilot_api_probe_ok === false) {
-    return `<div class="m365-entitlement-banner m365-entitlement-banner--compact" role="status">
-      <strong>Copilot API probe failed.</strong>
-      <span class="detail"> ${esc(st.copilot_api_probe_error || "Click Test Copilot API on Review tab or contact IT.")}</span>
-    </div>`;
-  }
-  if (m365ApiSignedIn() && st.copilot_api_probe_ok !== true) {
-    const extra =
-      st.copilot_scopes_granted === false
-        ? " Bấm <b>Authorize Copilot API</b> rồi <b>Test Copilot API</b> trên tab Review (AI sign-in)."
-        : " Bấm <b>Test Copilot API</b> trên tab Review (AI sign-in) — sign in một lần chưa đủ để bật Generate.";
-    return `<div class="m365-entitlement-banner m365-entitlement-banner--compact" role="status">
-      <strong>M365 đã sign in — cần xác nhận Copilot API.</strong>
-      <span class="detail">${extra}</span>
-    </div>`;
-  }
-  const msg = st.client_id_configured
-    ? "Sign in on the Review tab to use Resolve with Copilot. Apply locally works without AI for simple patterns."
-    : "Microsoft 365 Copilot must be configured by IT before AI features are available. Use Apply locally for simple patterns.";
-  return `<div class="m365-entitlement-banner m365-entitlement-banner--compact" role="status">
-    <strong>M365 Copilot sign-in required.</strong>
-    <span class="detail"> ${esc(msg)}</span>
-  </div>`;
+  return "";
 }
 
 function renderBriefReadinessHtml(readiness) {
@@ -8769,7 +8744,7 @@ function renderTestCodeCaseBar(rows) {
     .join("");
   const allSelected = visibleRows.length > 0 && visibleRows.every((row) => state.testCode.generateSelection?.[row.candidate_id || ""] !== false);
   return `<div class="alex-testcode-step1-controls" data-tcase-scope="testcode">
-    <label class="alex-testcode-select-all"><input type="checkbox" id="testcode-select-all-toggle" ${allSelected ? "checked" : ""} /> All</label>
+    <label class="alex-testcode-select-all" title="Select / unselect all testcases"><input type="checkbox" id="testcode-select-all-toggle" aria-label="Select all testcases" ${allSelected ? "checked" : ""} /></label>
     ${renderTestCodeGenerateActions()}
     ${renderTestCodeProgressSummary(rows)}
     ${dirty ? `<span class="tag warning testcode-unsaved-hint" id="testcode-unsaved-hint">Unsaved changes</span>` : `<span id="testcode-unsaved-hint" hidden></span>`}
@@ -8933,9 +8908,13 @@ function patchTestCodeCaseStatusUi() {
   const rows = state.testCode.rows || [];
   const cid = state.testCode.selectedCandidateId;
   const dirty = state.testCode.dirtyMap?.[cid];
+  const statusEl = $("#testcode-status");
 
   const progressEl = $("#testcode-code-progress");
   if (progressEl) progressEl.textContent = renderTestCodeProgressSummaryText(rows);
+  const actions = document.querySelector(".alex-testcode-step1-controls .alex-testcode-generate-actions");
+  if (actions) actions.outerHTML = renderTestCodeGenerateActions();
+  bindTestCodeGenerateActionHandlers(rows, statusEl);
 
   const unsavedHint = $("#testcode-unsaved-hint");
   if (unsavedHint) {
@@ -8975,6 +8954,12 @@ function patchTestCodeCaseStatusUi() {
   }
   patchTestCodeReviewDetailsUi();
   bindTestCodeReviewActionHandlers(rows, $("#testcode-status"));
+}
+
+function bindTestCodeGenerateActionHandlers(rows, statusEl) {
+  bindClick("#btn-testcode-generate-all", () => runSequentialTestCodeGeneration(rows, statusEl));
+  bindClick("#btn-testcode-pause-generation", () => pauseTestCodeGeneration(statusEl));
+  bindClick("#btn-testcode-copy-web-prompt", () => copySelectedTestCodeWebPrompt(rows, statusEl));
 }
 
 function bindTestCodeCaseListActions(rows) {
@@ -9174,7 +9159,7 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
     <p class="detail gtest-sample-status" id="testcode-primary-sample-status">${
       sampleOk
         ? esc(`Sample: ${first.label || first.source_file || "loaded"}`)
-        : "Load sample .cc / project context before generating."
+        : "No project context loaded yet. You can generate from testcase details, then add source/header/config/CMake context to improve results."
     } · ${allCount} testcase(s) imported</p>
     <div class="alex-testcode-primary-sample-row">
       <label class="btn secondary btn-inline upload-label" title="Style anchor for Copilot prompt; this does not edit Project Instruction Markdown.">Load sample .cc / source context<input type="file" id="testcode-cpp-upload-primary" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.markdown,.txt,.json,.yaml,.yml" hidden /></label>
@@ -9185,8 +9170,10 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
 }
 
 function renderTestCodeGenerateActions() {
+  const running = !!state.testCode.sequentialRunning;
   return `<div class="alex-testcode-editor__actions alex-testcode-copilot-primary__actions alex-testcode-generate-actions">
-    <button type="button" class="btn" id="btn-testcode-generate-all" ${m365KnowledgeReady() && !state.testCode.sequentialRunning ? "" : `disabled title="${esc(state.testCode.sequentialRunning ? "Generation running" : m365KnowledgeBlockReason())}"`}>Generate selected</button>
+    <button type="button" class="btn" id="btn-testcode-generate-all" ${m365KnowledgeReady() && !running ? "" : `disabled title="${esc(running ? "Generation running" : m365KnowledgeBlockReason())}"`}>Generate selected</button>
+    ${running ? `<button type="button" class="btn secondary" id="btn-testcode-pause-generation">Pause generation</button>` : ""}
     <button type="button" class="btn secondary" id="btn-testcode-copy-web-prompt">Copy selected prompt</button>
   </div>`;
 }
@@ -9233,10 +9220,10 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
       <header class="alex-testcode-step__header">
         <span class="alex-testcode-step__num">2</span>
         <h3 class="alex-testcode-step__title">Generated Code</h3>
-        <span class="detail">${esc(draft?.test_name || cid || "")}</span>
       </header>
       <div class="alex-testcode-step__body">
         <div class="alex-testcode-stream" id="testcode-stream-log">${renderTestCodeStreamLog()}</div>
+        <div id="testcode-copilot-prompt-panel">${renderTestCodeCopiedPromptPanel()}</div>
         <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main gtest-editor--tall" readonly spellcheck="false" placeholder="// Click a testcase to view its generated code here.">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
         <div class="alex-testcode-editor__foot">
           <p class="detail testcode-flow-hint" id="testcode-status">Select testcases, generate selected, then confirm each testcase that looks OK.</p>
@@ -9258,6 +9245,22 @@ function renderTestCodeStreamLog() {
     .slice(-80)
     .map((line) => `<li>${esc(line)}</li>`)
     .join("")}</ol>`;
+}
+
+function renderTestCodeCopiedPromptPanel() {
+  const prompt = String(state.testCode.copilotBatchPrompt || "").trim();
+  if (!prompt) return "";
+  const ids = state.testCode.copilotBatchPromptIds || [];
+  const title = ids.length ? `Copilot Web Prompt (${ids.length} testcase(s))` : "Copilot Web Prompt";
+  return `<details class="alex-testcode-copilot-prompt" open>
+    <summary>${esc(title)}</summary>
+    <textarea class="gtest-input alex-testcode-copilot-prompt__text" readonly spellcheck="false">${esc(prompt)}</textarea>
+  </details>`;
+}
+
+function refreshTestCodeCopiedPromptPanel() {
+  const panel = $("#testcode-copilot-prompt-panel");
+  if (panel) panel.innerHTML = renderTestCodeCopiedPromptPanel();
 }
 
 function appendTestCodeStreamLine(line) {
@@ -9287,11 +9290,36 @@ function selectedTestCodeGenerateIds(rows) {
   return testCodeRowOrder(rows).map((r) => r.candidate_id).filter(Boolean);
 }
 
+async function pauseTestCodeGeneration(statusEl) {
+  const tc = state.testCode;
+  const taskId = tc.activeGenerationTaskId || "";
+  if (!tc.sequentialRunning || !taskId) {
+    if (statusEl) statusEl.textContent = "No generation is running.";
+    return;
+  }
+  tc.pauseRequested = true;
+  appendTestCodeStreamLine("Pause requested. Cancelling current Copilot API run...");
+  if (statusEl) statusEl.textContent = "Pausing generation...";
+  await cancelM365Task(taskId);
+  Object.keys(tc.generateStatus || {}).forEach((cid) => {
+    if (tc.generateStatus[cid] === "running") tc.generateStatus[cid] = "queued";
+  });
+  patchTestCodeCaseStatusUi();
+}
+
 async function waitForM365Task(taskId) {
   for (;;) {
-    const st = await api(
-      `/api/review/copilot/m365-tasks/${encodeURIComponent(taskId)}?job_id=${encodeURIComponent(state.jobId)}`
-    );
+    let st;
+    try {
+      st = await api(
+        `/api/review/copilot/m365-tasks/${encodeURIComponent(taskId)}?job_id=${encodeURIComponent(state.jobId)}`
+      );
+    } catch (e) {
+      if (state.testCode.pauseRequested) {
+        return { task_id: taskId, status: "cancelled", error: "paused" };
+      }
+      throw e;
+    }
     const prev = state.m365Tasks.byId[taskId] || {};
     const task = { ...prev, ...st, kind: prev.kind || st.kind, payload: prev.payload || st.payload };
     state.m365Tasks.byId[taskId] = task;
@@ -9352,8 +9380,12 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         skip_saved: false,
         scope: "selected",
         group_field: "test_group",
+        allow_missing_sample: true,
       },
     });
+    tc.activeGenerationTaskId = started.task_id;
+    tc.pauseRequested = false;
+    refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
     const done = await waitForM365Task(started.task_id);
     if (done.status === "completed") {
       await handleM365TaskComplete(done, { fromView: true });
@@ -9367,18 +9399,32 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
       appendTestCodeStreamLine(`Generate selected completed.`);
     } else {
       const err = done.error || done.result?.error || done.status || "failed";
-      ids.forEach((cid) => {
-        tc.generateStatus[cid] = "failed";
-        setTestCodeWorkflowError(cid, err);
-      });
-      setTestCodeApiStatus("failed", err);
-      appendTestCodeStreamLine(`Generate selected failed: ${err}`);
+      if (done.status === "cancelled" || tc.pauseRequested) {
+        ids.forEach((cid) => {
+          if (tc.generateStatus[cid] === "running") tc.generateStatus[cid] = "queued";
+        });
+        setTestCodeApiStatus("idle");
+        appendTestCodeStreamLine("Generation paused. Update inputs, then Generate selected again.");
+        if (statusEl) statusEl.textContent = "Generation paused. Update Test Code Inputs, then generate again.";
+      } else {
+        ids.forEach((cid) => {
+          tc.generateStatus[cid] = "failed";
+          setTestCodeWorkflowError(cid, err);
+        });
+        setTestCodeApiStatus("failed", err);
+        appendTestCodeStreamLine(`Generate selected failed: ${err}`);
+      }
     }
-    appendTestCodeStreamLine("Generate selected finished.");
-    if (statusEl) statusEl.textContent = "Generate selected finished. Select each testcase and Confirm if OK.";
+    if (!tc.pauseRequested) {
+      appendTestCodeStreamLine("Generate selected finished.");
+      if (statusEl) statusEl.textContent = "Generate selected finished. Select each testcase and Confirm if OK.";
+    }
   } finally {
     tc.sequentialRunning = false;
+    tc.activeGenerationTaskId = "";
+    tc.pauseRequested = false;
     if (runBtn) runBtn.disabled = !m365KnowledgeReady();
+    refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
     patchTestCodeCaseStatusUi();
   }
 }
@@ -9479,12 +9525,13 @@ async function copySelectedTestCodeWebPrompt(rows, statusEl) {
     if (!text.trim()) throw new Error("Prompt is empty.");
     state.testCode.copilotBatchPrompt = text;
     state.testCode.copilotBatchPromptIds = ids;
-    await navigator.clipboard.writeText(text);
-    appendTestCodeStreamLine(`Copied Copilot Web prompt for ${ids.length} testcase(s).`);
+    refreshTestCodeCopiedPromptPanel();
+    const copied = await copyTextToClipboard(text);
+    appendTestCodeStreamLine(`${copied ? "Copied" : "Built"} Copilot Web prompt for ${ids.length} testcase(s).`);
     if (statusEl) {
       statusEl.textContent = prompts.length > 1
-        ? `Copied ${prompts.length} prompt parts for ${ids.length} testcase(s).`
-        : `Copied Copilot Web prompt for ${ids.length} testcase(s).`;
+        ? `${copied ? "Copied" : "Built"} ${prompts.length} prompt parts for ${ids.length} testcase(s). Prompt is shown above.`
+        : `${copied ? "Copied" : "Built"} Copilot Web prompt for ${ids.length} testcase(s). Prompt is shown above.`;
     }
   } catch (e) {
     if (statusEl) statusEl.textContent = e.message || "Copy prompt failed.";
@@ -10007,8 +10054,7 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
 
   bindOnChange("#testcode-cpp-upload-primary", handleCppUpload);
   bindOnChange("#testcode-cpp-upload", handleCppUpload);
-  bindClick("#btn-testcode-generate-all", () => runSequentialTestCodeGeneration(rows, statusEl));
-  bindClick("#btn-testcode-copy-web-prompt", () => copySelectedTestCodeWebPrompt(rows, statusEl));
+  bindTestCodeGenerateActionHandlers(rows, statusEl);
   bindOnChange("#testcode-batch-size", (ev) => {
     tc.copilotBatchSize = Number(ev.target.value) || 10;
     refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
@@ -10774,8 +10820,7 @@ function bindTestCodeHandlers(rows) {
   });
   bindTestCodeCaseListActions(rows);
 
-  bindClick("#btn-testcode-generate-all", () => runSequentialTestCodeGeneration(rows, statusEl));
-  bindClick("#btn-testcode-copy-web-prompt", () => copySelectedTestCodeWebPrompt(rows, statusEl));
+  bindTestCodeGenerateActionHandlers(rows, statusEl);
   bindClick("#btn-testcode-confirm-current", () => confirmCurrentTestCode(rows, statusEl));
   bindClick("#btn-testcode-export-confirmed", () => {
     const lang = state.exportLanguage || "EN";

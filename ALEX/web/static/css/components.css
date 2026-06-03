@@ -1371,6 +1371,25 @@ textarea.field-manual-changed,
 .alex-testcode-stream__list li {
   margin: 0.15rem 0;
 }
+.alex-testcode-copilot-prompt {
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.08));
+  padding: 0.55rem 0.65rem;
+}
+.alex-testcode-copilot-prompt > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.alex-testcode-copilot-prompt__text {
+  width: 100%;
+  min-height: 22rem;
+  margin-top: 0.55rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  resize: vertical;
+}
 
 .alex-testcode-io-context {
   display: grid;

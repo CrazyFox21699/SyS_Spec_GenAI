@@ -726,6 +726,7 @@ def run_copilot_batch_api(
     progress_callback: Any | None = None,
     cancel_check: Any | None = None,
     retry_count: int = 0,
+    allow_missing_sample: bool = False,
 ) -> dict[str, Any]:
     built = build_copilot_batch_prompts(
         bundle,
@@ -739,6 +740,7 @@ def run_copilot_batch_api(
         group_key=group_key,
         group_field=group_field,
         exclude_candidate_ids=exclude_candidate_ids,
+        allow_missing_sample=allow_missing_sample,
     )
     if not built.get("ok"):
         return built

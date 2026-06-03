@@ -794,6 +794,7 @@ class CopilotBatchApiRequest(BaseModel):
     scope: str = "filter"
     group_key: str = ""
     group_field: str = "test_group"
+    allow_missing_sample: bool = False
 
 
 class TestCodeApprovalRequest(BaseModel):
@@ -4053,6 +4054,7 @@ def api_exemplar_batch_prompt(job_id: str, body: ExemplarBatchPromptRequest | No
         scope=str(body.scope if body else "filter") or "filter",
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
+        allow_missing_sample=bool(body.allow_missing_sample) if body else False,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "exemplar prompt failed")
