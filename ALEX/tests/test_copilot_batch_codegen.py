@@ -170,6 +170,51 @@ def test_run_batch_preserves_m365_timeout_category() -> None:
     assert out["ok"] is False
     assert out["error_category"] == "m365_graph_timeout"
     assert gtest_state["copilot_batch"]["run"]["failed_chunk_error_category"] == "m365_graph_timeout"
+    assert out["fallback_prompt"]
+    assert "Fast mode" in out["fallback_prompt"]
+
+
+def test_run_batch_retries_timeout_with_minimal_prompt(tmp_path: Path) -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}}
+    calls: list[str] = []
+
+    def fake_chat(cfg, prompt, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return {"ok": False, "error": "timeout", "error_category": "m365_graph_timeout"}
+        return {"ok": True, "reply": BATCH_OUT}
+
+    with patch("web.copilot_batch_codegen.run_copilot_chat_result", side_effect=fake_chat):
+        out = run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            tmp_path,
+            cfg={},
+            candidate_ids=["TC_A"],
+            batch_size=1,
+        )
+
+    assert out["ok"] is True
+    assert len(calls) == 2
+    assert "Fast mode" in calls[1]
+    assert len(calls[1]) < len(calls[0])
 
 
 def test_slim_prompt_limits_long_instruction_and_source() -> None:
@@ -211,15 +256,15 @@ def test_slim_prompt_limits_long_instruction_and_source() -> None:
         batch_size=1,
         allow_missing_sample=True,
         slim_prompt=True,
-        prompt_budget=9000,
+        prompt_budget=5000,
     )
 
     assert out["ok"] is True
     assert out["batch_size"] == 1
     assert out["batch_count"] == 2
     assert out["context_summary"]["slim_prompt"] is True
-    assert out["context_summary"]["max_prompt_chars"] <= 9000
-    assert all(p["char_count"] <= 9000 for p in out["prompts"])
+    assert out["context_summary"]["max_prompt_chars"] <= 5000
+    assert all(p["char_count"] <= 5000 for p in out["prompts"])
     assert "source_api_999" not in out["combined_prompt"]
     assert "strict rule 799" not in out["combined_prompt"]
     assert "[TESTCASE_CODE]" in out["combined_prompt"]

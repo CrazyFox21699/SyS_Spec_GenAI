@@ -8466,7 +8466,7 @@ function testCodeCopilotBatchPayload(rows, scopeOverride) {
     group_field: "test_group",
     allow_missing_sample: true,
     slim_prompt: true,
-    prompt_budget: 9000,
+    prompt_budget: 5000,
   };
 }
 
@@ -9402,7 +9402,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         group_field: "test_group",
         allow_missing_sample: true,
         slim_prompt: true,
-        prompt_budget: 9000,
+        prompt_budget: 5000,
       },
     });
     tc.activeGenerationTaskId = started.task_id;
@@ -9429,6 +9429,14 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         appendTestCodeStreamLine("Generation paused. Update inputs, then Generate selected again.");
         if (statusEl) statusEl.textContent = "Generation paused. Update Test Code Inputs, then generate again.";
       } else {
+        const fallbackPrompt = done.result?.fallback_prompt || done.result?.failed_chunk_details?.[0]?.fallback_prompt || "";
+        if (fallbackPrompt) {
+          tc.copilotBatchPrompt = fallbackPrompt;
+          tc.copilotBatchPromptIds = ids;
+          refreshTestCodeCopiedPromptPanel();
+          await copyTextToClipboard(fallbackPrompt);
+          appendTestCodeStreamLine("Copilot API timed out twice. Copied Copilot Web prompt for the selected testcase.");
+        }
         ids.forEach((cid) => {
           tc.generateStatus[cid] = "failed";
           setTestCodeWorkflowError(cid, err);
@@ -9539,7 +9547,7 @@ async function copySelectedTestCodeWebPrompt(rows, statusEl) {
         scope: "selected",
         allow_missing_sample: true,
         slim_prompt: true,
-        prompt_budget: 9000,
+        prompt_budget: 5000,
       }),
     });
     const prompts = data.prompts || [];

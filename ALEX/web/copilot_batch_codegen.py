@@ -20,7 +20,7 @@ _BATCH_MAX_PROMPT_CHARS = 30_000
 _BATCH_TARGET_CHARS = 1_350
 _DEFAULT_BATCH_SIZE = 1
 _ALLOWED_BATCH_SIZES = (1, 5, 10, 20)
-_SLIM_PROMPT_BUDGET = 9_000
+_SLIM_PROMPT_BUDGET = 5_000
 _FULL_PROMPT_BUDGET = 26_000
 
 _TESTCASE_CODE_SECTION_RE = re.compile(
@@ -177,7 +177,7 @@ def collect_copilot_project_context(
     samples = load_code_style_samples(bundle)
     sample_blocks: list[dict[str, str]] = []
     sample_limit = 1 if slim_prompt else 3
-    sample_chars = 1400 if slim_prompt else 10_000
+    sample_chars = 700 if slim_prompt else 10_000
     for row in samples[:sample_limit]:
         snip = str(row.get("snippet") or "").strip()
         if snip:
@@ -190,7 +190,7 @@ def collect_copilot_project_context(
 
     saved_examples: list[dict[str, str]] = []
     saved_limit = 1 if slim_prompt else 2
-    saved_chars = 1200 if slim_prompt else 6000
+    saved_chars = 700 if slim_prompt else 6000
     for cid, draft in (gtest_state.get("drafts") or {}).items():
         if not isinstance(draft, dict):
             continue
@@ -330,7 +330,7 @@ def build_copilot_batch_prompt(
         folder_block = "Project code files (context): " + ", ".join(folder_files[: (6 if slim_prompt else 20)]) + "\n\n"
 
     targets_block: list[str] = []
-    target_chars = 1200 if slim_prompt else 2800
+    target_chars = 800 if slim_prompt else 2800
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
@@ -342,7 +342,7 @@ def build_copilot_batch_prompt(
         )
 
     instruction = str(engineer_note or "").strip()
-    instruction_chars = 2500 if slim_prompt else 12_000
+    instruction_chars = 1200 if slim_prompt else 12_000
     instruction_block = (
         "Project instruction markdown from current editor (primary generation rules — follow exactly):\n"
         f"{_clip(instruction, instruction_chars)}\n\n"
@@ -412,6 +412,34 @@ def build_copilot_batch_prompt(
         optional_parts=optional_parts,
         tail_parts=[tail],
         budget=budget,
+    )
+
+
+def build_copilot_minimal_prompt(target_rows: list[dict[str, Any]], *, engineer_note: str = "") -> str:
+    blocks: list[str] = []
+    for row in target_rows:
+        cid = str(row.get("candidate_id") or "")
+        event = str(row.get("event") or row.get("test_function") or "").strip()
+        blocks.append(
+            f"testcase_id: {cid}\n"
+            f"event: {event}\n"
+            f"expected_input:\n{_clip(row.get('expected_input'), 650)}\n"
+            f"expected_output:\n{_clip(row.get('expected_output'), 650)}"
+        )
+    return _clip(
+        "Generate Google Test C++ for ALEX.\n"
+        "Fast mode: use only the testcase rows below. Preserve testcase_id exactly. "
+        "Do not regroup or invent testcase IDs. If uncertain, return UNRESOLVED.\n"
+        "Output format:\n"
+        "[TESTCASE_CODE]\n"
+        "testcase_id: <id>\n"
+        "```cpp\n<full TEST_F code>\n```\n"
+        "[UNRESOLVED]\nnone\n"
+        "[ASSUMPTIONS]\n- max 3 bullets\n\n"
+        f"Project instruction summary:\n{_clip(engineer_note, 700)}\n\n"
+        "Testcase rows:\n"
+        + "\n---\n".join(blocks),
+        3500,
     )
 
 
@@ -502,6 +530,7 @@ def build_copilot_batch_prompts(
                 "testcase_count": len(chunk),
                 "prompt": prompt,
                 "char_count": len(prompt),
+                "_target_rows": rows,
             }
         )
     combined = (
@@ -885,12 +914,42 @@ def run_copilot_batch_api(
                 status_message=run["status_message"],
             )
         response_started = perf_counter()
+        prompt_for_api = str(batch.get("prompt") or "")
         chat = run_copilot_chat_result(
             cfg,
-            str(batch.get("prompt") or ""),
+            prompt_for_api,
             reuse_session_conversation=(idx > 0 and not slim_prompt),
             user_id=user_id,
         )
+        if not chat.get("ok") and str(chat.get("error_category") or "") == "m365_graph_timeout":
+            rows_for_retry = list(batch.get("_target_rows") or [])
+            prompt_for_api = build_copilot_minimal_prompt(rows_for_retry, engineer_note=engineer_note)
+            run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} timed out; retrying fast minimal prompt."
+            if progress_callback:
+                progress_callback(
+                    idx,
+                    len(prompts),
+                    run["status_message"],
+                    saved=total_saved,
+                    needs_review=total_review,
+                    error=total_error,
+                    target_count=built.get("target_count") or 0,
+                    current_candidate_ids=list(batch.get("candidate_ids") or []),
+                    queued_chunks=run.get("queued_chunks", 0),
+                    running_chunk=run.get("running_chunk", idx + 1),
+                    completed_chunks=run.get("completed_chunks", idx),
+                    failed_chunks=run.get("failed_chunks", 0),
+                    failed_chunk_details=run.get("failed_chunk_details", []),
+                    retry_count=int(run.get("retry_count", 0)) + 1,
+                    status_message=run["status_message"],
+                )
+            chat = run_copilot_chat_result(
+                cfg,
+                prompt_for_api,
+                reuse_session_conversation=False,
+                user_id=user_id,
+                persist_conversation=False,
+            )
         run["last_response_s"] = round(perf_counter() - response_started, 1)
         if not chat.get("ok"):
             msg = str(chat.get("error") or "M365 API failed")
@@ -902,6 +961,7 @@ def run_copilot_batch_api(
                 "reason": msg,
                 "error_category": category,
                 "last_response_s": run.get("last_response_s"),
+                "fallback_prompt": prompt_for_api,
             }
             details = list(run.get("failed_chunk_details") or [])
             details.append(detail)
@@ -910,6 +970,7 @@ def run_copilot_batch_api(
             run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
             run["failed_chunk_reason"] = msg
             run["failed_chunk_error_category"] = category
+            run["fallback_prompt"] = prompt_for_api
             run["completed_chunks"] = idx + 1
             run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
@@ -923,6 +984,7 @@ def run_copilot_batch_api(
                         "workflow_status": "ERROR",
                         "workflow_message": msg,
                         "code_status": "ERROR",
+                        "fallback_prompt": prompt_for_api,
                     }
                 )
                 total_error += 1
@@ -1063,6 +1125,7 @@ def run_copilot_batch_api(
         "ok": ok,
         "error": failure_reason if not ok else "",
         "error_category": failure_category or ("m365_copilot_batch" if not ok else ""),
+        "fallback_prompt": str(run.get("fallback_prompt") or "") if not ok else "",
         "batch_count": len(prompts),
         "batch_size": built.get("batch_size"),
         "results": all_results,

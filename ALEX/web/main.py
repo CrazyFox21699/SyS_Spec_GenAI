@@ -775,7 +775,7 @@ class CopilotBatchPromptRequest(BaseModel):
     group_field: str = "test_group"
     allow_missing_sample: bool = False
     slim_prompt: bool = True
-    prompt_budget: int = 9000
+    prompt_budget: int = 5000
 
 
 class CopilotBatchImportRequest(BaseModel):
@@ -798,7 +798,7 @@ class CopilotBatchApiRequest(BaseModel):
     group_field: str = "test_group"
     allow_missing_sample: bool = False
     slim_prompt: bool = True
-    prompt_budget: int = 9000
+    prompt_budget: int = 5000
 
 
 class TestCodeApprovalRequest(BaseModel):
@@ -4142,7 +4142,7 @@ def api_copilot_batch_prompt(job_id: str, body: CopilotBatchPromptRequest | None
         group_field=str(body.group_field if body else "test_group") or "test_group",
         allow_missing_sample=bool(body.allow_missing_sample) if body else False,
         slim_prompt=bool(body.slim_prompt) if body else True,
-        prompt_budget=int(body.prompt_budget) if body else 9000,
+        prompt_budget=int(body.prompt_budget) if body else 5000,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "copilot batch prompt failed")
@@ -4207,7 +4207,7 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
         group_field=str(body.group_field if body else "test_group") or "test_group",
         allow_missing_sample=bool(body.allow_missing_sample) if body else False,
         slim_prompt=bool(body.slim_prompt) if body else True,
-        prompt_budget=int(body.prompt_budget) if body else 9000,
+        prompt_budget=int(body.prompt_budget) if body else 5000,
     )
     _persist_job_gtest_state(job_id, gtest_state)
     if not result.get("ok"):
