@@ -7333,6 +7333,25 @@ async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows |
   }
 }
 
+function forceOpenTestCodeCandidateInEditor(candidateId, rows = state.testCode.rows || [], fullSnippet = "") {
+  if (!candidateId) return;
+  const tc = state.testCode;
+  tc.selectedCandidateId = candidateId;
+  state.workbookFocus.testcode = candidateId;
+  const row = rows.find((r) => r.candidate_id === candidateId);
+  if (row?.logic_id) tc.selectedLogicId = row.logic_id;
+  if (fullSnippet) {
+    if (!tc.stashedEdits) tc.stashedEdits = {};
+    tc.stashedEdits[candidateId] = fullSnippet;
+  }
+  const draft = resolveDraftForCandidate(candidateId);
+  tc.draft = draft;
+  tc.lastDraftKey = candidateId;
+  applyTestCodeDraftToUi(draft, row);
+  patchTestCodeCaseStatusUi();
+  refreshTestCodePromptPreview(rows);
+}
+
 function renderTestCodeHelpCard(title, bodyHtml, primaryLabel, primaryAction) {
   return `<div class="card alex-testcode-empty">
     <h3>${esc(title)}</h3>
@@ -9441,7 +9460,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         });
         setTestCodeApiStatus("idle");
         appendTestCodeStreamLine("Copilot API did not return concrete code. A NEEDS_REVIEW scaffold is shown in the editor.");
-        if (firstId) await switchTestCodeCandidate(firstId, rows);
+        if (firstId) forceOpenTestCodeCandidateInEditor(firstId, rows, firstResult.full_snippet || "");
         if (statusEl) statusEl.textContent = "Fallback scaffold loaded in editor. Review/edit code, then Confirm when OK.";
         return;
       }
@@ -9453,7 +9472,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
         tc.generateStatus[cid] = st === "ERROR" ? "failed" : "done";
       });
       const firstDoneId = ids.find((cid) => byId[cid]) || ids[0] || "";
-      if (firstDoneId) await switchTestCodeCandidate(firstDoneId, rows);
+      if (firstDoneId) forceOpenTestCodeCandidateInEditor(firstDoneId, rows, byId[firstDoneId]?.full_snippet || "");
       appendTestCodeStreamLine(`Generate selected completed.`);
     } else {
       const err = done.error || done.result?.error || done.status || "failed";
