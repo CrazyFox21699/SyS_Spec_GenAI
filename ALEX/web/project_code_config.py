@@ -23,36 +23,14 @@ CONFIG_DIR_NAME = "code_config"
 
 CONFIG_FILES: dict[str, dict[str, str]] = {
     "project_instruction.md": {
-        "description": "Primary Copilot batch instruction (edit this file — YAML/mapping optional)",
-        "default": """# Project instruction
-
-## Fixture / test style
-- Follow the loaded sample .cc style for fixture class, TEST_F naming, helper calls, comments, and setup/teardown patterns.
-- Keep imported testcase group/order as provided.
-
-## Mock / RTE read rules
-- Use project sample patterns for mocks, RTE reads/writes, return values, and call expectations.
-- Do not invent helper APIs, mocks, macros, or signal access paths that are not shown in the sample/project context.
-
-## Assertion rules
-- Assert observable outputs from the testcase After/Then fields.
-- Prefer the assertion style used in the sample .cc.
-
-## Timing rules
-- Use the project timing helper shown in sample code for elapsed time, waits, debounce, and cyclic execution.
-- Do not use sleeps unless the sample .cc uses them.
-
-## Forbidden patterns
-- No TODO, placeholder code, pseudo-code, or markdown fences in saved code.
-- Do not access private/internal harness state unless the testcase or sample explicitly shows that pattern.
-
-## Output format rules
-- Generate only the requested testcase IDs.
-- Return code mapped exactly to testcase_id.
-- If uncertain, return UNRESOLVED with testcase_id and reason instead of inventing code.
-
-## Customer-specific notes
-- Add customer/project-specific constraints here.
+        "description": "Primary Copilot batch instruction (edit this file to add project-specific rules)",
+        "default": """Generate Google Test C++ .cc code from the testcase rows.
+Follow sample .cc style if provided.
+Generate one TEST_F per testcase_id.
+Preserve testcase_id in comments.
+Use Given/When/Then from testcase.
+If unsure, return UNRESOLVED instead of inventing behavior.
+Return structured [TESTCASE_CODE] blocks.
 """,
     },
     "code_rules.md": {

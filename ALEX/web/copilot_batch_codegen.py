@@ -11,6 +11,7 @@ from web.code_style_samples import load_code_style_samples
 from web.copilot_code_writer import parse_copilot_cpp_response
 from web.gtest_workspace import (
     _workbench_row_for_candidate,
+    flush_batch_run_checkpoint,
     persist_batch_generation_error,
     persist_generated_draft_workflow,
     save_draft,
@@ -98,6 +99,10 @@ def _persist_review_scaffold(
             "workflow_message": "Copilot API fallback scaffold; review and replace project-specific calls.",
             "review_reason": reason,
             "generation_source": generation_source,
+            "is_fallback_scaffold": True,
+            "is_partial_code": False,
+            "issue_reason": "fallback_scaffold_timeout",
+            "fallback_reason": str(reason or "Copilot API did not return concrete code."),
         },
         engineer_edited=False,
         wrap_markers=True,
@@ -203,6 +208,96 @@ def _project_instruction_block(gtest_state: dict[str, Any], *, slim_prompt: bool
     return f"Engineer project instruction (primary — follow this):\n{_clip(instr, limit)}\n\n"
 
 
+def _testcode_memory_block(gtest_state: dict[str, Any], *, slim_prompt: bool = True) -> str:
+    from web.project_testcode_memory import memory_for_prompt
+
+    cache = gtest_state.get("project_code_config_cache") or {}
+    mem = str(cache.get("project_testcode_memory.md") or "").strip()
+    if not mem:
+        return ""
+    limit = 3000 if slim_prompt else 5000
+    clipped = memory_for_prompt(mem, char_limit=limit)
+    if not clipped:
+        return ""
+    return (
+        "Project Test Code Memory (primary style/reference — use this first):\n"
+        f"{clipped}\n\n"
+    )
+
+
+def _style_example_score(snippet: str) -> int:
+    """Score a code snippet by how representative it is of the real project style."""
+    s = 0
+    if re.search(r"/\*\*", snippet):
+        s += 1
+    if re.search(r"[぀-ヿ一-鿿]", snippet):
+        s += 3  # Japanese content = strong project style signal
+    if "EXPECT_CALL" in snippet:
+        s += 2
+    if "Rte_Read" in snippet:
+        s += 2
+    if "igsw_Main_Run" in snippet:
+        s += 2
+    if "EXPECT_THAT" in snippet:
+        s += 1
+    if "EXPECT_EQ" in snippet:
+        s += 1
+    if "WillRepeatedly" in snippet:
+        s += 1
+    if "SetArgPointee" in snippet:
+        s += 1
+    if re.search(r"\bTEST_F\s*\(", snippet):
+        s += 1
+    # Penalise very short or very generic snippets
+    if len(snippet) < 80:
+        s -= 2
+    return s
+
+
+def pick_representative_style_example(
+    samples: list[dict[str, Any]],
+    *,
+    slim_prompt: bool = True,
+    char_limit: int | None = None,
+) -> str:
+    """Return the most representative TEST_F snippet from loaded samples.
+
+    Prefers blocks with Japanese comments, EXPECT_CALL, Rte_Read, igsw_Main_Run,
+    EXPECT_THAT — i.e. blocks that encode the real project coding style.
+    """
+    if not samples:
+        return ""
+    limit = char_limit if char_limit is not None else (2000 if slim_prompt else 5000)
+    best = max(samples, key=lambda r: _style_example_score(str(r.get("snippet") or "")))
+    snippet = str(best.get("snippet") or "").strip()
+    if not snippet or not re.search(r"\bTEST(?:_F)?\s*\(", snippet):
+        return ""
+    return _clip(snippet, limit)
+
+
+def build_style_example_block(snippet: str, label: str = "") -> str:
+    """Format a representative snippet as a STYLE EXAMPLE section for the Copilot prompt."""
+    if not snippet:
+        return ""
+    src = f" (from {label})" if label else ""
+    return (
+        f"━━━ STYLE EXAMPLE — FOLLOW THIS FORMAT{src} ━━━\n"
+        "```cpp\n"
+        f"{snippet.strip()}\n"
+        "```\n\n"
+        "Style rules (copy this structure):\n"
+        "- Use the same block comment format (/** … */) with testcase description\n"
+        "- Keep Japanese testcase comments exactly if present\n"
+        "- Use Given / When / Then comment labels in the same positions\n"
+        "- Use EXPECT_CALL + Rte_Read_<signal>(NotNull()) for input signal setup\n"
+        "- Use WillRepeatedly(DoAll(SetArgPointee<0>(value), Return(RTE_E_OK)))\n"
+        "- Use igsw_Main_Run() as the execution/cycle step\n"
+        "- Use EXPECT_THAT(signal, Eq(value)) for output assertions\n"
+        "- Do not replace this style with generic TODO_REVIEW unless the specific API is truly unknown\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+
 def _bundle_spec_context(bundle: dict[str, Any], *, language: str = "EN") -> str:
     from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
 
@@ -286,12 +381,36 @@ def collect_copilot_project_context(
         if isinstance(ref, dict) and ref.get("file"):
             folder_notes.append(str(ref.get("file")))
 
+    # Pick the best representative TEST_F block for the style example section
+    all_sample_rows = samples  # already loaded above
+    style_snippet = pick_representative_style_example(all_sample_rows, slim_prompt=slim_prompt)
+    if not style_snippet and exemplar and exemplar.get("generated_code"):
+        # Fall back to accepted exemplar if no loaded sample
+        ex_code = str(exemplar.get("generated_code") or "").strip()
+        if re.search(r"\bTEST(?:_F)?\s*\(", ex_code):
+            style_snippet = _clip(ex_code, 2000 if slim_prompt else 5000)
+    if not style_snippet:
+        # Fall back to first saved SAVED example
+        for _, d in (gtest_state.get("drafts") or {}).items():
+            if isinstance(d, dict) and str(d.get("code_status") or "").upper() == "SAVED":
+                code = _draft_full_snippet(d)
+                if re.search(r"\bTEST(?:_F)?\s*\(", code):
+                    style_snippet = _clip(code, 2000 if slim_prompt else 5000)
+                    break
+    style_label = ""
+    if all_sample_rows:
+        best_row = max(all_sample_rows, key=lambda r: _style_example_score(str(r.get("snippet") or "")))
+        style_label = str(best_row.get("label") or best_row.get("source_file") or "")
+
     return {
         "sample_blocks": sample_blocks,
         "saved_examples": saved_examples,
         "exemplar": exemplar,
         "reference_snippets": ref_snippets[: (1 if slim_prompt else 4)],
         "folder_files": folder_notes[: (6 if slim_prompt else 30)],
+        "testcode_memory": _testcode_memory_block(gtest_state, slim_prompt=slim_prompt),
+        "style_example_snippet": style_snippet,
+        "style_example_label": style_label,
         "project_instruction": _project_instruction_block(gtest_state, slim_prompt=slim_prompt),
         "spec_context": _bundle_spec_context(bundle, language=language),
         "config_hints": _optional_config_hints(gtest_state, slim_prompt=slim_prompt),
@@ -326,6 +445,32 @@ def resolve_copilot_batch_targets(
         skip_saved=skip_saved,
     )
     return list(resolved.get("candidate_ids") or [])
+
+
+def collect_retry_candidate_ids(
+    gtest_state: dict[str, Any],
+    bundle: dict[str, Any],
+    *,
+    language: str = "EN",
+) -> list[str]:
+    """Return IDs of testcases in NEEDS_REVIEW or ERROR state, in Excel import order.
+
+    Used by the retry-failed endpoint so only failed/weak generated code is re-sent
+    to Copilot; SAVED testcases are never touched.
+    """
+    from web.batch_target_resolution import ordered_preview_rows, sort_candidate_ids_by_preview_order
+
+    drafts = gtest_state.get("drafts") or {}
+    retry_ids = [
+        cid
+        for cid, d in drafts.items()
+        if isinstance(d, dict)
+        and str(d.get("code_status") or "").upper() in {"NEEDS_REVIEW", "ERROR"}
+    ]
+    if not retry_ids:
+        return []
+    ordered = ordered_preview_rows(bundle, language=language)
+    return sort_candidate_ids_by_preview_order(retry_ids, ordered)
 
 
 def _chunk_targets(
@@ -410,7 +555,7 @@ def build_copilot_batch_prompt(
     instruction = str(engineer_note or "").strip()
     instruction_chars = 1200 if slim_prompt else 12_000
     instruction_block = (
-        "Project instruction markdown from current editor (primary generation rules — follow exactly):\n"
+        "Project instruction (primary — follow exactly):\n"
         f"{_clip(instruction, instruction_chars)}\n\n"
         if instruction
         else ""
@@ -418,60 +563,108 @@ def build_copilot_batch_prompt(
     stored_instruction_block = "" if instruction_block else str(context.get("project_instruction") or "")
 
     scope_bits = [
-        "Use the imported testcase group/order exactly as provided. "
-        "Do not change grouping; do not regroup testcase, reorder testcase, or infer extra testcase.",
+        "Generate ONLY the testcase IDs listed in this API chunk. "
+        "Preserve their import order exactly. Do not add, regroup, or rename testcase IDs.",
     ]
     if scope_label:
         scope_bits.append(f"Selection: {scope_label}.")
     if import_group_label:
         scope_bits.append(f"Import Test Group: {import_group_label}.")
     scope_bits.append(
-        "Exemplar or saved examples are coding-style references only — do not add testcase_ids "
-        "outside this list."
+        "Sample .cc and saved examples are style references only — do not generate extra testcase IDs from them."
     )
     grouping_block = " ".join(scope_bits) + "\n\n"
 
+    # Build the primary style example block.
+    # slim_prompt: 600 chars (captures a full Japanese TEST_F ≈570 chars without truncation).
+    # full prompt: 3000 chars.
+    # Only embed as required when the snippet is genuinely representative (score > 1).
+    # Generic/low-quality samples go in optional_parts instead.
+    _style_chars = 600 if slim_prompt else 3000
+    raw_style_snippet = str(context.get("style_example_snippet") or "").strip()
+    _style_score = _style_example_score(raw_style_snippet)
+    _style_is_required = _style_score > 1  # must have at least one project-specific feature
+    style_snippet = _clip(raw_style_snippet, _style_chars) if raw_style_snippet else ""
+    style_label = str(context.get("style_example_label") or "")
+    style_example_block = build_style_example_block(style_snippet, label=style_label) if (style_snippet and _style_is_required) else ""
+    style_example_optional = build_style_example_block(style_snippet, label=style_label) if (style_snippet and not _style_is_required) else ""
+
+    memory_block = str(context.get("testcode_memory") or "")
+    memory_note = (
+        "Use Project Test Code Memory below as the primary style/fixture/API reference.\n\n"
+        if memory_block else ""
+    )
+    no_sample_note = (
+        ""  # style example covers it when present
+        if style_example_block else
+        "No sample .cc is provided — use TODO_REVIEW_Fixture and TODO_REVIEW patterns for unknown API/fixture names.\n\n"
+        if not samples_text else ""
+    )
+
     required_head = (
-        "You are Microsoft 365 Copilot generating Google Test C++ for automotive ALEX.\n"
-        "ALEX is a Copilot orchestrator — use testcase rows + sample code; do NOT invent new helper APIs.\n\n"
+        "You are Microsoft 365 Copilot generating Google Test C++ for automotive software.\n\n"
+        "Primary goal: Generate one editable GTest .cc draft per testcase_id.\n\n"
         f"{grouping_block}"
-        "Rules (mandatory):\n"
-        "- Follow sample .cc / project GTest style EXACTLY (fixture, EXPECT_CALL, timing, comments).\n"
-        "- Generate only the testcase IDs listed below.\n"
-        "- Return code mapped exactly to testcase_id.\n"
-        "- One TEST_F (or TEST) per testcase_id.\n"
-        "- Spec comment must include testcase_id (e.g. // TC_PM_004 …).\n"
-        "- Map Given:/When: from expected_input; Then: from expected_output.\n"
-        "- If uncertain, return UNRESOLVED instead of inventing code.\n"
-        "- No TODO, no placeholders.\n\n"
-        f"{instruction_block}"
-        f"{stored_instruction_block}"
+        "Generation rules:\n"
+        "1. Generate as much concrete GTest code as possible from the testcase Given/When/Then.\n"
+        "2. Preserve testcase_id exactly in the TEST_F name and in a comment.\n"
+        "3. Follow the STYLE EXAMPLE structure exactly when one is provided.\n"
+        "4. If fixture class is unknown, use TODO_REVIEW_Fixture as the fixture name.\n"
+        "5. If an input signal API is unknown, write: // TODO_REVIEW: set input <signal_name>\n"
+        "6. If output assertion API is unknown, write: // TODO_REVIEW: assert <signal_name> == <value>\n"
+        "7. Do not return [TESTCASE_CODE] none when testcase has a meaningful Given, When, or Then.\n"
+        "8. Return UNRESOLVED only when testcase intent is truly empty or impossible to understand.\n"
+        "9. Missing API names is NOT a reason to return UNRESOLVED — use TODO_REVIEW instead.\n"
+        "10. Map Given/When from expected_input; map Then from expected_output.\n\n"
+        f"{memory_note}"
+        f"{memory_block}"
+        f"{style_example_block}"
+        f"{no_sample_note}"
         f"{context.get('spec_context') or ''}"
         f"{folder_block}"
     )
+    # Instruction and low-quality style examples are optional (trimmed when budget is tight)
     optional_parts = [
+        ("Project instruction:\n", instruction_block or stored_instruction_block),
         ("Optional internal hints:\n", str(context.get("config_hints") or "")),
-        ("Primary sample .cc (style anchor):\n", f"Primary sample .cc (style anchor):\n{samples_text}\n" if samples_text else ""),
-        ("Saved examples:\n", saved_text),
-        ("Accepted exemplar:\n", exemplar_block),
+        ("Sample .cc style reference:\n", style_example_optional),  # generic sample if not required
+        ("Additional sample .cc snippets:\n", f"Additional sample .cc snippets:\n{samples_text}\n" if samples_text and not style_example_block and not style_example_optional else ""),
+        ("Saved code examples (style only):\n", saved_text),
+        ("Accepted exemplar:\n", exemplar_block if not style_example_block else ""),
         ("Additional project GTest snippets:\n", ref_block),
     ]
     tail = (
-        f"Selected testcase IDs ({len(target_rows)}):\n"
+        f"Testcase rows for this API chunk ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
-        + "\n\nRequired output format:\n"
+        + "\n\nRequired output format (one block per testcase_id):\n"
         "[TESTCASE_CODE]\n"
-        "testcase_id: <id>\n"
+        "testcase_id: TC_xxx\n"
         "```cpp\n"
-        "<full spec comments + TEST_F for that testcase only>\n"
+        "// TC: TC_xxx\n"
+        "// TODO_REVIEW: update fixture/API names to match project\n"
+        "TEST_F(TODO_REVIEW_Fixture, TC_xxx) {\n"
+        "    // Given\n"
+        "    // TODO_REVIEW: setup input signals from testcase Given section\n\n"
+        "    // When\n"
+        "    // TODO_REVIEW: trigger behavior from testcase When section\n\n"
+        "    // Then\n"
+        "    // TODO_REVIEW: assert expected outputs from testcase Then section\n"
+        "}\n"
         "```\n"
-        "(repeat for each completed testcase)\n\n"
+        "(generate real code at every location where testcase data is available; "
+        "use TODO_REVIEW only where project-specific details are unknown)\n\n"
         "[UNRESOLVED]\n"
+        "Only list testcase IDs where testcase intent is too empty to generate any useful draft.\n"
         "testcase_id: <id>\n"
         "reason: <short reason>\n"
         "(or write \"none\")\n\n"
         "[ASSUMPTIONS]\n"
-        "- bullet list (max 8 lines)\n"
+        "- Short bullet list only (max 5 lines)\n\n"
+        "Before answering, verify:\n"
+        "1. Did I generate one code block per testcase_id that has meaningful Given/When/Then?\n"
+        "2. Did I avoid [TESTCASE_CODE] none for testcases with usable content?\n"
+        "3. Did I use TODO_REVIEW instead of UNRESOLVED for missing API/fixture/signal details?\n"
+        "4. Did I preserve every testcase_id exactly?\n"
     )
     return _budget_join(
         required_parts=[required_head],
@@ -482,6 +675,7 @@ def build_copilot_batch_prompt(
 
 
 def build_copilot_minimal_prompt(target_rows: list[dict[str, Any]], *, engineer_note: str = "") -> str:
+    """Fast retry prompt (used after timeout). Always requests best-effort draft code."""
     blocks: list[str] = []
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
@@ -493,17 +687,28 @@ def build_copilot_minimal_prompt(target_rows: list[dict[str, Any]], *, engineer_
             f"expected_output:\n{_clip(row.get('expected_output'), 650)}"
         )
     return _clip(
-        "Generate Google Test C++ for ALEX.\n"
-        "Fast mode: use only the testcase rows below. Preserve testcase_id exactly. "
-        "Do not regroup or invent testcase IDs. If uncertain, return UNRESOLVED.\n"
+        "Generate Google Test C++ .cc code for ALEX (fast mode).\n\n"
+        "Goal: one editable GTest draft per testcase_id.\n"
+        "Rules:\n"
+        "- Use TODO_REVIEW_Fixture if fixture is unknown.\n"
+        "- Use TODO_REVIEW comments for unknown API/signal/assertion/timing.\n"
+        "- Do not return [TESTCASE_CODE] none when testcase has Given/When/Then content.\n"
+        "- UNRESOLVED only when testcase intent is truly empty.\n"
+        "- Preserve testcase_id exactly.\n\n"
         "Output format:\n"
         "[TESTCASE_CODE]\n"
         "testcase_id: <id>\n"
-        "```cpp\n<full TEST_F code>\n```\n"
+        "```cpp\n"
+        "TEST_F(TODO_REVIEW_Fixture, <id>) {\n"
+        "    // Given: ...\n"
+        "    // When: ...\n"
+        "    // Then: ...\n"
+        "}\n"
+        "```\n"
         "[UNRESOLVED]\nnone\n"
         "[ASSUMPTIONS]\n- max 3 bullets\n\n"
-        f"Project instruction summary:\n{_clip(engineer_note, 700)}\n\n"
-        "Testcase rows:\n"
+        + (f"Project instruction:\n{_clip(engineer_note, 700)}\n\n" if engineer_note else "")
+        + "Testcase rows:\n"
         + "\n---\n".join(blocks),
         3500,
     )
@@ -533,17 +738,17 @@ def build_copilot_batch_prompts(
     group_key: str = "",
     group_field: str = "test_group",
     exclude_candidate_ids: list[str] | None = None,
-    allow_missing_sample: bool = False,
+    allow_missing_sample: bool = True,
     slim_prompt: bool = True,
     prompt_budget: int | None = None,
 ) -> dict[str, Any]:
     context = collect_copilot_project_context(bundle, gtest_state, language=language, slim_prompt=slim_prompt)
-    if (
-        not allow_missing_sample
-        and not context.get("sample_blocks")
+    missing_sample = (
+        not context.get("sample_blocks")
         and not context.get("saved_examples")
         and not context.get("exemplar")
-    ):
+    )
+    if missing_sample and not allow_missing_sample:
         return {
             "ok": False,
             "error": "Load sample .cc or save at least one good testcase before Generate All with Copilot API.",
@@ -613,12 +818,14 @@ def build_copilot_batch_prompts(
         "batch_count": len(prompts),
         "prompts": prompts,
         "combined_prompt": combined,
+        "missing_sample_warning": "No sample .cc loaded — generating from testcase rows only. Load sample .cc to improve output quality." if missing_sample else "",
         "context_summary": {
             "samples": len(context.get("sample_blocks") or []),
             "saved_examples": len(context.get("saved_examples") or []),
             "has_exemplar": bool(context.get("exemplar")),
             "reference_snippets": len(context.get("reference_snippets") or []),
             "slim_prompt": bool(slim_prompt),
+            "missing_sample": missing_sample,
             "prompt_budget": _positive_limit(
                 prompt_budget, _SLIM_PROMPT_BUDGET if slim_prompt else _FULL_PROMPT_BUDGET
             ),
@@ -765,24 +972,34 @@ def apply_copilot_batch_import(
 
     for cid in target_ids:
         if cid in unresolved_by_id:
-            msg = f"unresolved: {unresolved_by_id[cid]}"
-            if persist_errors:
-                persist_batch_generation_error(
-                    gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
-                )
+            # UNRESOLVED from Copilot → NEEDS_REVIEW with scaffold, never ERROR.
+            # Reason: Copilot marks UNRESOLVED when API/fixture/sample is missing —
+            # that is not an ALEX error; user can edit the scaffold.
+            unresolved_reason = str(unresolved_by_id[cid] or "Copilot returned UNRESOLVED for this testcase.")
+            row = next((r for r in (expected_candidate_ids or []) if r == cid), None)
+            row_data = next((r for r in (gtest_state.get("_batch_target_rows") or []) if str(r.get("candidate_id") or "") == cid), {"candidate_id": cid})
+            scaffold = _persist_review_scaffold(
+                gtest_state,
+                row=row_data,
+                reason=f"Copilot UNRESOLVED: {unresolved_reason}",
+                generation_source=generation_source,
+            )
             results.append(
                 {
                     "candidate_id": cid,
                     "ok": False,
-                    "workflow_status": "ERROR",
-                    "workflow_message": msg,
-                    "code_status": "ERROR",
+                    "workflow_status": "NEEDS_REVIEW",
+                    "workflow_message": f"Copilot UNRESOLVED: {unresolved_reason}",
+                    "code_status": "NEEDS_REVIEW",
+                    "full_snippet": scaffold,
+                    "issue_reason": "unresolved_by_copilot",
                 }
             )
-            error += 1
+            needs_review += 1
             continue
 
         if cid not in parsed_by_id:
+            # testcase_id not found in response: true parse error → ERROR
             msg = "testcase_id not found in Copilot API chunk output"
             if persist_errors:
                 persist_batch_generation_error(
@@ -803,6 +1020,7 @@ def apply_copilot_batch_import(
         item = parsed_by_id[cid]
         full = str(item.get("full_snippet") or "").strip()
         if not full or not re.search(r"\bTEST(?:_F)?\s*\(", full):
+            # No usable TEST_F block → ERROR
             msg = "parse failed — no TEST_F in block"
             if persist_errors:
                 persist_batch_generation_error(
@@ -900,6 +1118,7 @@ def run_copilot_batch_api(
     candidate_ids: list[str] | None = None,
     language: str = "EN",
     engineer_note: str = "",
+    clarification_note: str = "",
     batch_size: int | None = None,
     skip_saved: bool = False,
     scope: str = "filter",
@@ -909,11 +1128,14 @@ def run_copilot_batch_api(
     progress_callback: Any | None = None,
     cancel_check: Any | None = None,
     retry_count: int = 0,
-    allow_missing_sample: bool = False,
+    allow_missing_sample: bool = True,
     user_id: str | None = None,
     slim_prompt: bool = True,
     prompt_budget: int | None = None,
 ) -> dict[str, Any]:
+    if clarification_note:
+        note_prefix = f"Additional clarification for this retry:\n{clarification_note.strip()}\n\n"
+        engineer_note = note_prefix + str(engineer_note or "")
     built = build_copilot_batch_prompts(
         bundle,
         gtest_state,
@@ -1098,9 +1320,14 @@ def run_copilot_batch_api(
                     retry_count=run.get("retry_count", 0),
                     status_message=run["status_message"],
                 )
+            if job_output:
+                from pathlib import Path as _Path
+                flush_batch_run_checkpoint(_Path(job_output), gtest_state)
             continue
 
         raw = str(chat.get("reply") or chat.get("content") or chat.get("text") or "")
+        # Stash target rows so UNRESOLVED scaffold can reference them
+        gtest_state["_batch_target_rows"] = list(batch.get("_target_rows") or [])
         one = apply_copilot_batch_import(
             bundle,
             gtest_state,
@@ -1111,6 +1338,7 @@ def run_copilot_batch_api(
             generation_source="COPILOT_BATCH",
             persist_errors=False,
         )
+        gtest_state.pop("_batch_target_rows", None)
         chunk_results = list(one.get("results") or [])
         s = dict(one.get("summary") or {})
         run = gtest_state.setdefault("copilot_batch", {}).setdefault("run", {})
@@ -1200,6 +1428,9 @@ def run_copilot_batch_api(
                 retry_count=run.get("retry_count", 0),
                 status_message=run["status_message"],
             )
+        if job_output:
+            from pathlib import Path as _Path
+            flush_batch_run_checkpoint(_Path(job_output), gtest_state)
 
     run = gtest_state.setdefault("copilot_batch", {})["run"]
     run["status"] = "completed"
@@ -1236,6 +1467,9 @@ def run_copilot_batch_api(
                 or ""
             )
         failure_reason = failure_reason or "Copilot response did not contain usable [TESTCASE_CODE] or [UNRESOLVED] output."
+    if job_output:
+        from pathlib import Path as _Path
+        flush_batch_run_checkpoint(_Path(job_output), gtest_state)
     return {
         "ok": ok,
         "error": failure_reason if not ok else "",

@@ -15,6 +15,7 @@ ALEX_DATA_DIR = WEB_DATA / ".alex"
 GTEST_PRESET_NAME = "gtest_harness_preset.yaml"
 PROJECT_MEMORY_NAME = "project_memory.yaml"
 CODE_STYLE_SAMPLES_NAME = "code_style_samples.yaml"
+TESTCODE_MEMORY_NAME = "project_testcode_memory.md"
 
 LEGACY_MARKERS = ("pm_test_spec_assistant",)
 
@@ -59,6 +60,10 @@ def project_memory_path() -> Path:
 
 def code_style_samples_path() -> Path:
     return ensure_alex_data_dir() / CODE_STYLE_SAMPLES_NAME
+
+
+def testcode_memory_path() -> Path:
+    return ensure_alex_data_dir() / TESTCODE_MEMORY_NAME
 
 
 def _legacy_alex_dir(library_root: Path | None) -> Path | None:

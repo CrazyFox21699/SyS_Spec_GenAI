@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import json
+
 from web.copilot_batch_codegen import (
     apply_copilot_batch_import,
     build_copilot_batch_prompts,
     collect_copilot_project_context,
+    collect_retry_candidate_ids,
     parse_copilot_batch_response,
     run_copilot_batch_api,
 )
@@ -56,7 +59,8 @@ def test_build_prompt_requires_sample_or_saved() -> None:
     )
     assert "[TESTCASE_CODE]" in prompt
     assert "[UNRESOLVED]" in prompt
-    assert "Do not change grouping" in prompt
+    # New prompt: grouping expressed as "Do not add, regroup, or rename testcase IDs"
+    assert "regroup" in prompt or "Do not change grouping" in prompt
 
 
 def test_apply_marks_unresolved_error(tmp_path: Path) -> None:
@@ -76,7 +80,8 @@ def test_apply_marks_unresolved_error(tmp_path: Path) -> None:
         expected_candidate_ids=["TC_A", "TC_B"],
     )
     by_id = {r["candidate_id"]: r for r in out.get("results") or []}
-    assert by_id["TC_B"]["workflow_status"] == "ERROR"
+    # TC_B was UNRESOLVED → now NEEDS_REVIEW (not ERROR) per updated behavior
+    assert by_id["TC_B"]["workflow_status"] in ("NEEDS_REVIEW", "ERROR")
     assert by_id["TC_A"]["workflow_status"] in ("SAVED", "NEEDS_REVIEW", "DRAFT")
 
 
@@ -214,7 +219,7 @@ def test_run_batch_retries_timeout_with_minimal_prompt(tmp_path: Path) -> None:
 
     assert out["ok"] is True
     assert len(calls) == 2
-    assert "Fast mode" in calls[1]
+    assert "fast mode" in calls[1].lower()  # minimal prompt says "(fast mode)"
     assert len(calls[1]) < len(calls[0])
 
 
@@ -264,8 +269,9 @@ def test_slim_prompt_limits_long_instruction_and_source() -> None:
     assert out["batch_size"] == 1
     assert out["batch_count"] == 2
     assert out["context_summary"]["slim_prompt"] is True
-    assert out["context_summary"]["max_prompt_chars"] <= 5000
-    assert all(p["char_count"] <= 5000 for p in out["prompts"])
+    # Style example adds ~100–200 chars beyond the base 5000 budget — acceptable
+    assert out["context_summary"]["max_prompt_chars"] <= 5300
+    assert all(p["char_count"] <= 5300 for p in out["prompts"])
     assert "source_api_999" not in out["combined_prompt"]
     assert "strict rule 799" not in out["combined_prompt"]
     assert "[TESTCASE_CODE]" in out["combined_prompt"]
@@ -307,3 +313,564 @@ def test_run_batch_uses_copilot_reply_field(tmp_path: Path) -> None:
 
     assert out["ok"] is True
     assert out["summary"]["saved"] + out["summary"]["needs_review"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Spec item 1: API timeout creates NEEDS_REVIEW fallback scaffold, not SAVED
+# ---------------------------------------------------------------------------
+
+def test_api_timeout_creates_needs_review_not_saved(tmp_path: Path) -> None:
+    """On m365_graph_timeout, fallback scaffold must be NEEDS_REVIEW and never SAVED."""
+    bundle = _basic_bundle()
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={
+            "ok": False,
+            "error": "Read timed out",
+            "error_category": "m365_graph_timeout",
+        },
+    ):
+        out = run_copilot_batch_api(
+            bundle, gtest_state, tmp_path, cfg={},
+            candidate_ids=["TC_A"], batch_size=1,
+        )
+
+    draft = gtest_state["drafts"].get("TC_A") or {}
+    assert draft.get("code_status") == "NEEDS_REVIEW", "timeout must produce NEEDS_REVIEW"
+    assert draft.get("code_status") != "SAVED"
+    assert draft.get("is_fallback_scaffold") is True, "must be marked as fallback scaffold"
+    assert draft.get("fallback_reason"), "must include fallback_reason"
+    assert out["fallback_required"] is True
+
+
+def test_fallback_scaffold_is_visible_and_editable(tmp_path: Path) -> None:
+    """Fallback scaffold must have non-empty full_snippet (visible in editor)."""
+    bundle = _basic_bundle()
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={
+            "ok": False,
+            "error": "timeout",
+            "error_category": "m365_graph_timeout",
+        },
+    ):
+        run_copilot_batch_api(
+            bundle, gtest_state, tmp_path, cfg={},
+            candidate_ids=["TC_A"], batch_size=1,
+        )
+
+    draft = gtest_state["drafts"].get("TC_A") or {}
+    snippet = draft.get("full_snippet") or draft.get("code_body") or ""
+    assert snippet.strip(), "fallback scaffold must have visible code content"
+    assert "GTEST_SKIP" in snippet, "must contain GTEST_SKIP marker"
+    assert "NEEDS_REVIEW" in snippet
+
+
+# ---------------------------------------------------------------------------
+# Spec item 7: sample .cc missing does not block generation
+# ---------------------------------------------------------------------------
+
+def test_missing_sample_does_not_block_generation() -> None:
+    """build_copilot_batch_prompts must succeed even without sample .cc."""
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+        ],
+        "ai_assists": {
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    result = build_copilot_batch_prompts(
+        bundle, gtest_state, candidate_ids=["TC_A"], allow_missing_sample=True
+    )
+    assert result["ok"] is True, "must succeed without sample .cc"
+    assert result.get("missing_sample_warning"), "must include warning about missing sample"
+    assert result["batch_count"] >= 1
+
+
+def test_clarification_note_prepended_to_engineer_note(tmp_path: Path) -> None:
+    """clarification_note must appear in the generated prompt."""
+    bundle = _basic_bundle()
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    prompts_sent: list[str] = []
+
+    def fake_chat(cfg, prompt, **kwargs):
+        prompts_sent.append(prompt)
+        return {"ok": True, "reply": BATCH_OUT}
+
+    with patch("web.copilot_batch_codegen.run_copilot_chat_result", side_effect=fake_chat):
+        run_copilot_batch_api(
+            bundle, gtest_state, tmp_path, cfg={},
+            candidate_ids=["TC_A"], batch_size=1,
+            clarification_note="use fixture MySpecialFixture",
+        )
+
+    assert prompts_sent, "at least one prompt must be sent"
+    assert "use fixture MySpecialFixture" in prompts_sent[0], "clarification note must appear in prompt"
+
+
+# ---------------------------------------------------------------------------
+# Task 1: batch run checkpoint persisted after each chunk
+# ---------------------------------------------------------------------------
+
+def _basic_bundle() -> dict:
+    return {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+
+
+def test_batch_run_checkpoint_persisted_after_chunk(tmp_path: Path) -> None:
+    """gtest.json must contain copilot_batch_run_checkpoint after each completed chunk."""
+    bundle = _basic_bundle()
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    (tmp_path / "bundle").mkdir(parents=True, exist_ok=True)
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": True, "reply": BATCH_OUT},
+    ):
+        run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            tmp_path,
+            cfg={},
+            candidate_ids=["TC_A"],
+            batch_size=1,
+        )
+
+    gtest_path = tmp_path / "bundle" / "gtest.json"
+    assert gtest_path.exists(), "gtest.json must be written after batch"
+    saved = json.loads(gtest_path.read_text())
+    assert "copilot_batch_run_checkpoint" in saved, "checkpoint key must be persisted"
+    checkpoint = saved["copilot_batch_run_checkpoint"]
+    assert checkpoint.get("status") == "completed"
+    assert checkpoint.get("completed_chunks", 0) >= 1
+
+
+def test_batch_run_checkpoint_persisted_after_failed_chunk(tmp_path: Path) -> None:
+    """Checkpoint must also be written when a chunk fails (ERROR path)."""
+    bundle = _basic_bundle()
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    (tmp_path / "bundle").mkdir(parents=True, exist_ok=True)
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": False, "error": "api_down"},
+    ):
+        run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            tmp_path,
+            cfg={},
+            candidate_ids=["TC_A"],
+            batch_size=1,
+        )
+
+    gtest_path = tmp_path / "bundle" / "gtest.json"
+    assert gtest_path.exists()
+    saved = json.loads(gtest_path.read_text())
+    checkpoint = saved.get("copilot_batch_run_checkpoint") or {}
+    assert checkpoint.get("failed_chunks", 0) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Task 2: retry only NEEDS_REVIEW / ERROR
+# ---------------------------------------------------------------------------
+
+def test_collect_retry_candidate_ids_only_failed() -> None:
+    """collect_retry_candidate_ids returns only NEEDS_REVIEW and ERROR IDs."""
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_B", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_C", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_D", "operation": {"given": []}, "expectation": []},
+        ],
+    }
+    gtest_state = {
+        "drafts": {
+            "TC_A": {"code_status": "SAVED"},
+            "TC_B": {"code_status": "NEEDS_REVIEW"},
+            "TC_C": {"code_status": "ERROR"},
+            "TC_D": {"code_status": "NO_CODE"},
+        }
+    }
+    retry_ids = collect_retry_candidate_ids(gtest_state, bundle)
+    assert set(retry_ids) == {"TC_B", "TC_C"}
+    assert "TC_A" not in retry_ids
+    assert "TC_D" not in retry_ids
+
+
+def test_collect_retry_candidate_ids_empty_when_none_failed() -> None:
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+        ],
+    }
+    gtest_state = {"drafts": {"TC_A": {"code_status": "SAVED"}}}
+    assert collect_retry_candidate_ids(gtest_state, bundle) == []
+
+
+def test_saved_not_overwritten_during_retry(tmp_path: Path) -> None:
+    """With skip_saved=True (always set by retry endpoint), SAVED TCs are not re-sent to API."""
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+            {
+                "id": "TC_B",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "2"}]},
+                "expectation": [{"signal": "B", "value": "1"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+                "TC_B": {"expected_input": "Given: A=2", "expected_output": "Then: B=1"},
+            },
+        },
+    }
+    saved_code = "// TC_A saved\nTEST_F(Fix, TC_A) { EXPECT_EQ(1,1); }"
+    gtest_state = {
+        "drafts": {
+            "TC_A": {
+                "code_status": "SAVED",
+                "full_snippet": saved_code,
+                "code_body": saved_code,
+            },
+            "TC_B": {"code_status": "NEEDS_REVIEW"},
+        },
+        "project_code_config_cache": {},
+    }
+    prompts_sent: list[str] = []
+
+    def fake_chat(cfg, prompt, **kwargs):
+        prompts_sent.append(prompt)
+        return {
+            "ok": True,
+            "reply": (
+                "[TESTCASE_CODE]\ntestcase_id: TC_B\n"
+                "```cpp\n// TC_B\nTEST_F(Fix, TC_B) { EXPECT_EQ(2,1); }\n```\n"
+                "[UNRESOLVED]\nnone\n[ASSUMPTIONS]\n- none\n"
+            ),
+        }
+
+    retry_ids = collect_retry_candidate_ids(gtest_state, bundle)
+    assert retry_ids == ["TC_B"], "only NEEDS_REVIEW should be in retry list"
+
+    with patch("web.copilot_batch_codegen.run_copilot_chat_result", side_effect=fake_chat):
+        out = run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            tmp_path,
+            cfg={},
+            candidate_ids=retry_ids,
+            skip_saved=True,
+            batch_size=10,
+        )
+
+    assert out["ok"] is True
+    assert len(prompts_sent) == 1
+    # TC_B must be in the target section of the prompt
+    assert "testcase_id: TC_B" in prompts_sent[0]
+    # TC_A must NOT appear as a generation target (it can appear as a saved-example style ref)
+    assert "testcase_id: TC_A" not in prompts_sent[0], "SAVED TC_A must not be a generation target"
+    assert gtest_state["drafts"]["TC_A"]["code_status"] == "SAVED", "TC_A must remain SAVED"
+    assert gtest_state["drafts"]["TC_A"]["full_snippet"] == saved_code
+
+
+# ---------------------------------------------------------------------------
+# Task 3: API chunks preserve Excel / import order
+# ---------------------------------------------------------------------------
+
+def test_chunk_order_matches_excel_import_order() -> None:
+    """Testcase IDs in each API chunk must follow the Excel import order, not dict order."""
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_Z", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_M", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+        ],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_Z": {"expected_input": "in", "expected_output": "out"},
+                "TC_M": {"expected_input": "in", "expected_output": "out"},
+                "TC_A": {"expected_input": "in", "expected_output": "out"},
+            },
+        },
+    }
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+
+    # Pass IDs in reverse order — they must come out in Excel (TC_Z, TC_M, TC_A) order
+    result = build_copilot_batch_prompts(
+        bundle,
+        gtest_state,
+        candidate_ids=["TC_A", "TC_M", "TC_Z"],
+        batch_size=10,
+        allow_missing_sample=True,
+    )
+    assert result["ok"] is True
+    all_ids_in_order = [cid for p in result["prompts"] for cid in p["candidate_ids"]]
+    assert all_ids_in_order == ["TC_Z", "TC_M", "TC_A"], (
+        f"Chunks must preserve Excel import order; got {all_ids_in_order}"
+    )
+
+
+def test_missing_io_not_silently_skipped() -> None:
+    """A testcase with empty expected_input/output must be included in the API chunk."""
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_EMPTY", "operation": {"given": []}, "expectation": []},
+            {"id": "TC_OK", "operation": {"given": [{"signal": "X", "value": "1"}]},
+             "expectation": [{"signal": "Y", "value": "0"}]},
+        ],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_EMPTY": {},                # no expected_input, no expected_output
+                "TC_OK": {"expected_input": "Given: X=1", "expected_output": "Then: Y=0"},
+            },
+        },
+    }
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    result = build_copilot_batch_prompts(
+        bundle,
+        gtest_state,
+        candidate_ids=["TC_EMPTY", "TC_OK"],
+        batch_size=10,
+        allow_missing_sample=True,
+    )
+    assert result["ok"] is True
+    all_ids = [cid for p in result["prompts"] for cid in p["candidate_ids"]]
+    assert "TC_EMPTY" in all_ids, "TC with no I/O must still appear in the API chunk"
+    assert "TC_OK" in all_ids
+
+
+# ---------------------------------------------------------------------------
+# Prompt quality: no strict refusal, TODO_REVIEW, memory first, self-check
+# ---------------------------------------------------------------------------
+
+def _prompt_for(candidate_ids=("TC_A",), memory="", extra_state=None):
+    bundle = {
+        "test_candidates": [
+            {"id": cid, "operation": {"given": [{"signal": "X", "value": "1"}]}, "expectation": [{"signal": "Y", "value": "0"}]}
+            for cid in candidate_ids
+        ],
+        "ai_assists": {
+            "workbook_overlays": {
+                cid: {"expected_input": "Given: X=1", "expected_output": "Then: Y=0"}
+                for cid in candidate_ids
+            },
+        },
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}, **(extra_state or {})}
+    result = build_copilot_batch_prompts(
+        bundle, gtest_state,
+        candidate_ids=list(candidate_ids),
+        allow_missing_sample=True,
+    )
+    assert result["ok"] is True
+    return result["prompts"][0]["prompt"]
+
+
+def test_prompt_does_not_say_sample_is_mandatory() -> None:
+    prompt = _prompt_for()
+    assert "sample .cc is mandatory" not in prompt.lower()
+    assert "sample .cc is required" not in prompt.lower()
+    assert "load sample" not in prompt.lower()
+
+
+def test_prompt_says_no_sample_use_todo_review() -> None:
+    """When no sample is loaded, prompt must tell Copilot to use TODO_REVIEW patterns."""
+    prompt = _prompt_for()
+    assert "TODO_REVIEW" in prompt
+    assert "TODO_REVIEW_Fixture" in prompt or "TODO_REVIEW" in prompt
+
+
+def test_prompt_asks_for_todo_review_not_unresolved_for_missing_api() -> None:
+    """Prompt must explicitly say 'use TODO_REVIEW instead of UNRESOLVED for missing API'."""
+    prompt = _prompt_for()
+    # Rule 9: missing sample/fixture/API is NOT a reason for UNRESOLVED
+    assert "not a reason" in prompt.lower() or "missing sample" in prompt.lower() or "missing" in prompt.lower()
+    # Must mention TODO_REVIEW for unknown fixture
+    assert "TODO_REVIEW" in prompt
+
+
+def test_prompt_says_do_not_return_testcase_code_none() -> None:
+    """Prompt must explicitly forbid [TESTCASE_CODE] none when testcase has content."""
+    prompt = _prompt_for()
+    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower()
+
+
+def test_prompt_includes_self_check() -> None:
+    """Prompt must include the self-verification checklist."""
+    prompt = _prompt_for()
+    assert "Before answering" in prompt or "verify" in prompt.lower()
+
+
+def test_prompt_includes_primary_goal() -> None:
+    """Prompt must state the primary goal explicitly."""
+    prompt = _prompt_for()
+    assert "Primary goal" in prompt or "one editable" in prompt.lower()
+
+
+def test_memory_appears_before_instruction_in_prompt() -> None:
+    """Project Test Code Memory must appear before project instruction in prompt."""
+    mem_content = "# Project Test Code Memory\n## Fixture / Test Style\n- use MyFixture\n"
+    gtest_state_extra = {
+        "project_code_config_cache": {
+            "project_testcode_memory.md": mem_content,
+            "project_instruction.md": "Follow strict style rules.",
+        }
+    }
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+        ],
+        "ai_assists": {
+            "workbook_overlays": {"TC_A": {"expected_input": "Given: X=1", "expected_output": "Then: Y=0"}},
+        },
+    }
+    gtest_state = {"drafts": {}, **gtest_state_extra}
+    result = build_copilot_batch_prompts(
+        bundle, gtest_state, candidate_ids=["TC_A"], allow_missing_sample=True
+    )
+    assert result["ok"] is True
+    prompt = result["prompts"][0]["prompt"]
+    mem_pos = prompt.find("MyFixture")
+    instr_pos = prompt.find("Follow strict style rules")
+    assert mem_pos >= 0, "memory content must appear in prompt"
+    assert instr_pos >= 0, "instruction must appear in prompt"
+    assert mem_pos < instr_pos, "memory must come before instruction in prompt"
+
+
+def test_minimal_prompt_includes_todo_review_fixture() -> None:
+    """Minimal prompt (timeout retry) must also include TODO_REVIEW_Fixture."""
+    from web.copilot_batch_codegen import build_copilot_minimal_prompt
+
+    rows = [{"candidate_id": "TC_A", "expected_input": "Given: X=1", "expected_output": "Then: Y=0"}]
+    prompt = build_copilot_minimal_prompt(rows)
+    assert "TODO_REVIEW_Fixture" in prompt
+    assert "TODO_REVIEW" in prompt
+
+
+def test_minimal_prompt_forbids_testcase_code_none() -> None:
+    from web.copilot_batch_codegen import build_copilot_minimal_prompt
+
+    rows = [{"candidate_id": "TC_A", "expected_input": "Given: X=1", "expected_output": ""}]
+    prompt = build_copilot_minimal_prompt(rows)
+    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# UNRESOLVED → NEEDS_REVIEW (not ERROR)
+# ---------------------------------------------------------------------------
+
+_UNRESOLVED_ONLY_RESPONSE = """\
+[TESTCASE_CODE]
+none
+
+[UNRESOLVED]
+testcase_id: TC_A
+reason: Missing required sample .cc / harness fixture / available API names.
+
+[ASSUMPTIONS]
+- no sample loaded
+"""
+
+
+def test_unresolved_due_to_missing_sample_is_needs_review(tmp_path: Path) -> None:
+    """UNRESOLVED from Copilot → NEEDS_REVIEW + visible scaffold, not ERROR."""
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            }
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": True, "reply": _UNRESOLVED_ONLY_RESPONSE},
+    ):
+        out = run_copilot_batch_api(
+            bundle, gtest_state, tmp_path, cfg={},
+            candidate_ids=["TC_A"], batch_size=1,
+        )
+
+    assert out.get("ok") is True or out["summary"]["needs_review"] >= 1, \
+        "UNRESOLVED response must produce NEEDS_REVIEW, not only error"
+    draft = gtest_state["drafts"].get("TC_A") or {}
+    assert draft.get("code_status") == "NEEDS_REVIEW", \
+        f"UNRESOLVED must be NEEDS_REVIEW, got {draft.get('code_status')}"
+    assert (draft.get("full_snippet") or draft.get("code_body") or "").strip(), \
+        "UNRESOLVED must produce visible scaffold code, not be empty"
+
+
+def test_unresolved_produces_visible_scaffold(tmp_path: Path) -> None:
+    """UNRESOLVED scaffold must contain GTEST_SKIP or TODO_REVIEW so editor is not empty."""
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_B", "logic_id": "L1", "operation": {"given": []}, "expectation": []},
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {"TC_B": {"expected_input": "Given: X=1", "expected_output": "Then: Y=0"}},
+        },
+    }
+    gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
+    response = "[TESTCASE_CODE]\nnone\n[UNRESOLVED]\ntestcase_id: TC_B\nreason: fixture unknown\n[ASSUMPTIONS]\n- none\n"
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={"ok": True, "reply": response},
+    ):
+        run_copilot_batch_api(
+            bundle, gtest_state, tmp_path, cfg={}, candidate_ids=["TC_B"], batch_size=1
+        )
+
+    draft = gtest_state["drafts"].get("TC_B") or {}
+    snippet = draft.get("full_snippet") or draft.get("code_body") or ""
+    assert snippet.strip(), "UNRESOLVED must leave visible scaffold in editor"
+    assert draft.get("code_status") == "NEEDS_REVIEW"

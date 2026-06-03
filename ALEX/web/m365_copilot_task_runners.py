@@ -189,6 +189,7 @@ def _run_code_copilot_batch(
         candidate_ids=[c for c in (payload.get("candidate_ids") or []) if c],
         language=str(payload.get("language") or "EN"),
         engineer_note=str(payload.get("engineer_note") or ""),
+        clarification_note=str(payload.get("clarification_note") or ""),
         batch_size=int(payload.get("batch_size") or 10),
         skip_saved=bool(payload.get("skip_saved")),
         scope=str(payload.get("scope") or "filter"),
@@ -196,7 +197,7 @@ def _run_code_copilot_batch(
         group_field=str(payload.get("group_field") or "test_group"),
         retry_count=int(payload.get("retry_count") or 0),
         user_id=str(payload.get("m365_user_id") or "") or None,
-        allow_missing_sample=bool(payload.get("allow_missing_sample")),
+        allow_missing_sample=bool(payload.get("allow_missing_sample", True)),
         slim_prompt=bool(payload.get("slim_prompt", True)),
         prompt_budget=int(payload.get("prompt_budget") or 5000),
         progress_callback=lambda cur, tot, msg, **extra: progress(

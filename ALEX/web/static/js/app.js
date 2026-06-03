@@ -381,6 +381,13 @@ let state = {
     activeGenerationTaskId: "",
     pauseRequested: false,
     streamLines: [],
+    testcodeMemory: null,
+    testcodeMemoryDraft: null,
+    testcodeMemorySource: "global",
+    clarificationNote: "",
+    showClarification: false,
+    editingTestcaseId: "",
+    syncStatus: null,
   },
   _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
@@ -1642,6 +1649,23 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
     hydrateTestCodeWorkflowFromWorkspace(state.testCode.workspace, { fullReset: false });
     applyBatchWorkflowResults(result);
     state.testCode.batchRunProgress = state.testCode.workspace?.copilot_batch?.run || null;
+    state.testCode.batchMissingSampleWarning = result.missing_sample_warning || "";
+    // Resolve every candidate that was still "running" or "queued" from workspace draft status
+    if (kind === "code_copilot_batch") {
+      const drafts = state.testCode.workspace?.drafts || {};
+      const tc = state.testCode;
+      Object.entries(tc.generateStatus || {}).forEach(([cid, st]) => {
+        if (st === "confirmed") return;
+        if (st === "running" || st === "queued") {
+          const draft = drafts[cid] || {};
+          const cs = String(draft.code_status || "").toUpperCase();
+          if (cs === "SAVED") tc.generateStatus[cid] = "done";
+          else if (cs === "NEEDS_REVIEW") tc.generateStatus[cid] = "fallback";
+          else if (cs === "ERROR") tc.generateStatus[cid] = "failed";
+          else tc.generateStatus[cid] = "done"; // task completed, not stuck
+        }
+      });
+    }
     setTestCodeApiStatus(result.fallback_required ? "idle" : "done");
     if (state.currentPageId === "test-code") {
       const statusEl = $("#testcode-status");
@@ -3703,6 +3727,13 @@ async function saveWorkbookRow(payload) {
     body: JSON.stringify(payload),
   });
   if (res?.bundle_version != null) state.bundleVersion = res.bundle_version;
+  // If I/O changed, the server marks generated code stale — invalidate testcode workspace cache
+  if (res?.stale_testcode_cids?.length) {
+    invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+  } else if (payload.expected_input != null || payload.expected_output != null) {
+    // Optimistically invalidate in case stale detection ran server-side
+    invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+  }
   return res;
 }
 
@@ -7266,6 +7297,17 @@ async function fetchGtestWorkspace(force = false) {
     state.testCode.batchResults = data.copilot_batch.last_results;
     state.testCode.batchSummary = summarizeBatchWorkflowResults(state.testCode.batchResults);
   }
+  // Auto-load testcode memory on first workspace fetch (or refresh)
+  if (!state.testCode.testcodeMemory || force) {
+    try {
+      const memData = await api(`/api/review/testcode-memory?job_id=${encodeURIComponent(state.jobId)}`);
+      state.testCode.testcodeMemory = memData.content || "";
+      if (state.testCode.testcodeMemoryDraft == null) {
+        state.testCode.testcodeMemoryDraft = state.testCode.testcodeMemory;
+      }
+      state.testCode.testcodeMemorySource = "global";
+    } catch (_) { /* non-fatal */ }
+  }
   return data;
 }
 
@@ -7313,6 +7355,7 @@ async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows |
   }
   state.testCode.switching = true;
   state.testCode.selectedCandidateId = candidateId;
+  state.testCode.editingTestcaseId = "";  // clear inline edit on TC switch
   state.workbookFocus.testcode = candidateId;
   const row = rows.find((r) => r.candidate_id === candidateId);
   if (row?.logic_id) state.testCode.selectedLogicId = row.logic_id;
@@ -7640,7 +7683,7 @@ const TESTCODE_CONFIG_FILES = [
   "ai_review_pack.md",
 ];
 
-const TESTCODE_PROJECT_INSTRUCTION_TEMPLATE = `# Project instruction
+const TESTCODE_PROJECT_INSTRUCTION_TEMPLATE_LONG = `# Project instruction
 
 ## 1. Core generation principle: strict mimic mode
 - Generation is not creative. It is COPY + MAP.
@@ -7806,6 +7849,15 @@ const TESTCODE_PROJECT_INSTRUCTION_TEMPLATE = `# Project instruction
 
 ## 17. Customer-specific notes
 - Add or edit project/customer constraints here.
+`;
+
+const TESTCODE_PROJECT_INSTRUCTION_TEMPLATE = `Generate Google Test C++ .cc code from the testcase rows.
+Follow sample .cc style if provided.
+Generate one TEST_F per testcase_id.
+Preserve testcase_id in comments.
+Use Given/When/Then from testcase.
+If unsure, return UNRESOLVED instead of inventing behavior.
+Return structured [TESTCASE_CODE] blocks.
 `;
 
 function testCaseMatchesQualityFilter(cid, qFilter) {
@@ -8500,6 +8552,7 @@ function testCodeCopilotBatchPayload(rows, scopeOverride) {
       ? state.testCode.batchRetryIds
       : testCodeBatchTargetIds(rows, scope),
     engineer_note: getTestCodeProjectInstruction(),
+    clarification_note: state.testCode.clarificationNote || "",
     batch_size: 1,
     skip_saved: !!state.testCode.skipSavedOnBatch,
     retry_count: Number(state.testCode.batchRetryCount) || 0,
@@ -8522,11 +8575,13 @@ function getTestCodeProjectInstruction() {
   if (!trimmed || trimmed === "# Project instruction") {
     return TESTCODE_PROJECT_INSTRUCTION_TEMPLATE;
   }
+  // Replace old verbose defaults with the short template
   if (
-    trimmed.includes("## Fixture / test style") &&
-    trimmed.includes("## Mock / RTE read rules") &&
-    trimmed.includes("## Customer-specific notes") &&
-    trimmed.includes("Add customer/project-specific constraints here.")
+    (trimmed.includes("## Fixture / test style") &&
+      trimmed.includes("## Mock / RTE read rules") &&
+      trimmed.includes("Add customer/project-specific constraints here.")) ||
+    (trimmed.includes("## 1. Core generation principle: strict mimic mode") &&
+      trimmed.includes("## 17. Customer-specific notes"))
   ) {
     return TESTCODE_PROJECT_INSTRUCTION_TEMPLATE;
   }
@@ -8538,6 +8593,43 @@ function testCodeProjectInstructionSavedAt() {
   const versions = state.testCode.configVersions || state.testCode.projectCodeConfig?.versions || [];
   const hit = [...versions].reverse().find((v) => (v.changed_sections || []).includes("project_instruction.md"));
   return hit?.timestamp || state.testCode.projectInstructionSavedAt || "";
+}
+
+function renderTestCodeMemoryEditor() {
+  const tc = state.testCode;
+  const mem = tc.testcodeMemoryDraft != null ? tc.testcodeMemoryDraft : (tc.testcodeMemory || "");
+  const source = tc.testcodeMemorySource || "global";
+  const hasMem = (mem || "").trim().length > 60;
+  const sampleOk = (tc.codeStyleSamples || []).length > 0 || String(tc.samplePasteDraft || "").trim();
+  return `<div class="alex-testcode-memory" id="testcode-memory-section">
+    <label class="detail">Project Test Code Memory
+      <span class="detail" style="font-weight:normal;margin-left:0.5rem" id="testcode-memory-source-badge">(${esc(source === "global" ? "from global library" : "job-local")})</span>
+    </label>
+    <textarea id="testcode-memory-editor" class="gtest-input gtest-note alex-testcode-rules" rows="8" spellcheck="false" placeholder="# Project Test Code Memory
+## Fixture / Test Style
+## Input Mock Pattern
+## Output Assertion Pattern
+## Timing Pattern
+## Known Signal Rules
+## Allowed APIs / Forbidden APIs
+## Reviewer Notes / Learned Fixes
+## Temporary Regeneration Notes">${esc(mem)}</textarea>
+    <div class="alex-testcode-editor__actions" style="flex-wrap:wrap;gap:0.25rem;margin-top:0.25rem">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory">Save Memory</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory-global">Save as Global</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-reload-memory-global">Reload Global</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-extract-to-memory" ${sampleOk ? "" : "disabled title='Load sample .cc first'"}>Extract Style to Memory</button>
+    </div>
+    <div class="alex-testcode-editor__actions" style="flex-wrap:wrap;gap:0.25rem;margin-top:0.25rem">
+      <span class="detail" style="align-self:center">Quick add:</span>
+      <button type="button" class="btn secondary btn-inline" data-memory-section="Input Mock Pattern" id="btn-memory-add-mock">+ Input Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-memory-section="Output Assertion Pattern" id="btn-memory-add-assert">+ Assertion Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-memory-section="Timing Pattern" id="btn-memory-add-timing">+ Timing Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-memory-section="Reviewer Notes / Learned Fixes" id="btn-memory-add-reviewer">+ Reviewer Note</button>
+      <button type="button" class="btn secondary btn-inline" data-memory-section="Temporary Regeneration Notes" id="btn-memory-add-regen">+ Regen Hint</button>
+    </div>
+    ${hasMem ? "" : `<p class="detail" style="color:#888;margin-top:0.25rem">Memory is empty. Add rules or Extract Style from sample .cc to improve generation quality.</p>`}
+  </div>`;
 }
 
 function renderTestCodeProjectInstructionEditor() {
@@ -8589,7 +8681,7 @@ function renderTestCodeProgressPanel(rows) {
   const pos = ordered.findIndex((r) => r.candidate_id === selectedId);
   const runningTask = runningTestCodeTaskForCandidate(selectedId);
   const anyRunning = Object.values(state.m365Tasks.byId || {}).find(
-    (t) => t.status === "running" && (t.kind === "code_generate" || t.kind === "code_refine")
+    (t) => t.status === "running" && (t.kind === "code_generate" || t.kind === "code_refine" || t.kind === "code_copilot_batch")
   );
   const activeTask = runningTask || anyRunning || null;
   const taskCandidate = activeTask?.candidate_id || activeTask?.payload?.candidate_id || selectedId;
@@ -8601,20 +8693,42 @@ function renderTestCodeProgressPanel(rows) {
     : selectedId
       ? `Selected ${selectedId}.`
       : "Idle.";
+
+  const run = tc.batchRunProgress || tc.workspace?.copilot_batch?.run || {};
+  const batchRunning = run.status === "running";
+  const chunkIdx = run.batch_index || run.running_chunk || 0;
+  const chunkTotal = run.batch_total || run.queued_chunks != null ? (run.completed_chunks || 0) + (run.running_chunk ? 1 : 0) + (run.queued_chunks || 0) : 0;
+  const currentChunkIds = (run.current_candidate_ids || []).slice(0, 6);
+  const chunkElapsed = run.last_response_s != null ? `${run.last_response_s}s` : "—";
+  const failedChunks = run.failed_chunks || 0;
+  const missingWarning = tc.batchMissingSampleWarning || "";
+
+  const hasNeedsReview = progress.review > 0;
+  const retryNrCount = hasNeedsReview ? progress.review + progress.error : 0;
+  const selectedDraft = (tc.workspace?.drafts || {})[selectedId] || {};
+  const isFallback = selectedDraft.is_fallback_scaffold;
+
   return `<section class="card alex-testcode-progress-panel" id="testcode-progress-panel">
     <h3 class="alex-testcode-copilot-primary__title">Progress</h3>
+    ${missingWarning ? `<p class="tag warning detail">${esc(missingWarning)}</p>` : ""}
     <dl class="alex-testcode-context-dl alex-testcode-progress-grid">
       <dt>Total testcase count</dt><dd>${progress.total}</dd>
-      <dt>Current testcase</dt><dd>${selectedId ? `<code>${esc(selectedId)}</code>` : "—"}</dd>
-      <dt>Current position</dt><dd>${pos >= 0 ? `${pos + 1} / ${ordered.length}` : "—"}</dd>
+      <dt>SAVED / NEEDS_REVIEW / ERROR</dt><dd><b>${progress.saved}</b> / <span class="${progress.review > 0 ? "tag warning" : ""}">${progress.review}</span> / <span class="${progress.error > 0 ? "tag error" : ""}">${progress.error}</span></dd>
+      <dt>API chunk</dt><dd>${batchRunning ? `${chunkIdx} / ${chunkTotal || "…"}${failedChunks ? ` · <span class="tag warning">${failedChunks} failed</span>` : ""}` : (run.completed_chunks != null ? `${run.completed_chunks} completed${failedChunks ? `, ${failedChunks} failed` : ""}` : "—")}</dd>
+      ${batchRunning && currentChunkIds.length ? `<dt>Current chunk TCs</dt><dd><code>${esc(currentChunkIds.join(", "))}</code></dd>` : ""}
+      <dt>Chunk elapsed</dt><dd>${chunkElapsed}</dd>
+      <dt>Total elapsed</dt><dd>${esc(elapsed)}</dd>
+      <dt>Current testcase</dt><dd>${selectedId ? `<code>${esc(selectedId)}</code>${isFallback ? ' <span class="tag warning">fallback scaffold</span>' : ""}` : "—"}</dd>
       <dt>Current status</dt><dd>${esc(selectedId ? testCodeWorkflowLabel(computeTestCodeWorkflowStatus(selectedId)) : "idle")}</dd>
-      <dt>Generated testcase count</dt><dd>${progress.saved + progress.review + progress.error + progress.draft}</dd>
-      <dt>SAVED / NEEDS_REVIEW / ERROR</dt><dd>${progress.saved} / ${progress.review} / ${progress.error}</dd>
-      <dt>Elapsed time</dt><dd>${esc(elapsed)}</dd>
-      <dt>Last response time</dt><dd>${lastResponse ? esc(formatTestCodeTimestamp(lastResponse)) : "—"}</dd>
-      <dt>Current status message</dt><dd>${esc(statusMessage)}</dd>
+      <dt>Status message</dt><dd>${esc(run.status_message || statusMessage)}</dd>
       <dt>Last error</dt><dd>${lastError ? esc(lastError) : "—"}</dd>
     </dl>
+    <div class="alex-testcode-editor__actions" style="margin-top:0.5rem;flex-wrap:wrap;gap:0.25rem">
+      ${selectedId ? `<button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-this" title="Retry selected testcase with Copilot API">Retry this testcase</button>` : ""}
+      ${retryNrCount > 0 ? `<button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-needs-review" title="Retry all NEEDS_REVIEW and ERROR testcases">Retry NEEDS_REVIEW / ERROR (${retryNrCount})</button>` : ""}
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-failed" title="Retry testcases from failed API chunks">${failedChunks > 0 ? `Retry Failed Chunks (${failedChunks})` : "Retry Failed Chunk"}</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-failed-chunk-prompt">Copy Failed Prompt</button>
+    </div>
   </section>`;
 }
 
@@ -8744,15 +8858,41 @@ function testCodeGenerateStatusLabel(candidateId) {
   return "";
 }
 
+function resolveGenerateStatusFromDraft(candidateId) {
+  const draft = (state.testCode.workspace?.drafts || {})[candidateId] || {};
+  const cs = String(draft.code_status || "").toUpperCase();
+  if (cs === "SAVED") return "done";
+  if (cs === "NEEDS_REVIEW") return "fallback";
+  if (cs === "ERROR") return "failed";
+  return null; // no completed draft to resolve from
+}
+
 function renderTestCodeProgressMarker(candidateId) {
-  const st = state.testCode.generateStatus?.[candidateId] || "";
-  const running = runningTestCodeTaskForCandidate(candidateId) || st === "running";
-  if (running) return `<span class="alex-testcode-case-row__spin is-running" aria-label="Generating"></span>`;
+  let st = state.testCode.generateStatus?.[candidateId] || "";
+
+  // Defensive: if status says "running" but there is no active task, resolve from draft to
+  // prevent a permanent spinner when the batch moved on without updating generateStatus.
+  const hasActiveTask = !!(
+    runningTestCodeTaskForCandidate(candidateId) ||
+    Object.values(state.m365Tasks.byId || {}).find(
+      (t) => t.status === "running" && t.kind === "code_copilot_batch" &&
+             (t.payload?.candidate_ids || []).includes(candidateId)
+    )
+  );
+  if (st === "running" && !hasActiveTask) {
+    const resolved = resolveGenerateStatusFromDraft(candidateId);
+    if (resolved) {
+      state.testCode.generateStatus[candidateId] = resolved;
+      st = resolved;
+    }
+  }
+
+  if (st === "running" && hasActiveTask) return `<span class="alex-testcode-case-row__spin is-running" aria-label="Generating"></span>`;
   if (st === "queued") return `<span class="alex-testcode-case-row__mark is-queued" title="Queued">Q</span>`;
-  if (st === "done") return `<span class="alex-testcode-case-row__mark is-done" title="Done">OK</span>`;
-  if (st === "failed") return `<span class="alex-testcode-case-row__mark is-failed" title="Failed">ERR</span>`;
-  if (st === "fallback") return `<span class="alex-testcode-case-row__mark is-queued" title="Needs review">REV</span>`;
-  if (st === "confirmed") return `<span class="alex-testcode-case-row__mark is-done" title="Confirmed">OK</span>`;
+  if (st === "done") return `<span class="alex-testcode-case-row__mark is-done" title="✓ Generated">✓</span>`;
+  if (st === "failed") return `<span class="alex-testcode-case-row__mark is-failed" title="Error">ERR</span>`;
+  if (st === "fallback") return `<span class="alex-testcode-case-row__mark is-needs-review" title="Needs Review">⚠</span>`;
+  if (st === "confirmed") return `<span class="alex-testcode-case-row__mark is-done" title="Confirmed">✓</span>`;
   return `<span class="alex-testcode-case-row__mark is-idle" title="Not generated"></span>`;
 }
 
@@ -8913,15 +9053,51 @@ function renderTestCodeIoContext(row) {
   if (!row) {
     return `<p class="detail">Select a test case to view Before / After context.</p>`;
   }
-  const inputRows = testCodeIoTextareaRows(row.expected_input, 16, 90);
-  const outputRows = testCodeIoTextareaRows(row.expected_output, 14, 80);
+  const cid = row.candidate_id || "";
+  const draft = (state.testCode.workspace?.drafts || {})[cid] || {};
+  const syncSt = (state.testCode.syncStatus?.by_id || {})[cid]?.status || "";
+  const issueReason = draft.issue_reason || "";
+  const isStale = syncSt === "stale_body" || syncSt === "stale_comment" || issueReason === "testcase_changed_after_generation";
+  const isPartial = draft.is_partial_code;
+  const isFallback = draft.is_fallback_scaffold;
+  const isEditing = state.testCode.editingTestcaseId === cid;
+
+  const staleWarning = isStale
+    ? `<p class="tag warning detail" id="testcode-stale-warning">⚠ Testcase content changed after code generation. Regenerate or review.</p>`
+    : "";
+  const partialNote = isPartial && !isFallback
+    ? `<p class="tag warning detail">Partial generated code — review TODO_REVIEW locations.</p>`
+    : "";
+  const editingLabel = isEditing
+    ? `<p class="tag detail" style="margin-bottom:0.25rem"><b>Editing testcase content</b> — save to apply and mark generated code for review.</p>`
+    : "";
+
+  // In-place editable: same textareas become editable; no separate duplicate panel
+  const minRows = 8;
+  const inputRows = Math.max(minRows, testCodeIoTextareaRows(row.expected_input, minRows, 30));
+  const outputRows = Math.max(minRows, testCodeIoTextareaRows(row.expected_output, minRows, 28));
+  const readonly = isEditing ? "" : "readonly";
+  const taClass = isEditing ? "gtest-input alex-testcode-io-edit" : "gtest-input alex-testcode-io-readonly";
+  const taStyle = "width:100%;box-sizing:border-box;resize:vertical";
+
+  const actionButtons = isEditing ? `
+    <div class="alex-testcode-editor__actions" style="margin-top:0.35rem;gap:0.35rem">
+      <button type="button" class="btn" id="btn-testcode-save-edit-testcase">Save Testcase Edits</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-cancel-edit-testcase">Cancel</button>
+    </div>` : `
+    <div class="alex-testcode-editor__actions" style="margin-top:0.35rem">
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-edit-testcase">Edit Testcase</button>
+    </div>`;
+
   return `<div class="alex-testcode-io-context" id="testcode-io-context">
+    ${staleWarning}${partialNote}${editingLabel}
     <label class="alex-testcode-io-block">Before (expected input)
-      <textarea class="gtest-input alex-testcode-io-readonly" rows="${inputRows}" readonly spellcheck="false">${esc(row.expected_input || "")}</textarea>
+      <textarea id="testcode-io-input" class="${taClass}" rows="${inputRows}" ${readonly} spellcheck="false" style="${taStyle}">${esc(row.expected_input || "")}</textarea>
     </label>
     <label class="alex-testcode-io-block">After (expected output)
-      <textarea class="gtest-input alex-testcode-io-readonly" rows="${outputRows}" readonly spellcheck="false">${esc(row.expected_output || "")}</textarea>
+      <textarea id="testcode-io-output" class="${taClass}" rows="${outputRows}" ${readonly} spellcheck="false" style="${taStyle}">${esc(row.expected_output || "")}</textarea>
     </label>
+    ${actionButtons}
   </div>`;
 }
 
@@ -9238,6 +9414,7 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
       <label class="btn secondary btn-inline upload-label" title="Additional structure/reference files for Copilot prompt; this does not edit Project Instruction Markdown.">Load markdown / structure files<input type="file" id="testcode-cpp-upload" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.markdown,.txt,.json,.yaml,.yml" multiple hidden /></label>
     </div>
     ${renderTestCodeProjectInstructionEditor()}
+    ${renderTestCodeMemoryEditor()}
   </section>`;
 }
 
@@ -9296,7 +9473,28 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
       <div class="alex-testcode-step__body">
         <div class="alex-testcode-stream" id="testcode-stream-log">${renderTestCodeStreamLog()}</div>
         <div id="testcode-copilot-prompt-panel">${renderTestCodeCopiedPromptPanel()}</div>
+        ${(() => {
+          const selDraft = (state.testCode.workspace?.drafts || {})[cid] || {};
+          const isFallback = selDraft.is_fallback_scaffold;
+          const codeStatus = selDraft.code_status || "";
+          if (!cid) return "";
+          if (isFallback) return `<p class="tag warning detail" id="testcode-fallback-banner">⚠ Fallback scaffold due to API failure. Retry or edit before approval. Reason: ${esc(selDraft.fallback_reason || "API timeout")}</p>`;
+          if (codeStatus === "NEEDS_REVIEW") return `<p class="tag warning detail" id="testcode-fallback-banner">Needs review — check quality warnings before approval.</p>`;
+          if (!codeStatus || codeStatus === "NO_CODE") return `<p class="detail" id="testcode-fallback-banner">No code generated yet. Select testcase and click Generate.</p>`;
+          return "";
+        })()}
         <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main gtest-editor--tall" readonly spellcheck="false" placeholder="// Click a testcase to view its generated code here.">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
+        <div id="testcode-clarification-label" style="display:${(state.testCode.showClarification || (state.testCode.workspace?.drafts || {})[cid]?.is_fallback_scaffold) ? "block" : "none"}">
+          <label class="detail">Additional input for regenerate (optional)
+            <textarea id="testcode-clarification-note" class="gtest-input gtest-note" rows="2" placeholder="e.g. use fixture X, assertion should check Y, mock RTE_Read_Z">${esc(state.testCode.clarificationNote || "")}</textarea>
+          </label>
+          <div class="alex-testcode-editor__actions" style="gap:0.25rem;margin-top:0.25rem">
+            <label class="detail" style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">
+              <input type="checkbox" id="testcode-clarification-save-to-memory" ${state.testCode.clarificationSaveToMemory ? "checked" : ""} />
+              Add this note to Memory → Reviewer Notes
+            </label>
+          </div>
+        </div>
         <div class="alex-testcode-editor__foot">
           <p class="detail testcode-flow-hint" id="testcode-status">Select testcases, generate selected, then confirm each testcase that looks OK.</p>
           <div class="alex-testcode-editor__actions">
@@ -9400,8 +9598,19 @@ async function waitForM365Task(taskId) {
       const all = task.payload?.candidate_ids || [];
       all.forEach((cid) => {
         if (state.testCode.generateStatus?.[cid] === "confirmed") return;
-        if (current.has(cid)) state.testCode.generateStatus[cid] = "running";
-        else if (!state.testCode.generateStatus?.[cid]) state.testCode.generateStatus[cid] = "queued";
+        if (current.has(cid)) {
+          state.testCode.generateStatus[cid] = "running";
+        } else if (state.testCode.generateStatus?.[cid] === "running") {
+          // Was running but no longer in active chunk → resolve from workspace draft
+          const draft = (state.testCode.workspace?.drafts || {})[cid] || {};
+          const cs = String(draft.code_status || "").toUpperCase();
+          if (cs === "SAVED") state.testCode.generateStatus[cid] = "done";
+          else if (cs === "NEEDS_REVIEW") state.testCode.generateStatus[cid] = "fallback";
+          else if (cs === "ERROR") state.testCode.generateStatus[cid] = "failed";
+          else state.testCode.generateStatus[cid] = "done"; // optimistic: chunk moved on, assume done
+        } else if (!state.testCode.generateStatus?.[cid]) {
+          state.testCode.generateStatus[cid] = "queued";
+        }
       });
     }
     refreshM365TaskBanner();
@@ -10216,6 +10425,118 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     }
   });
 
+  // Memory editor change tracking
+  bindOnChange("#testcode-memory-editor", (ev) => {
+    tc.testcodeMemoryDraft = ev.target.value || "";
+    tc.testcodeMemorySource = "local";
+  });
+
+  // Save Memory (job-local)
+  bindClick("#btn-testcode-save-memory", async () => {
+    const content = $("#testcode-memory-editor")?.value ?? "";
+    tc.testcodeMemoryDraft = content;
+    try {
+      await api(`/api/review/testcode-memory?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      tc.testcodeMemory = content;
+      tc.testcodeMemorySource = "local";
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Memory saved (job-local).";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Save as Global Memory
+  bindClick("#btn-testcode-save-memory-global", async () => {
+    const content = $("#testcode-memory-editor")?.value ?? "";
+    tc.testcodeMemoryDraft = content;
+    try {
+      await api(`/api/review/testcode-memory?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      await api(`/api/review/testcode-memory/save-as-global?job_id=${encodeURIComponent(state.jobId)}`, { method: "POST" });
+      tc.testcodeMemory = content;
+      tc.testcodeMemorySource = "global";
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Memory saved as Global — new jobs will use this automatically.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Reload Global Memory
+  bindClick("#btn-testcode-reload-memory-global", async () => {
+    try {
+      const data = await api(`/api/review/testcode-memory/global`);
+      tc.testcodeMemory = data.content || "";
+      tc.testcodeMemoryDraft = data.content || "";
+      tc.testcodeMemorySource = "global";
+      const el = $("#testcode-memory-editor");
+      if (el) el.value = tc.testcodeMemory;
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Global memory reloaded.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Extract Style to Memory
+  bindClick("#btn-testcode-extract-to-memory", async () => {
+    const sample = tc.codeStyleSamples?.[0];
+    const code = sample?.snippet || String(tc.samplePasteDraft || "");
+    if (!code.trim()) {
+      if (statusEl) statusEl.textContent = "Load sample .cc first, then extract.";
+      return;
+    }
+    try {
+      if (statusEl) statusEl.textContent = "Extracting patterns…";
+      const data = await api(`/api/review/testcode-memory/extract?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, source_file: sample?.source_file || sample?.label || "sample.cc" }),
+      });
+      // Show proposed/merged in editor for review before save
+      tc.testcodeMemoryDraft = data.merged || data.proposed || "";
+      tc.testcodeMemorySource = "extracted-preview";
+      const el = $("#testcode-memory-editor");
+      if (el) el.value = tc.testcodeMemoryDraft;
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Extraction preview ready — review and click Save Memory or Save as Global.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Quick-add buttons — prompt user for note then append to section
+  document.querySelectorAll("[data-memory-section]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const section = btn.dataset.memorySection || "Reviewer Notes / Learned Fixes";
+      const note = window.prompt(`Add to "${section}":`);
+      if (!note || !note.trim()) return;
+      try {
+        const data = await api(`/api/review/testcode-memory/append?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section, note: note.trim() }),
+        });
+        tc.testcodeMemory = data.content || tc.testcodeMemory;
+        tc.testcodeMemoryDraft = data.content || tc.testcodeMemoryDraft;
+        tc.testcodeMemorySource = "local";
+        const el = $("#testcode-memory-editor");
+        if (el) el.value = tc.testcodeMemoryDraft || "";
+        if (statusEl) statusEl.textContent = `Added to ${section}.`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    });
+  });
+
   document.querySelectorAll('input[name="testcode-batch-scope"]').forEach((el) => {
     el.addEventListener("change", (ev) => {
       if (!ev.target.checked) return;
@@ -10329,6 +10650,112 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       if (statusEl) statusEl.textContent = e.message;
     }
   });
+
+  // Track clarification → save to memory checkbox
+  document.addEventListener("change", (ev) => {
+    if (ev.target && ev.target.id === "testcode-clarification-save-to-memory") {
+      tc.clarificationSaveToMemory = ev.target.checked;
+    }
+  });
+
+  // Retry this testcase — single TC via dedicated endpoint
+  bindClick("#btn-testcode-retry-this", async () => {
+    const cid = tc.selectedCandidateId;
+    if (!cid) {
+      if (statusEl) statusEl.textContent = "Select a testcase first.";
+      return;
+    }
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Authorize Copilot API first.";
+      return;
+    }
+    const clarification = $("#testcode-clarification-note")?.value || tc.clarificationNote || "";
+    // Optionally save clarification to memory before generating
+    if (clarification.trim() && tc.clarificationSaveToMemory) {
+      try {
+        await api(`/api/review/testcode-memory/append?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section: "Reviewer Notes / Learned Fixes", note: `[${cid}] ${clarification.trim()}` }),
+        });
+        tc.testcodeMemoryDraft = (await api(`/api/review/testcode-memory?job_id=${encodeURIComponent(state.jobId)}`)).content || tc.testcodeMemoryDraft;
+        const el = $("#testcode-memory-editor");
+        if (el) el.value = tc.testcodeMemoryDraft || "";
+      } catch (_) { /* non-fatal */ }
+    }
+    try {
+      setTestCodeApiStatus("running");
+      if (statusEl) statusEl.textContent = `Retrying ${cid}…`;
+      const data = await api(`/api/review/run-copilot-batch-api-single?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: state.exportLanguage || "EN",
+          candidate_ids: [cid],
+          engineer_note: getTestCodeProjectInstruction(),
+          clarification_note: clarification,
+          batch_size: 1,
+          allow_missing_sample: true,
+        }),
+      });
+      setTestCodeApiStatus(data.ok ? "done" : "failed", data.error || "");
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = data.ok ? `Retry done for ${cid}.` : (data.error || "Retry failed.");
+    } catch (e) {
+      setTestCodeApiStatus("failed", e.message);
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Retry NEEDS_REVIEW / ERROR — collect IDs from current drafts and re-run batch
+  bindClick("#btn-testcode-retry-needs-review", async () => {
+    if (!m365KnowledgeReady()) {
+      if (statusEl) statusEl.textContent = "Authorize Copilot API first.";
+      return;
+    }
+    const drafts = tc.workspace?.drafts || {};
+    const retryIds = Object.entries(drafts)
+      .filter(([, d]) => d && ["NEEDS_REVIEW", "ERROR"].includes(String(d.code_status || "").toUpperCase()))
+      .map(([cid]) => cid)
+      .filter(Boolean);
+    if (!retryIds.length) {
+      if (statusEl) statusEl.textContent = "No NEEDS_REVIEW or ERROR testcases to retry.";
+      return;
+    }
+    const clarification = $("#testcode-clarification-note")?.value || tc.clarificationNote || "";
+    try {
+      tc.batchRunProgress = { status: "running", saved: 0, needs_review: 0, error: 0, status_message: "Retrying NEEDS_REVIEW/ERROR…" };
+      setTestCodeApiStatus("running");
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      await startM365Task({
+        kind: "code_copilot_batch",
+        label: `Retry NEEDS_REVIEW/ERROR (${retryIds.length} TC)`,
+        targetPage: "test-code",
+        payload: {
+          ...testCodeCopilotBatchPayload(rows, "filter"),
+          candidate_ids: retryIds,
+          clarification_note: clarification,
+          scope: "filter",
+          skip_saved: true,
+          allow_missing_sample: true,
+        },
+      });
+      if (statusEl) statusEl.textContent = "Retrying NEEDS_REVIEW/ERROR — watch progress above.";
+    } catch (e) {
+      setTestCodeApiStatus("failed", e.message);
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Track clarification note changes
+  document.addEventListener("input", (ev) => {
+    if (ev.target && ev.target.id === "testcode-clarification-note") {
+      tc.clarificationNote = ev.target.value || "";
+    }
+  }, { once: false, capture: false });
 
   function selectedBatchApproveIds() {
     const fromCb = [...document.querySelectorAll(".batch-approve-cb:checked")].map((el) => el.dataset.batchCid).filter(Boolean);
@@ -11283,7 +11710,86 @@ function bindTestCodeHandlers(rows) {
   bindTestCodeReviewActionHandlers(rows, statusEl);
 }
 
+function refreshTestCodeIoPanel(rows) {
+  const cid = state.testCode.selectedCandidateId;
+  const row = (rows || state.testCode.rows || []).find((r) => r.candidate_id === cid);
+  const ctx = document.getElementById("testcode-io-context");
+  if (ctx) ctx.outerHTML = renderTestCodeIoContext(row || null);
+  bindTestCodeInlineEditHandlers(rows || state.testCode.rows || [], $("#testcode-status"));
+}
+
+function bindTestCodeInlineEditHandlers(rows, statusEl) {
+  const tc = state.testCode;
+
+  bindClick("#btn-testcode-edit-testcase", () => {
+    const cid = tc.selectedCandidateId || "";
+    if (!cid) return;
+    // Stash original content so Cancel can restore it
+    tc._editOriginalInput = $("#testcode-io-input")?.value ?? "";
+    tc._editOriginalOutput = $("#testcode-io-output")?.value ?? "";
+    tc.editingTestcaseId = cid;
+    refreshTestCodeIoPanel(rows);
+    // Focus the input textarea immediately
+    setTimeout(() => $("#testcode-io-input")?.focus(), 50);
+  });
+
+  bindClick("#btn-testcode-cancel-edit-testcase", () => {
+    // Restore original content before exiting edit mode
+    const inputEl = $("#testcode-io-input");
+    const outputEl = $("#testcode-io-output");
+    if (inputEl && tc._editOriginalInput != null) inputEl.value = tc._editOriginalInput;
+    if (outputEl && tc._editOriginalOutput != null) outputEl.value = tc._editOriginalOutput;
+    tc.editingTestcaseId = "";
+    tc._editOriginalInput = null;
+    tc._editOriginalOutput = null;
+    refreshTestCodeIoPanel(rows);
+  });
+
+  bindClick("#btn-testcode-save-edit-testcase", async () => {
+    const cid = tc.editingTestcaseId || tc.selectedCandidateId;
+    if (!cid) return;
+    const newInput = $("#testcode-io-input")?.value ?? "";
+    const newOutput = $("#testcode-io-output")?.value ?? "";
+    try {
+      const res = await api(
+        `/api/review/testcode-edit-testcase?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidate_id: cid,
+            expected_input: newInput,
+            expected_output: newOutput,
+            language: state.exportLanguage || "EN",
+          }),
+        }
+      );
+      tc.editingTestcaseId = "";
+      tc._editOriginalInput = null;
+      tc._editOriginalOutput = null;
+      // Reload workspace so IO context shows updated values and stale status
+      invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+      tc.workspace = await fetchGtestWorkspace(true);
+      hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+      // Refresh the rows from latest bundle
+      if (tc.rows) {
+        const updatedRow = tc.rows.find((r) => r.candidate_id === cid);
+        if (updatedRow) {
+          updatedRow.expected_input = newInput;
+          updatedRow.expected_output = newOutput;
+        }
+      }
+      refreshTestCodeIoPanel(rows);
+      patchTestCodeCaseStatusUi();
+      if (statusEl) statusEl.textContent = `Testcase ${cid} updated. Regenerate to get fresh code.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+}
+
 function bindTestCodeReviewActionHandlers(rows, statusEl) {
+  bindTestCodeInlineEditHandlers(rows, statusEl);
   bindClick("#btn-testcode-add-learned-rule", async () => {
     const rule = $("#testcode-learned-rule-text")?.value?.trim();
     if (!rule) {

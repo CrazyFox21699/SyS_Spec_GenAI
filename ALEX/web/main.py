@@ -791,12 +791,13 @@ class CopilotBatchApiRequest(BaseModel):
     language: str = "EN"
     candidate_ids: Optional[list[str]] = None
     engineer_note: str = ""
+    clarification_note: str = ""
     batch_size: int = 1
     skip_saved: bool = False
     scope: str = "filter"
     group_key: str = ""
     group_field: str = "test_group"
-    allow_missing_sample: bool = False
+    allow_missing_sample: bool = True
     slim_prompt: bool = True
     prompt_budget: int = 5000
 
@@ -2870,11 +2871,53 @@ def api_review_workbench_row(body: WorkbookReviewUpdateRequest, job_id: str) -> 
         _persist_job_gtest_state(job_id, gtest_state)
 
     _save_bundle_to_job(job_id, bundle)
+
+    # Mark generated code stale if testcase I/O changed
+    stale_cids: list[str] = []
+    if lang_payload.get("expected_input") is not None or lang_payload.get("expected_output") is not None:
+        try:
+            from src.importers.customer_testspec_importer import compute_spec_hash, build_structured_io
+            from web.gtest_workspace import _workbench_row_for_candidate
+
+            gtest_state = _load_job_gtest_state(job_id)
+            draft = (gtest_state.get("drafts") or {}).get(effective_id) or {}
+            if draft.get("spec_hash"):
+                wb = _workbench_row_for_candidate(bundle, effective_id, language=language)
+                if wb:
+                    structured = build_structured_io(
+                        no=str(wb.get("no") or ""),
+                        operation=str(wb.get("operation") or ""),
+                        expected_input=str(wb.get("expected_input") or ""),
+                        expected_output=str(wb.get("expected_output") or ""),
+                        remarks="",
+                    )
+                    new_hash = compute_spec_hash(structured)
+                    if new_hash != str(draft.get("spec_hash") or ""):
+                        # Testcase I/O changed after code was generated → mark draft stale
+                        from web.gtest_workspace import save_draft as _save_draft
+                        _save_draft(
+                            gtest_state,
+                            draft_key=effective_id,
+                            draft={
+                                **draft,
+                                "code_status": "NEEDS_REVIEW" if draft.get("code_status") == "SAVED" else draft.get("code_status", "NEEDS_REVIEW"),
+                                "issue_reason": "testcase_changed_after_generation",
+                                "review_reason": "Testcase content changed after code generation. Regenerate or review.",
+                            },
+                            engineer_edited=False,
+                            wrap_markers=False,
+                        )
+                        _persist_job_gtest_state(job_id, gtest_state)
+                        stale_cids.append(effective_id)
+        except Exception:
+            pass  # stale detection is best-effort
+
     return {
         "ok": True,
         "candidate_id": effective_id,
         "overlay": overlay,
         "bundle_version": _get_bundle_version(job_id),
+        "stale_testcode_cids": stale_cids,
     }
 
 
@@ -3676,9 +3719,13 @@ def _sync_project_code_config_cache(job_id: str, gtest_state: dict[str, Any]) ->
     from datetime import datetime, timezone
 
     from web.project_code_config import load_project_code_config
+    from web.project_testcode_memory import copy_global_to_job
 
     config = load_project_code_config(_job_output_dir(job_id))
     cache = {name: str((meta or {}).get("content") or "") for name, meta in (config.get("files") or {}).items()}
+    # Auto-load testcode memory: copy global → job if no local copy, then add to cache
+    mem_content = copy_global_to_job(_job_output_dir(job_id))
+    cache["project_testcode_memory.md"] = mem_content
     gtest_state["project_code_config_cache"] = cache
     gtest_state["project_code_config_meta"] = {
         "loaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -3722,6 +3769,91 @@ def api_put_project_code_config(job_id: str, body: ProjectCodeConfigSaveRequest)
     _sync_project_code_config_cache(job_id, gtest_state)
     _persist_job_gtest_state(job_id, gtest_state)
     return {"job_id": job_id, **result}
+
+
+@app.get("/api/review/testcode-memory")
+def api_get_testcode_memory(job_id: str) -> dict[str, Any]:
+    from web.project_testcode_memory import load_memory_for_job
+
+    content = load_memory_for_job(_job_output_dir(job_id))
+    return {"job_id": job_id, "content": content}
+
+
+@app.put("/api/review/testcode-memory")
+def api_put_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from web.project_testcode_memory import save_memory_for_job
+
+    content = str(body.get("content") or "")
+    save_memory_for_job(_job_output_dir(job_id), content)
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = content
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "ok": True}
+
+
+@app.get("/api/review/testcode-memory/global")
+def api_get_testcode_memory_global() -> dict[str, Any]:
+    from web.project_testcode_memory import load_global_memory
+
+    return {"content": load_global_memory()}
+
+
+@app.put("/api/review/testcode-memory/global")
+def api_put_testcode_memory_global(body: dict[str, Any]) -> dict[str, Any]:
+    from web.project_testcode_memory import save_global_memory
+
+    content = str(body.get("content") or "")
+    path = save_global_memory(content)
+    return {"ok": True, "path": str(path)}
+
+
+@app.post("/api/review/testcode-memory/save-as-global")
+def api_save_testcode_memory_as_global(job_id: str) -> dict[str, Any]:
+    from web.project_testcode_memory import load_memory_for_job, save_global_memory
+
+    content = load_memory_for_job(_job_output_dir(job_id))
+    path = save_global_memory(content)
+    return {"job_id": job_id, "ok": True, "path": str(path)}
+
+
+@app.post("/api/review/testcode-memory/extract")
+def api_extract_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from web.project_testcode_memory import (
+        build_proposed_memory,
+        extract_patterns_from_sample,
+        load_memory_for_job,
+        merge_proposed_into_memory,
+    )
+
+    code = str(body.get("code") or body.get("content") or "")
+    source_file = str(body.get("source_file") or body.get("filename") or "sample.cc")
+    extraction = extract_patterns_from_sample(code)
+    proposed = build_proposed_memory(extraction, source_file=source_file)
+    existing = load_memory_for_job(_job_output_dir(job_id))
+    merged = merge_proposed_into_memory(existing, proposed)
+    return {
+        "job_id": job_id,
+        "extraction": extraction,
+        "proposed": proposed,
+        "merged": merged,
+    }
+
+
+@app.post("/api/review/testcode-memory/append")
+def api_append_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from web.project_testcode_memory import append_to_section, load_memory_for_job, save_memory_for_job
+
+    section = str(body.get("section") or "Reviewer Notes / Learned Fixes")
+    note = str(body.get("note") or "").strip()
+    if not note:
+        return {"job_id": job_id, "ok": False, "error": "note required"}
+    existing = load_memory_for_job(_job_output_dir(job_id))
+    updated = append_to_section(existing, section, note)
+    save_memory_for_job(_job_output_dir(job_id), updated)
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = updated
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "ok": True, "content": updated}
 
 
 def _config_bundle_text_from_body(body: ConfigBundleTextRequest) -> tuple[str, list[str]]:
@@ -4200,12 +4332,13 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
         candidate_ids=body.candidate_ids if body else None,
         language=lang,
         engineer_note=str(body.engineer_note if body else "") or "",
+        clarification_note=str(body.clarification_note if body else "") or "",
         batch_size=body.batch_size if body else 10,
         skip_saved=bool(body.skip_saved) if body else False,
         scope=str(body.scope if body else "filter") or "filter",
         group_key=str(body.group_key if body else "") or "",
         group_field=str(body.group_field if body else "test_group") or "test_group",
-        allow_missing_sample=bool(body.allow_missing_sample) if body else False,
+        allow_missing_sample=bool(body.allow_missing_sample) if body else True,
         slim_prompt=bool(body.slim_prompt) if body else True,
         prompt_budget=int(body.prompt_budget) if body else 5000,
     )
@@ -4220,6 +4353,121 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
             raw_error=str(result.get("error") or ""),
         )
     return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/run-copilot-batch-api-single")
+def api_run_copilot_batch_api_single(
+    job_id: str, body: CopilotBatchApiRequest | None = None
+) -> dict[str, Any]:
+    """Run Copilot API for a single selected testcase with optional clarification note.
+
+    Used by 'Retry this testcase' button. Does not skip_saved so user can overwrite.
+    """
+    from web.copilot_batch_codegen import run_copilot_batch_api
+
+    cfg = _cfg()
+    uid = _m365_effective_user_id(cfg)
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+
+    candidate_id = str((body.candidate_ids or [None])[0] if body and body.candidate_ids else "") or ""
+    if not candidate_id:
+        return {"job_id": job_id, "ok": False, "error": "candidate_id required for single retry"}
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+
+    result = run_copilot_batch_api(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        cfg=cfg,
+        candidate_ids=[candidate_id],
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        clarification_note=str(body.clarification_note if body else "") or "",
+        batch_size=1,
+        skip_saved=False,
+        scope="selected",
+        allow_missing_sample=True,
+        slim_prompt=bool(body.slim_prompt) if body else True,
+        prompt_budget=int(body.prompt_budget) if body else 5000,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
+    return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/run-copilot-batch-api-retry-failed")
+def api_run_copilot_batch_api_retry_failed(
+    job_id: str, body: CopilotBatchApiRequest | None = None
+) -> dict[str, Any]:
+    """Re-run Copilot API only for testcases in NEEDS_REVIEW or ERROR state.
+
+    SAVED testcases are never overwritten (skip_saved is always True).
+    Target IDs are collected in Excel import order from the current drafts.
+    """
+    from web.copilot_batch_codegen import collect_retry_candidate_ids, run_copilot_batch_api
+
+    cfg = _cfg()
+    uid = _m365_effective_user_id(cfg)
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=True, copilot_entitled=False)}
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    lang = (body.language if body else None) or "EN"
+
+    retry_ids = collect_retry_candidate_ids(gtest_state, bundle, language=lang)
+    if not retry_ids:
+        return {"job_id": job_id, "ok": False, "error": "no_failed_candidates",
+                "detail": "No testcases in NEEDS_REVIEW or ERROR state."}
+
+    result = run_copilot_batch_api(
+        bundle,
+        gtest_state,
+        _job_output_dir(job_id),
+        cfg=cfg,
+        candidate_ids=retry_ids,
+        language=lang,
+        engineer_note=str(body.engineer_note if body else "") or "",
+        clarification_note=str(body.clarification_note if body else "") or "",
+        batch_size=body.batch_size if body else 10,
+        skip_saved=True,
+        scope="filter",
+        group_key="",
+        allow_missing_sample=True,
+        slim_prompt=bool(body.slim_prompt) if body else True,
+        prompt_budget=int(body.prompt_budget) if body else 5000,
+    )
+    _persist_job_gtest_state(job_id, gtest_state)
+    if not result.get("ok"):
+        result = enrich_error_response(
+            result,
+            m365_ready=True,
+            copilot_entitled=True,
+            has_bundle=True,
+            has_candidates=True,
+            raw_error=str(result.get("error") or ""),
+        )
+    return {"job_id": job_id, "retry_candidate_count": len(retry_ids), **result}
 
 
 @app.post("/api/review/run-exemplar-batch-api")
@@ -4460,6 +4708,27 @@ def api_testcode_reopen(job_id: str, body: TestCodeApprovalRequest) -> dict[str,
     result = reopen_test_code_drafts(gtest_state, ids)
     _persist_job_gtest_state(job_id, gtest_state)
     return {"job_id": job_id, **result}
+
+
+@app.post("/api/review/testcode-edit-testcase")
+def api_testcode_edit_testcase(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Inline testcase I/O edit from Test Code tab — saves overlay and marks code stale.
+
+    Accepts: candidate_id, expected_input, expected_output, language.
+    Delegates to the same workbench-row save path so edits are visible everywhere.
+    """
+    candidate_id = str(body.get("candidate_id") or "")
+    if not candidate_id:
+        raise HTTPException(400, "candidate_id required")
+
+    req_body = WorkbookReviewUpdateRequest(
+        candidate_id=candidate_id,
+        language=str(body.get("language") or "EN"),
+        expected_input=body.get("expected_input"),
+        expected_output=body.get("expected_output"),
+    )
+    # Reuse the workbench-row save handler — it handles overlay + stale marking
+    return api_review_workbench_row(job_id=job_id, body=req_body)
 
 
 @app.get("/api/review/testcode-workflow-counts")

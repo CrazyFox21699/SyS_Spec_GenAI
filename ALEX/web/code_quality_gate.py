@@ -76,6 +76,25 @@ def _code_has_timing_wait(code: str) -> bool:
     )
 
 
+_FALLBACK_SCAFFOLD_RE = re.compile(r'GTEST_SKIP\s*\(\s*\)\s*<<\s*"NEEDS_REVIEW:', re.I)
+_TODO_REVIEW_RE = re.compile(r'\bTODO_REVIEW\b', re.I)
+
+
+def is_fallback_scaffold(code: str) -> bool:
+    """True when code is a GTEST_SKIP fallback scaffold, not real generated code."""
+    return bool(_FALLBACK_SCAFFOLD_RE.search(str(code or "")))
+
+
+def is_partial_generated_code(code: str) -> bool:
+    """True when Copilot returned real code with TODO_REVIEW markers for unclear parts."""
+    body = str(code or "")
+    return (
+        bool(_TODO_REVIEW_RE.search(body))
+        and bool(re.search(r"\bTEST(?:_F)?\s*\(", body))
+        and not is_fallback_scaffold(body)
+    )
+
+
 def run_quality_gate(
     code: str,
     *,
@@ -91,6 +110,16 @@ def run_quality_gate(
     checks: list[dict[str, Any]] = []
     body = str(code or "").strip()
     cid = str(candidate_id or "").strip()
+
+    if is_fallback_scaffold(body):
+        _check(
+            checks,
+            name="fallback_scaffold",
+            severity="WARNING",
+            message="Fallback scaffold — replace with project-specific code before approval",
+            candidate_id=cid,
+        )
+        return _finalize(checks)
 
     if not body:
         _check(checks, name="empty_code", severity="FAIL", message="Code is empty", candidate_id=cid)
@@ -116,7 +145,11 @@ def run_quality_gate(
             candidate_id=cid,
         )
 
-    if re.search(r"\bTODO\b", body, re.I):
+    if re.search(r"\bTODO_REVIEW\b", body, re.I):
+        _check(checks, name="todo_review", severity="WARNING",
+               message="Contains TODO_REVIEW — partial generated code; review these locations",
+               candidate_id=cid)
+    elif re.search(r"\bTODO\b", body, re.I):
         _check(checks, name="todo", severity="WARNING", message="Contains TODO", candidate_id=cid)
 
     for pat in parse_forbidden_patterns(code_rules_md):

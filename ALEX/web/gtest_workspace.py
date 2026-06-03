@@ -95,6 +95,9 @@ def load_gtest_state(job_output: Path, cfg: dict[str, Any] | None = None) -> dic
     base["mapping_coverage"] = dict(data.get("mapping_coverage") or {})
     base["project_code_config_meta"] = dict(data.get("project_code_config_meta") or {})
     base["updated_at"] = data.get("updated_at") or base["updated_at"]
+    checkpoint = dict(data.get("copilot_batch_run_checkpoint") or {})
+    if checkpoint:
+        base.setdefault("copilot_batch", {})["run_checkpoint"] = checkpoint
     return base
 
 
@@ -108,6 +111,27 @@ def save_gtest_state(job_output: Path, state: dict[str, Any]) -> None:
         "tc_code_index": state.get("tc_code_index") or {},
         "mapping_coverage": state.get("mapping_coverage") or {},
         "project_code_config_meta": state.get("project_code_config_meta") or {},
+        "updated_at": _now_iso(),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def flush_batch_run_checkpoint(job_output: Path, state: dict[str, Any]) -> None:
+    """Persist drafts + batch run state after each API chunk for crash recovery.
+
+    Writes the same fields as save_gtest_state plus a 'copilot_batch_run_checkpoint'
+    snapshot so a restart can skip already-SAVED testcases.
+    """
+    path = gtest_store_path(job_output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "harness": state.get("harness") or {},
+        "code_variable_map": state.get("code_variable_map") or {},
+        "drafts": state.get("drafts") or {},
+        "tc_code_index": state.get("tc_code_index") or {},
+        "mapping_coverage": state.get("mapping_coverage") or {},
+        "project_code_config_meta": state.get("project_code_config_meta") or {},
+        "copilot_batch_run_checkpoint": (state.get("copilot_batch") or {}).get("run") or {},
         "updated_at": _now_iso(),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -644,6 +668,9 @@ def persist_generated_draft_workflow(
                     "code_status": "ERROR",
                     "workflow_error": wf.get("workflow_message") or "empty result",
                     "generation_source": generation_source,
+                    "is_partial_code": False,
+                    "is_fallback_scaffold": False,
+                    "issue_reason": "parse_error",
                 },
                 engineer_edited=False,
                 wrap_markers=False,
@@ -654,6 +681,21 @@ def persist_generated_draft_workflow(
     structured = _structured_io_for_candidate(bundle, cid, language=language) if cid else {}
     spec_hash = compute_spec_hash(structured) if structured else ""
     body_hash = compute_body_hash(structured) if structured else ""
+
+    from web.code_quality_gate import is_partial_generated_code
+
+    _is_partial = is_partial_generated_code(prepared)
+    _is_fallback = bool(draft_payload.get("is_fallback_scaffold"))
+    _issue_reason = draft_payload.get("issue_reason") or ""
+    if not _issue_reason:
+        if _is_fallback:
+            _issue_reason = "fallback_scaffold_timeout"
+        elif _is_partial and code_status == "NEEDS_REVIEW":
+            _issue_reason = "partial_code_todo_review"
+        elif code_status == "ERROR":
+            _issue_reason = "api_error"
+        elif code_status == "NEEDS_REVIEW":
+            _issue_reason = "needs_review"
 
     draft_to_save: dict[str, Any] = {
         **draft_payload,
@@ -669,6 +711,9 @@ def persist_generated_draft_workflow(
         "quality_results": wf.get("quality_results") or wf.get("validation", {}).get("checks") or [],
         "quality_summary": wf.get("quality_summary") or draft_payload.get("quality_summary") or "",
         "review_reason": (wf.get("workflow_message") or "") if code_status != "SAVED" else "",
+        "is_partial_code": _is_partial,
+        "is_fallback_scaffold": _is_fallback,
+        "issue_reason": _issue_reason,
     }
     for extra in ("mapping_ready", "mapping_missing"):
         if draft_payload.get(extra) is not None:

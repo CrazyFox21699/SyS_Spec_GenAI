@@ -10,6 +10,7 @@ from web.gtest_workspace import (
     bulk_regen_comments,
     classify_sync_status,
     export_library_preset,
+    flush_batch_run_checkpoint,
     generate_draft_for_request,
     import_library_preset,
     load_gtest_state,
@@ -135,3 +136,54 @@ def test_bulk_delete_code() -> None:
     out = bulk_delete_code(state, ["TC1"])
     assert out["count"] == 1
     assert "TC1" not in state["drafts"]
+
+
+def test_flush_batch_run_checkpoint_writes_checkpoint(tmp_path: Path) -> None:
+    """flush_batch_run_checkpoint must write drafts + run state to gtest.json."""
+    state = {
+        "harness": {"fixture_class": "MyFix"},
+        "code_variable_map": {},
+        "drafts": {"TC_A": {"code_status": "SAVED", "full_snippet": "TEST_F(F,A){}"}},
+        "tc_code_index": {},
+        "mapping_coverage": {},
+        "project_code_config_meta": {},
+        "copilot_batch": {
+            "run": {
+                "status": "running",
+                "completed_chunks": 1,
+                "saved": 1,
+                "needs_review": 0,
+                "error": 0,
+            }
+        },
+    }
+    flush_batch_run_checkpoint(tmp_path, state)
+    gtest_path = tmp_path / "bundle" / "gtest.json"
+    assert gtest_path.exists()
+    data = json.loads(gtest_path.read_text())
+    assert data["drafts"]["TC_A"]["code_status"] == "SAVED"
+    cp = data.get("copilot_batch_run_checkpoint") or {}
+    assert cp.get("status") == "running"
+    assert cp.get("completed_chunks") == 1
+    assert cp.get("saved") == 1
+
+
+def test_load_gtest_state_restores_checkpoint(tmp_path: Path) -> None:
+    """load_gtest_state must restore copilot_batch_run_checkpoint from disk."""
+    state = {
+        "harness": {},
+        "code_variable_map": {},
+        "drafts": {"TC_A": {"code_status": "SAVED"}},
+        "tc_code_index": {},
+        "mapping_coverage": {},
+        "project_code_config_meta": {},
+        "copilot_batch": {
+            "run": {"status": "completed", "completed_chunks": 3, "saved": 5}
+        },
+    }
+    flush_batch_run_checkpoint(tmp_path, state)
+    loaded = load_gtest_state(tmp_path)
+    checkpoint = (loaded.get("copilot_batch") or {}).get("run_checkpoint") or {}
+    assert checkpoint.get("status") == "completed"
+    assert checkpoint.get("completed_chunks") == 3
+    assert checkpoint.get("saved") == 5
