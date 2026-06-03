@@ -894,11 +894,13 @@ def run_copilot_batch_api(
         run["last_response_s"] = round(perf_counter() - response_started, 1)
         if not chat.get("ok"):
             msg = str(chat.get("error") or "M365 API failed")
+            category = str(chat.get("error_category") or "m365_copilot_api")
             failed_ids = list(batch.get("candidate_ids") or [])
             detail = {
                 "batch_index": idx + 1,
                 "candidate_ids": failed_ids,
                 "reason": msg,
+                "error_category": category,
                 "last_response_s": run.get("last_response_s"),
             }
             details = list(run.get("failed_chunk_details") or [])
@@ -907,6 +909,7 @@ def run_copilot_batch_api(
             run["failed_chunks"] = len(details)
             run["failed_candidate_ids"] = list(dict.fromkeys([*list(run.get("failed_candidate_ids") or []), *failed_ids]))
             run["failed_chunk_reason"] = msg
+            run["failed_chunk_error_category"] = category
             run["completed_chunks"] = idx + 1
             run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
@@ -1041,11 +1044,14 @@ def run_copilot_batch_api(
     }
     ok = total_saved > 0 or total_review > 0
     failure_reason = ""
+    failure_category = ""
     if not ok:
         details = run.get("failed_chunk_details") or []
         if details:
             failure_reason = str(details[-1].get("reason") or "")
+            failure_category = str(details[-1].get("error_category") or "")
         failure_reason = failure_reason or str(run.get("failed_chunk_reason") or "")
+        failure_category = failure_category or str(run.get("failed_chunk_error_category") or "")
         if not failure_reason and all_results:
             failure_reason = str(
                 all_results[0].get("workflow_message")
@@ -1056,7 +1062,7 @@ def run_copilot_batch_api(
     return {
         "ok": ok,
         "error": failure_reason if not ok else "",
-        "error_category": "m365_copilot_batch" if not ok else "",
+        "error_category": failure_category or ("m365_copilot_batch" if not ok else ""),
         "batch_count": len(prompts),
         "batch_size": built.get("batch_size"),
         "results": all_results,

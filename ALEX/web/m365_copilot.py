@@ -326,7 +326,12 @@ def _copilot_error_payload(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, requests.RequestException):
         msg = str(exc) or "Microsoft Graph network error."
         lower = msg.lower()
-        category = "m365_ssl" if "ssl" in lower or "certificate" in lower else "graph_500"
+        if "read timed out" in lower or "read timeout" in lower or "timed out" in lower:
+            category = "m365_graph_timeout"
+        elif "ssl" in lower or "certificate" in lower:
+            category = "m365_ssl"
+        else:
+            category = "graph_network"
         return {
             "ok": False,
             "error": msg,
@@ -334,17 +339,32 @@ def _copilot_error_payload(exc: Exception) -> dict[str, Any]:
             "user_action": (
                 "Check server SSL settings (assist.m365.ssl_verify) and company CA, then retry."
                 if category == "m365_ssl"
-                else "Retry later or check M365 connectivity on the server."
+                else (
+                    "Microsoft Graph Copilot did not return before timeout. Use Copy Copilot Web Prompt for this testcase, or retry when Graph is responsive."
+                    if category == "m365_graph_timeout"
+                    else "Retry later or check M365 connectivity on the server."
+                )
             ),
         }
     msg = str(exc) or "M365 Copilot request failed."
     lower = msg.lower()
-    category = "m365_copilot_api" if "conversation" in lower or "copilot" in lower else "unknown"
+    if "read timed out" in lower or "read timeout" in lower or "timed out" in lower:
+        category = "m365_graph_timeout"
+    elif "conversation" in lower or "copilot" in lower:
+        category = "m365_copilot_api"
+    elif "graph.microsoft.com" in lower:
+        category = "graph_network"
+    else:
+        category = "unknown"
     return {
         "ok": False,
         "error": msg,
         "error_category": category,
-        "user_action": "Use Test Copilot API on Review tab to diagnose, then retry.",
+        "user_action": (
+            "Microsoft Graph Copilot timed out. Use Copy Copilot Web Prompt for this testcase, or retry when Graph is responsive."
+            if category == "m365_graph_timeout"
+            else "Use Test Copilot API on Review tab to diagnose, then retry."
+        ),
     }
 
 

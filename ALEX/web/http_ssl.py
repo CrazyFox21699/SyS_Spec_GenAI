@@ -151,10 +151,25 @@ def ssl_verify_status() -> dict[str, Any]:
     }
 
 
-def network_error_message(exc: Exception) -> str:
+def network_error_message(exc: Exception, *, url: str = "") -> str:
+    host = ""
+    if url:
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(url).netloc or url
+        except Exception:
+            host = url
+    target = host or "Microsoft Graph/Login"
+    lower = str(exc).lower()
+    if "read timed out" in lower or "read timeout" in lower:
+        return (
+            f"Microsoft endpoint timed out while waiting for a response from {target}. "
+            f"Detail: {exc}"
+        )
     return (
-        "Cannot reach Microsoft login (network/firewall). "
-        "Check outbound HTTPS to login.microsoftonline.com. "
+        f"Cannot reach Microsoft endpoint {target} (network/firewall/proxy). "
+        f"Check outbound HTTPS to {target}. "
         f"Detail: {exc}"
     )
 
@@ -169,7 +184,7 @@ def _request(method: str, url: str, **kwargs: Any) -> requests.Response:
             return requests.request(method, url, verify=False, **kwargs)
         raise RuntimeError(f"Microsoft HTTPS SSL error: {exc}") from exc
     except requests.exceptions.RequestException as exc:
-        raise RuntimeError(network_error_message(exc)) from exc
+        raise RuntimeError(network_error_message(exc, url=url)) from exc
 
 
 def requests_get(url: str, **kwargs: Any) -> requests.Response:

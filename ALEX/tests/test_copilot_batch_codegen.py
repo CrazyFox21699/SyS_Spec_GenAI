@@ -130,6 +130,48 @@ def test_run_progress_records_failed_chunk_reason() -> None:
     assert progress_events[-1]["failed_chunk_reason"] == "graph timeout"
 
 
+def test_run_batch_preserves_m365_timeout_category() -> None:
+    bundle = {
+        "test_candidates": [
+            {
+                "id": "TC_A",
+                "logic_id": "L1",
+                "operation": {"given": [{"signal": "A", "value": "1"}]},
+                "expectation": [{"signal": "B", "value": "0"}],
+            },
+        ],
+        "logic_blocks": [{"logic_id": "L1", "raw_expression": "A"}],
+        "ai_assists": {
+            "code_style_samples": [{"snippet": "TEST_F(F, T) {}", "label": "s"}],
+            "workbook_overlays": {
+                "TC_A": {"expected_input": "Given: A=1", "expected_output": "Then: B=0"},
+            },
+        },
+    }
+    gtest_state = {"drafts": {}, "project_code_config_cache": {}}
+
+    with patch(
+        "web.copilot_batch_codegen.run_copilot_chat_result",
+        return_value={
+            "ok": False,
+            "error": "Microsoft endpoint timed out while waiting for graph.microsoft.com",
+            "error_category": "m365_graph_timeout",
+        },
+    ):
+        out = run_copilot_batch_api(
+            bundle,
+            gtest_state,
+            None,
+            cfg={},
+            candidate_ids=["TC_A"],
+            batch_size=1,
+        )
+
+    assert out["ok"] is False
+    assert out["error_category"] == "m365_graph_timeout"
+    assert gtest_state["copilot_batch"]["run"]["failed_chunk_error_category"] == "m365_graph_timeout"
+
+
 def test_slim_prompt_limits_long_instruction_and_source() -> None:
     long_instruction = "\n".join([f"- strict rule {i}: copy and map only" for i in range(800)])
     long_sample = "TEST_F(F, T) {\n" + "\n".join([f"  // sample line {i}" for i in range(1200)]) + "\n}"

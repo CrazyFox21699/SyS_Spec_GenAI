@@ -122,6 +122,27 @@ def test_run_copilot_chat_result_falls_back_to_default_session() -> None:
     assert token_mock.call_args_list[1].kwargs["user_id"] is None
 
 
+def test_run_copilot_chat_result_classifies_graph_timeout() -> None:
+    with patch(
+        "web.m365_copilot.m365_auth.require_api_token",
+        return_value="token",
+    ), patch(
+        "web.m365_copilot._create_conversation",
+        return_value="conv-1",
+    ), patch(
+        "web.m365_copilot._chat",
+        side_effect=RuntimeError(
+            "Microsoft endpoint timed out while waiting for a response from graph.microsoft.com. "
+            "Detail: HTTPSConnectionPool(host='graph.microsoft.com', port=443): Read timed out."
+        ),
+    ):
+        out = run_copilot_chat_result({}, "ping")
+
+    assert out["ok"] is False
+    assert out["error_category"] == "m365_graph_timeout"
+    assert "Copy Copilot Web Prompt" in out["user_action"]
+
+
 def test_probe_copilot_api_ok() -> None:
     cfg = {"assist": {"m365": {"timezone": "UTC"}}}
     with patch(
