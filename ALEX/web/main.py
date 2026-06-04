@@ -4724,6 +4724,50 @@ def api_run_copilot_batch_api(job_id: str, body: CopilotBatchApiRequest | None =
     return {"job_id": job_id, **result}
 
 
+@app.post("/api/review/testcode-missing-context")
+def api_testcode_missing_context(job_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Analyze what project context is missing for each requested testcase.
+
+    Returns per-TC missing item lists so the user can add Quick Add rules
+    before or after generation.  HTTP 200 always.
+    """
+    from web.copilot_batch_codegen import analyze_missing_generation_context
+    from web.gtest_workspace import _workbench_row_for_candidate
+
+    candidate_ids: list[str] = list((body or {}).get("candidate_ids") or [])
+    language = str((body or {}).get("language") or "EN")
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+
+    reports: list[dict[str, Any]] = []
+    # If no IDs requested, use all TCs with NEEDS_REVIEW or ERROR draft
+    if not candidate_ids:
+        drafts = gtest_state.get("drafts") or {}
+        candidate_ids = [
+            cid for cid, d in drafts.items()
+            if isinstance(d, dict) and str(d.get("code_status") or "").upper() in {"NEEDS_REVIEW", "ERROR"}
+        ]
+
+    for cid in candidate_ids[:50]:  # limit to 50 to avoid huge responses
+        row = _workbench_row_for_candidate(bundle, cid, language=language) or {"candidate_id": cid}
+        missing = analyze_missing_generation_context(row, gtest_state)
+        # Also include any stored missing_context from previous generation
+        draft = (gtest_state.get("drafts") or {}).get(cid) or {}
+        stored_missing = draft.get("missing_context") or []
+        # Merge, dedup by type+signal
+        all_missing = {(m.get("type"), m.get("signal")): m for m in missing + stored_missing}
+        reports.append({
+            "candidate_id": cid,
+            "missing_items": list(all_missing.values()),
+            "has_issues": bool(all_missing),
+            "issue_reason": draft.get("issue_reason") or "",
+            "code_status": str(draft.get("code_status") or "NO_CODE"),
+        })
+
+    return {"ok": True, "job_id": job_id, "reports": reports, "total": len(reports)}
+
+
 @app.post("/api/review/run-copilot-batch-api-single")
 def api_run_copilot_batch_api_single(
     job_id: str, body: CopilotBatchApiRequest | None = None

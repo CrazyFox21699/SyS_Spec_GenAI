@@ -306,6 +306,94 @@ def build_style_example_block(snippet: str, label: str = "") -> str:
     )
 
 
+def analyze_missing_generation_context(
+    row: dict[str, Any],
+    gtest_state: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Detect what project context is missing for generating code for this testcase.
+
+    Returns a list of missing-item dicts so the user can add rules via Quick Add
+    before or after generation. Does NOT block generation.
+    """
+    items: list[dict[str, str]] = []
+    cid = str(row.get("candidate_id") or "")
+    expected_input = str(row.get("expected_input") or "")
+    expected_output = str(row.get("expected_output") or "")
+    cache = gtest_state.get("project_code_config_cache") or {}
+    memory = str(cache.get("project_testcode_memory.md") or "")
+    memory_upper = memory.upper()
+
+    # No intent at all
+    if not expected_input.strip() and not expected_output.strip():
+        items.append({
+            "type": "missing_testcase_intent",
+            "signal": "",
+            "description": "No Given/When/Then content in testcase",
+            "suggested_action": "Edit testcase row to add expected input/output",
+            "rule_type": "",
+        })
+        return items
+
+    # Fixture
+    has_fixture = bool(re.search(r"\bTEST_F\b", memory)) or bool(re.search(r"Fixture", memory, re.I))
+    if not has_fixture:
+        items.append({
+            "type": "missing_fixture",
+            "signal": "",
+            "description": "No fixture class defined in Project Test Code Memory",
+            "suggested_action": "Add Fixture / Test Style Rule",
+            "rule_type": "fixture_style",
+        })
+
+    # Input signals from Given: SIGNAL=value
+    for sig in dict.fromkeys(re.findall(r"Given:\s*(\w+)\s*=", expected_input, re.I)):
+        if sig.upper() not in memory_upper and "RTE_READ_" + sig.upper() not in memory_upper:
+            items.append({
+                "type": "missing_input_mock_api",
+                "signal": sig,
+                "description": f"No input mock / RTE API mapping for signal {sig}",
+                "suggested_action": f"Add Input/Mock Rule for {sig}",
+                "rule_type": "input_mock",
+            })
+
+    # Output signals from Then: SIGNAL=value
+    for sig in dict.fromkeys(re.findall(r"Then:\s*(\w+)\s*=", expected_output, re.I)):
+        if sig.upper() not in memory_upper:
+            items.append({
+                "type": "missing_output_assertion",
+                "signal": sig,
+                "description": f"No output assertion variable/API for {sig}",
+                "suggested_action": f"Add Output/Assertion Rule for {sig}",
+                "rule_type": "output_assertion",
+            })
+
+    # Timing
+    has_timing_spec = bool(re.search(r"(?:elapsed|T\s*=\s*\d+|wait|cycle|ms|step)", expected_input, re.I))
+    has_timing_memory = bool(re.search(r"igsw_Main_Run|RunForMs|WaitMs|Timing Pattern", memory, re.I))
+    if has_timing_spec and not has_timing_memory:
+        items.append({
+            "type": "missing_timing_pattern",
+            "signal": "",
+            "description": "Timing/cycle pattern referenced in testcase but not in memory",
+            "suggested_action": "Add Timing Rule (e.g. igsw_Main_Run cycle pattern)",
+            "rule_type": "timing",
+        })
+
+    return items
+
+
+def _format_missing_context_for_prompt(missing_items: list[dict[str, str]]) -> str:
+    """Format missing context list as a compact prompt hint."""
+    if not missing_items:
+        return ""
+    lines = ["MISSING CONTEXT (place TODO_REVIEW at these exact locations):"]
+    for item in missing_items:
+        sig = item.get("signal") or ""
+        sig_str = f" for `{sig}`" if sig else ""
+        lines.append(f"- {item.get('type','').replace('_',' ')}{sig_str}: {item.get('description','')}")
+    return "\n".join(lines) + "\n\n"
+
+
 def _extract_generation_critical_map(memory_content: str, *, char_limit: int = 800) -> str:
     """Extract the highest-value sections from memory for concrete code generation.
 
@@ -599,17 +687,24 @@ def build_copilot_batch_prompt(
     if folder_files:
         folder_block = "Project code files (context): " + ", ".join(folder_files[: (6 if slim_prompt else 20)]) + "\n\n"
 
-    # --- Target rows (always required, placed last for recency) ---
+    # --- Target rows + missing context report per TC ---
     target_chars = 700 if slim_prompt else 2000
     targets_block: list[str] = []
+    # Build a minimal gtest_state-like dict from context so we can analyze missing context
+    _ctx_cache = {"project_testcode_memory.md": str(context.get("testcode_memory") or "")}
+    _ctx_gstate = {"project_code_config_cache": _ctx_cache}
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
+        # Analyze missing context and attach to row prompt
+        missing = analyze_missing_generation_context(row, _ctx_gstate)
+        missing_hint = _format_missing_context_for_prompt(missing) if missing else ""
         targets_block.append(
             f"testcase_id: {cid}\n"
             + (f"event: {event}\n" if event else "")
             + f"Given/When (expected_input):\n{_clip(row.get('expected_input'), target_chars)}\n"
             + f"Then (expected_output):\n{_clip(row.get('expected_output'), target_chars)}\n"
+            + (missing_hint if missing_hint else "")
         )
 
     # --- Style example (compact, high-score only as required) ---
@@ -981,18 +1076,23 @@ def apply_copilot_batch_import(
 
     for cid in target_ids:
         if cid in unresolved_by_id:
-            # UNRESOLVED from Copilot → NEEDS_REVIEW with scaffold, never ERROR.
-            # Reason: Copilot marks UNRESOLVED when API/fixture/sample is missing —
-            # that is not an ALEX error; user can edit the scaffold.
+            # UNRESOLVED from Copilot → NEEDS_REVIEW, never ERROR.
             unresolved_reason = str(unresolved_by_id[cid] or "Copilot returned UNRESOLVED for this testcase.")
-            row = next((r for r in (expected_candidate_ids or []) if r == cid), None)
             row_data = next((r for r in (gtest_state.get("_batch_target_rows") or []) if str(r.get("candidate_id") or "") == cid), {"candidate_id": cid})
+            # Analyze what context is missing (helps user fix it)
+            missing = analyze_missing_generation_context(row_data, gtest_state)
             scaffold = _persist_review_scaffold(
                 gtest_state,
                 row=row_data,
                 reason=f"Copilot UNRESOLVED: {unresolved_reason}",
                 generation_source=generation_source,
             )
+            # Store missing context in draft for UI
+            if missing:
+                existing_draft = (gtest_state.get("drafts") or {}).get(cid) or {}
+                if existing_draft:
+                    existing_draft["missing_context"] = missing
+                    existing_draft["issue_reason"] = "missing_generation_context"
             results.append(
                 {
                     "candidate_id": cid,
@@ -1002,6 +1102,7 @@ def apply_copilot_batch_import(
                     "code_status": "NEEDS_REVIEW",
                     "full_snippet": scaffold,
                     "issue_reason": "unresolved_by_copilot",
+                    "missing_context": missing,
                 }
             )
             needs_review += 1
@@ -1341,7 +1442,9 @@ def run_copilot_batch_api(
             msg = str(chat.get("error") or "M365 API failed")
             category = str(chat.get("error_category") or "m365_copilot_api")
             failed_ids = list(batch.get("candidate_ids") or [])
-            fallback_mode = category == "m365_graph_timeout"
+            # GTEST_SKIP scaffold is last resort only — use NEEDS_REVIEW with short reason for timeouts
+            is_timeout = category == "m365_graph_timeout"
+            is_api_fail = not is_timeout  # network error, 429, etc.
             detail = {
                 "batch_index": idx + 1,
                 "candidate_ids": failed_ids,
@@ -1362,30 +1465,54 @@ def run_copilot_batch_api(
             run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} failed: {msg}"
             for cid in batch.get("candidate_ids") or []:
                 row = next((r for r in list(batch.get("_target_rows") or []) if str(r.get("candidate_id") or "") == str(cid)), {})
-                if not fallback_mode:
-                    persist_batch_generation_error(
-                        gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
+                row_data = row or {"candidate_id": cid}
+                # Analyze what context is missing for this TC
+                missing = analyze_missing_generation_context(row_data, gtest_state)
+                has_missing_ctx = bool(missing)
+                short_reason = _sanitize_reason(msg)
+
+                if is_timeout:
+                    # Timeout after all retries: NEEDS_REVIEW with short note (no GTEST_SKIP dump)
+                    save_draft(
+                        gtest_state, draft_key=cid,
+                        draft={
+                            "full_snippet": (
+                                f"// {cid}\n"
+                                f"// NEEDS_REVIEW: Copilot API timed out. Retry or edit manually.\n"
+                                f"// Reason: {short_reason}\n"
+                            ),
+                            "code_body": "",
+                            "code_status": "NEEDS_REVIEW",
+                            "workflow_message": f"API timeout: {short_reason}",
+                            "is_fallback_scaffold": True,
+                            "is_partial_code": False,
+                            "issue_reason": "api_timeout",
+                            "fallback_reason": short_reason,
+                            "fallback_error_detail": str(msg)[:2000],
+                            "missing_context": missing,
+                            "generation_source": "COPILOT_BATCH",
+                        },
+                        engineer_edited=False, wrap_markers=False,
                     )
-                scaffold = _persist_review_scaffold(
-                    gtest_state,
-                    row=row or {"candidate_id": cid},
-                    reason=msg,
-                ) if fallback_mode else ""
-                all_results.append(
-                    {
-                        "candidate_id": cid,
-                        "ok": False,
-                        "workflow_status": "NEEDS_REVIEW" if fallback_mode else "ERROR",
-                        "workflow_message": msg,
-                        "code_status": "NEEDS_REVIEW" if fallback_mode else "ERROR",
-                        "full_snippet": scaffold,
-                        "fallback_prompt": prompt_for_web_fallback,
-                    }
-                )
-                if fallback_mode:
+                    all_results.append({
+                        "candidate_id": cid, "ok": False,
+                        "workflow_status": "NEEDS_REVIEW", "code_status": "NEEDS_REVIEW",
+                        "workflow_message": f"API timeout: {short_reason}",
+                        "missing_context": missing,
+                    })
                     total_review += 1
                     total_fallback += 1
                 else:
+                    # Non-timeout API failure: ERROR
+                    persist_batch_generation_error(
+                        gtest_state, candidate_id=cid, error_message=msg, generation_source="COPILOT_BATCH"
+                    )
+                    all_results.append({
+                        "candidate_id": cid, "ok": False,
+                        "workflow_status": "ERROR", "code_status": "ERROR",
+                        "workflow_message": msg,
+                        "missing_context": missing,
+                    })
                     total_error += 1
             run["saved"] = total_saved
             run["needs_review"] = total_review

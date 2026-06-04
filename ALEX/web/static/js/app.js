@@ -391,6 +391,7 @@ let state = {
     syncStatus: null,
     contextFiles: [],
     lastExtractConflicts: [],
+    missingContextMap: {},  // candidate_id → missing_items[]
   },
   _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
@@ -1670,6 +1671,28 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
       });
     }
     setTestCodeApiStatus(result.fallback_required ? "idle" : "done");
+    // Load missing context report for NEEDS_REVIEW / ERROR TCs
+    if (kind === "code_copilot_batch" && state.jobId) {
+      try {
+        const drafts = state.testCode.workspace?.drafts || {};
+        const needsReviewIds = Object.entries(drafts)
+          .filter(([, d]) => ["NEEDS_REVIEW", "ERROR"].includes(String(d?.code_status || "").toUpperCase()))
+          .map(([cid]) => cid)
+          .filter(Boolean);
+        if (needsReviewIds.length) {
+          const mData = await api(`/api/review/testcode-missing-context?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_ids: needsReviewIds }),
+          });
+          const newMap = { ...(state.testCode.missingContextMap || {}) };
+          for (const rep of mData.reports || []) {
+            if (rep.has_issues) newMap[rep.candidate_id] = rep.missing_items;
+          }
+          state.testCode.missingContextMap = newMap;
+        }
+      } catch (_) { /* non-fatal */ }
+    }
     if (state.currentPageId === "test-code") {
       const statusEl = $("#testcode-status");
       refreshTestCodePrimaryUi(state.testCode.rows || [], statusEl, state.testCode.codeStyleSamples);
@@ -7378,6 +7401,25 @@ async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows |
     applyTestCodeDraftToUi(draft, row);
     patchTestCodeCaseStatusUi();
     refreshTestCodePromptPreview(rows);
+    // Trigger missing context analysis if TC is NEEDS_REVIEW / ERROR and not yet analyzed
+    const draftStatus = String(draft?.code_status || "").toUpperCase();
+    if (["NEEDS_REVIEW", "ERROR"].includes(draftStatus) && !state.testCode.missingContextMap?.[candidateId]) {
+      api(`/api/review/testcode-missing-context?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_ids: [candidateId] }),
+      }).then((mData) => {
+        const rep = (mData.reports || []).find((r) => r.candidate_id === candidateId);
+        if (rep?.has_issues) {
+          state.testCode.missingContextMap = { ...(state.testCode.missingContextMap || {}), [candidateId]: rep.missing_items };
+          // Re-render IO context to show the report
+          const strip = document.getElementById("testcode-io-context");
+          const currentRow = (state.testCode.rows || []).find((r) => r.candidate_id === candidateId);
+          if (strip && currentRow) strip.outerHTML = renderTestCodeIoContext(currentRow);
+          bindMissingContextPanelHandlers(state.testCode.rows || [], document.getElementById("testcode-status"));
+        }
+      }).catch(() => {});
+    }
     if (statusEl) statusEl.textContent = "Testcase loaded.";
   } catch (e) {
     if (statusEl) statusEl.textContent = e.message;
@@ -9128,6 +9170,44 @@ function testCodeIoTextareaRows(text, minRows = 12, maxRows = 80) {
   return Math.max(minRows, Math.min(maxRows, visualRows + 2));
 }
 
+function renderMissingContextPanel(missingItems) {
+  if (!missingItems || !missingItems.length) return "";
+  const RULE_TYPE_LABELS = {
+    input_mock: "Input Rule",
+    output_assertion: "Assertion Rule",
+    timing: "Timing Rule",
+    fixture_style: "Fixture Rule",
+    signal_mapping: "Signal Mapping",
+    forbidden_pattern: "Forbidden",
+    reviewer_note: "Reviewer Note",
+  };
+  const rows = missingItems.map((item) => {
+    const rt = item.rule_type || "";
+    const label = RULE_TYPE_LABELS[rt] || rt;
+    const btnHtml = rt
+      ? `<button type="button" class="btn secondary btn-inline" style="font-size:0.78em" data-quickadd-type="${esc(rt)}" data-quickadd-signal="${esc(item.signal || "")}">+ ${esc(label)}</button>`
+      : "";
+    return `<tr>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;white-space:nowrap;color:#a00">${esc(item.type?.replace(/_/g, " ") || "")}</td>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0">${item.signal ? `<code>${esc(item.signal)}</code>` : "—"}</td>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;color:#555">${esc(item.suggested_action || "")}</td>
+      <td style="padding:0.1rem 0">${btnHtml}</td>
+    </tr>`;
+  }).join("");
+  return `<div id="testcode-missing-context-panel" style="background:#fff8f0;border:1px solid #f5a623;border-radius:4px;padding:0.4rem 0.5rem;margin-bottom:0.35rem">
+    <p class="detail" style="margin:0 0 0.2rem;font-weight:bold;color:#a55">Missing information for generation:</p>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th class="detail" style="text-align:left;color:#666;padding:0 0.4rem 0.1rem 0">Type</th>
+        <th class="detail" style="text-align:left;color:#666;padding:0 0.4rem 0.1rem 0">Signal/output</th>
+        <th class="detail" style="text-align:left;color:#666;padding:0 0.4rem 0.1rem 0">Suggested fix</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 function renderTestCodeIoContext(row) {
   if (!row) {
     return `<p class="detail">Select a test case to view Before / After context.</p>`;
@@ -9140,6 +9220,10 @@ function renderTestCodeIoContext(row) {
   const isPartial = draft.is_partial_code;
   const isFallback = draft.is_fallback_scaffold;
   const isEditing = state.testCode.editingTestcaseId === cid;
+
+  // Missing context report from draft or live analysis
+  const missingItems = draft.missing_context || state.testCode.missingContextMap?.[cid] || [];
+  const missingPanel = renderMissingContextPanel(missingItems);
 
   const staleWarning = isStale
     ? `<p class="tag warning detail" id="testcode-stale-warning">⚠ Testcase content changed after code generation. Regenerate or review.</p>`
@@ -9169,7 +9253,7 @@ function renderTestCodeIoContext(row) {
     </div>`;
 
   return `<div class="alex-testcode-io-context" id="testcode-io-context">
-    ${staleWarning}${partialNote}${editingLabel}
+    ${missingPanel}${staleWarning}${partialNote}${editingLabel}
     <label class="alex-testcode-io-block">Before (expected input)
       <textarea id="testcode-io-input" class="${taClass}" rows="${inputRows}" ${readonly} spellcheck="false" style="${taStyle}">${esc(row.expected_input || "")}</textarea>
     </label>
@@ -11000,8 +11084,11 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       if (el) el.value = tc.testcodeMemoryDraft || "";
       const form = $("#testcode-quick-add-form");
       if (form) { form.style.display = "none"; form.innerHTML = ""; }
+      // Clear cached missing context so report refreshes
+      const selCid = tc.selectedCandidateId;
+      if (selCid && tc.missingContextMap) delete tc.missingContextMap[selCid];
       if (statusEl) statusEl.textContent = data.ok
-        ? `Added to ${data.section || "memory"}.${data.conflicts?.length ? " ⚠ Conflict noted." : ""}`
+        ? `Added to ${data.section || "memory"}.${data.conflicts?.length ? " ⚠ Conflict noted." : ""} Click testcase to refresh Missing Info report.`
         : "Rule already exists — not added again.";
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
@@ -12227,6 +12314,43 @@ function refreshTestCodeIoPanel(rows) {
   bindTestCodeInlineEditHandlers(rows || state.testCode.rows || [], $("#testcode-status"));
 }
 
+// Bind quick-add buttons inside the missing context panel
+function bindMissingContextPanelHandlers(rows, statusEl) {
+  const tc = state.testCode;
+  document.querySelectorAll("[data-quickadd-type]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const ruleType = btn.dataset.quickaddType || "reviewer_note";
+      const signal = btn.dataset.quickaddSignal || "";
+      // Pre-fill the Quick Add form and open it
+      const form = $("#testcode-quick-add-form");
+      if (!form) return;
+      // Use the Quick Add system already wired
+      const ruleTypeEvent = { type: "synthetic", dataset: { ruleType } };
+      const QUICK_ADD_FIELDS_BY_TYPE_LOCAL = {
+        input_mock: ["signal"],
+        output_assertion: ["output_var"],
+        timing: ["timing_name"],
+        fixture_style: ["fixture_name"],
+        signal_mapping: ["signal"],
+      };
+      // Open form for this type
+      const existingBtn = document.querySelector(`[data-rule-type="${ruleType}"]`);
+      if (existingBtn) {
+        existingBtn.click();
+        // Pre-fill the signal field after short delay
+        if (signal) {
+          setTimeout(() => {
+            const firstInput = form.querySelector("input");
+            if (firstInput && !firstInput.value) firstInput.value = signal;
+          }, 50);
+        }
+      } else if (statusEl) {
+        statusEl.textContent = `Add a ${ruleType.replace(/_/g, " ")} rule for ${signal || "this signal"} via Quick Add buttons above.`;
+      }
+    });
+  });
+}
+
 function bindTestCodeInlineEditHandlers(rows, statusEl) {
   const tc = state.testCode;
 
@@ -12299,6 +12423,7 @@ function bindTestCodeInlineEditHandlers(rows, statusEl) {
 
 function bindTestCodeReviewActionHandlers(rows, statusEl) {
   bindTestCodeInlineEditHandlers(rows, statusEl);
+  bindMissingContextPanelHandlers(rows, statusEl);
   bindClick("#btn-testcode-add-learned-rule", async () => {
     const rule = $("#testcode-learned-rule-text")?.value?.trim();
     if (!rule) {

@@ -366,8 +366,8 @@ def test_fallback_scaffold_is_visible_and_editable(tmp_path: Path) -> None:
     draft = gtest_state["drafts"].get("TC_A") or {}
     snippet = draft.get("full_snippet") or draft.get("code_body") or ""
     assert snippet.strip(), "fallback scaffold must have visible code content"
-    assert "GTEST_SKIP" in snippet, "must contain GTEST_SKIP marker"
-    assert "NEEDS_REVIEW" in snippet
+    # New timeout fallback: short comment, no GTEST_SKIP dump (GTEST_SKIP only from _persist_review_scaffold)
+    assert "NEEDS_REVIEW" in snippet or "timed out" in snippet.lower() or draft.get("code_status") == "NEEDS_REVIEW"
 
 
 # ---------------------------------------------------------------------------
