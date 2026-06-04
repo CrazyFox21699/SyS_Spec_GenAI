@@ -50,26 +50,32 @@ def _cpp_ident(value: str, fallback: str = "Generated") -> str:
     return ident
 
 
+def _sanitize_reason(reason: str, max_len: int = 200) -> str:
+    """Strip JSON/API error bodies from a reason string for display in code comments."""
+    text = str(reason or "Copilot API did not return concrete code.")
+    # Remove anything that looks like JSON (starts with { or [)
+    text = re.sub(r"\{[^}]{20,}\}", "[API error detail hidden]", text, flags=re.DOTALL)
+    text = re.sub(r"\[[^\]]{20,}\]", "[API detail hidden]", text, flags=re.DOTALL)
+    # Remove HTTP headers / long lines
+    text = re.sub(r"HTTPSConnectionPool\([^)]*\)[^.]*\.", "Copilot API timeout.", text)
+    text = text.replace('"', "'")
+    if len(text) > max_len:
+        text = text[:max_len].rstrip() + "..."
+    return text
+
+
 def _review_scaffold_code(row: dict[str, Any], reason: str) -> str:
     cid = str(row.get("candidate_id") or row.get("id") or "").strip()
     event = str(row.get("event") or row.get("test_function") or "").strip()
     test_name = _cpp_ident(cid or event, "GeneratedTestcase")
-    before = _clip(row.get("expected_input"), 1800)
-    after = _clip(row.get("expected_output"), 1800)
-    reason_text = str(reason or "Copilot API did not return concrete code.").replace('"', "'")
+    # Short display reason only — full error stored in draft metadata
+    reason_display = _sanitize_reason(reason)
     return (
         f"// {cid} {event}".rstrip() + "\n"
-        "// NEEDS_REVIEW: Copilot API fallback scaffold. Replace with project-specific RTE/mock calls.\n"
-        f"// Reason: {reason_text}\n"
-        "//\n"
-        "// Expected input:\n"
-        + "\n".join(f"// {line}" for line in before.splitlines())
-        + "\n//\n"
-        "// Expected output:\n"
-        + "\n".join(f"// {line}" for line in after.splitlines())
-        + "\n"
+        "// NEEDS_REVIEW: Copilot API fallback scaffold. Retry generation or edit manually.\n"
+        f"// Reason: {reason_display}\n"
         f"TEST(AlexGeneratedFallback, {test_name}) {{\n"
-        f"  GTEST_SKIP() << \"NEEDS_REVIEW: {reason_text}\";\n"
+        f"  GTEST_SKIP() << \"NEEDS_REVIEW: Copilot API failed. Retry generation.\";\n"
         "}\n"
     )
 
@@ -102,7 +108,8 @@ def _persist_review_scaffold(
             "is_fallback_scaffold": True,
             "is_partial_code": False,
             "issue_reason": "fallback_scaffold_timeout",
-            "fallback_reason": str(reason or "Copilot API did not return concrete code."),
+            "fallback_reason": _sanitize_reason(reason),
+            "fallback_error_detail": str(reason or "")[:2000],  # full error stored here, not in code
         },
         engineer_edited=False,
         wrap_markers=True,

@@ -388,6 +388,8 @@ let state = {
     showClarification: false,
     editingTestcaseId: "",
     syncStatus: null,
+    contextFiles: [],
+    lastExtractConflicts: [],
   },
   _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
@@ -7308,6 +7310,13 @@ async function fetchGtestWorkspace(force = false) {
       state.testCode.testcodeMemorySource = "global";
     } catch (_) { /* non-fatal */ }
   }
+  // Load project context files list (for UI display and extract-to-memory)
+  if (!state.testCode.contextFiles?.length || force) {
+    try {
+      const ctxData = await api(`/api/review/project-context-files?job_id=${encodeURIComponent(state.jobId)}`);
+      state.testCode.contextFiles = ctxData.files || [];
+    } catch (_) { /* non-fatal */ }
+  }
   return data;
 }
 
@@ -8618,7 +8627,7 @@ function renderTestCodeMemoryEditor() {
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory">Save Memory</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory-global">Save as Global</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-reload-memory-global">Reload Global</button>
-      <button type="button" class="btn secondary btn-inline" id="btn-testcode-extract-to-memory" ${sampleOk ? "" : "disabled title='Load sample .cc first'"}>Extract Style to Memory</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-extract-to-memory" ${(sampleOk || (state.testCode.contextFiles || []).length > 0) ? "" : "disabled title='Load project context files or sample .cc first'"}>Extract Style to Memory</button>
     </div>
     <div class="alex-testcode-editor__actions" style="flex-wrap:wrap;gap:0.25rem;margin-top:0.25rem">
       <span class="detail" style="align-self:center">Quick add:</span>
@@ -9402,17 +9411,22 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
   const first = list[0] || {};
   const sampleOk = list.length > 0 || String(state.testCode.samplePasteDraft || "").trim();
   const allCount = testCodeRowOrder(rows).length;
+  const ctxFiles = state.testCode.contextFiles || [];
+  const ctxSummary = ctxFiles.length
+    ? ctxFiles.map((f) => `${f.filename} (${f.kind})`).join(", ").slice(0, 120)
+    : "";
   return `<section class="card alex-testcode-copilot-primary" id="testcode-copilot-primary">
     <h3 class="alex-testcode-copilot-primary__title">Test Code Inputs</h3>
     <p class="detail gtest-sample-status" id="testcode-primary-sample-status">${
       sampleOk
         ? esc(`Sample: ${first.label || first.source_file || "loaded"}`)
-        : "No project context loaded yet. You can generate from testcase details, then add source/header/config/CMake context to improve results."
+        : "No project context loaded yet."
     } · ${allCount} testcase(s) imported</p>
     <div class="alex-testcode-primary-sample-row">
-      <label class="btn secondary btn-inline upload-label" title="Style anchor for Copilot prompt; this does not edit Project Instruction Markdown.">Load sample .cc / source context<input type="file" id="testcode-cpp-upload-primary" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.markdown,.txt,.json,.yaml,.yml" hidden /></label>
-      <label class="btn secondary btn-inline upload-label" title="Additional structure/reference files for Copilot prompt; this does not edit Project Instruction Markdown.">Load markdown / structure files<input type="file" id="testcode-cpp-upload" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.markdown,.txt,.json,.yaml,.yml" multiple hidden /></label>
+      <label class="btn secondary btn-inline upload-label" title="Load .h/.hpp/.c/.cc/.cpp/.txt files — RTE headers, mock headers, fixtures, sample tests, etc.">Load Project Context Files<input type="file" id="testcode-context-files-upload" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.txt" multiple hidden /></label>
+      <label class="btn secondary btn-inline upload-label" title="Load a single sample .cc as style anchor (legacy path)">Load sample .cc<input type="file" id="testcode-cpp-upload-primary" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.txt" hidden /></label>
     </div>
+    ${ctxFiles.length ? `<p class="detail" id="testcode-ctx-files-summary">Loaded (${ctxFiles.length}): ${esc(ctxSummary)}${ctxFiles.length > 3 ? "…" : ""}</p>` : ""}
     ${renderTestCodeProjectInstructionEditor()}
     ${renderTestCodeMemoryEditor()}
   </section>`;
@@ -9478,7 +9492,11 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
           const isFallback = selDraft.is_fallback_scaffold;
           const codeStatus = selDraft.code_status || "";
           if (!cid) return "";
-          if (isFallback) return `<p class="tag warning detail" id="testcode-fallback-banner">⚠ Fallback scaffold due to API failure. Retry or edit before approval. Reason: ${esc(selDraft.fallback_reason || "API timeout")}</p>`;
+          if (isFallback) {
+            const reason = esc(selDraft.fallback_reason || "API timeout/failure");
+            const detail = selDraft.fallback_error_detail ? `<details style="margin-top:0.25rem"><summary class="detail" style="cursor:pointer">Show API error detail</summary><pre style="white-space:pre-wrap;font-size:0.75em;max-height:8em;overflow:auto">${esc(selDraft.fallback_error_detail)}</pre></details>` : "";
+            return `<div id="testcode-fallback-banner"><p class="tag warning detail">⚠ Fallback scaffold — API failure. Retry or edit before approval. Reason: ${reason}</p>${detail}</div>`;
+          }
           if (codeStatus === "NEEDS_REVIEW") return `<p class="tag warning detail" id="testcode-fallback-banner">Needs review — check quality warnings before approval.</p>`;
           if (!codeStatus || codeStatus === "NO_CODE") return `<p class="detail" id="testcode-fallback-banner">No code generated yet. Select testcase and click Generate.</p>`;
           return "";
@@ -10385,6 +10403,31 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
 
   bindOnChange("#testcode-cpp-upload-primary", handleCppUpload);
   bindOnChange("#testcode-cpp-upload", handleCppUpload);
+
+  // Multi-file project context upload
+  bindOnChange("#testcode-context-files-upload", async (ev) => {
+    const files = [...(ev.target.files || [])];
+    if (!files.length) return;
+    if (statusEl) statusEl.textContent = `Uploading ${files.length} project context file(s)…`;
+    try {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("files", f));
+      const res = await fetch(
+        `/api/review/project-context-files/upload?job_id=${encodeURIComponent(state.jobId)}`,
+        { method: "POST", credentials: "same-origin", body: fd }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "Upload failed");
+      tc.contextFiles = data.files || [];
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      const kinds = [...new Set((data.files || []).map((f) => f.kind))].join(", ");
+      if (statusEl) statusEl.textContent = `Loaded ${data.uploaded} file(s) [${kinds}].${data.skipped?.length ? ` Skipped: ${data.skipped.join(", ")}.` : ""} Click Extract Style to Memory to update memory.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+    ev.target.value = "";
+  });
+
   bindTestCodeGenerateActionHandlers(rows, statusEl);
   bindOnChange("#testcode-batch-size", (ev) => {
     tc.copilotBatchSize = Number(ev.target.value) || 10;
@@ -10486,28 +10529,44 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     }
   });
 
-  // Extract Style to Memory
+  // Extract Style to Memory — supports multi-file context OR single sample
   bindClick("#btn-testcode-extract-to-memory", async () => {
+    const hasContextFiles = (tc.contextFiles || []).length > 0;
     const sample = tc.codeStyleSamples?.[0];
     const code = sample?.snippet || String(tc.samplePasteDraft || "");
-    if (!code.trim()) {
-      if (statusEl) statusEl.textContent = "Load sample .cc first, then extract.";
+    if (!hasContextFiles && !code.trim()) {
+      if (statusEl) statusEl.textContent = "Load project context files or a sample .cc first, then extract.";
       return;
     }
     try {
-      if (statusEl) statusEl.textContent = "Extracting patterns…";
-      const data = await api(`/api/review/testcode-memory/extract?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, source_file: sample?.source_file || sample?.label || "sample.cc" }),
-      });
-      // Show proposed/merged in editor for review before save
+      if (statusEl) statusEl.textContent = "Extracting patterns from project files…";
+      let data;
+      if (hasContextFiles) {
+        // Use the structured multi-file extraction endpoint
+        data = await api(
+          `/api/review/project-context-files/extract-memory?job_id=${encodeURIComponent(state.jobId)}`,
+          { method: "POST" }
+        );
+      } else {
+        // Fall back to single sample extraction
+        data = await api(`/api/review/testcode-memory/extract?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, source_file: sample?.source_file || sample?.label || "sample.cc" }),
+        });
+      }
+      // Show proposed/merged for review
       tc.testcodeMemoryDraft = data.merged || data.proposed || "";
       tc.testcodeMemorySource = "extracted-preview";
+      tc.lastExtractConflicts = data.conflicts || [];
       const el = $("#testcode-memory-editor");
       if (el) el.value = tc.testcodeMemoryDraft;
       refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
-      if (statusEl) statusEl.textContent = "Extraction preview ready — review and click Save Memory or Save as Global.";
+      const conflictNote = data.conflict_count
+        ? ` ⚠ ${data.conflict_count} conflict(s) detected — review memory before saving.`
+        : "";
+      const dupNote = data.duplicate_count ? ` ${data.duplicate_count} duplicate(s) skipped.` : "";
+      if (statusEl) statusEl.textContent = `Extraction preview ready.${conflictNote}${dupNote} Review memory, then Save Memory or Save as Global.`;
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }

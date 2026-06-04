@@ -26,6 +26,24 @@ DEFAULT_MEMORY = """\
 ## Reviewer Notes / Learned Fixes
 
 ## Temporary Regeneration Notes
+
+## RTE API Map
+
+## Entry Points / Call Order
+
+## Mock Interface
+
+## Mock Binding Pattern
+
+## Fixture / Observable Variables
+
+## Default Mock Behavior
+
+## Representative Test Style
+
+## Constants / Value Map
+
+## Spec Signal to Test Code Map
 """
 
 SECTIONS = [
@@ -37,6 +55,15 @@ SECTIONS = [
     "Allowed APIs / Forbidden APIs",
     "Reviewer Notes / Learned Fixes",
     "Temporary Regeneration Notes",
+    "RTE API Map",
+    "Entry Points / Call Order",
+    "Mock Interface",
+    "Mock Binding Pattern",
+    "Fixture / Observable Variables",
+    "Default Mock Behavior",
+    "Representative Test Style",
+    "Constants / Value Map",
+    "Spec Signal to Test Code Map",
 ]
 
 _SECTION_HEADER_RE = re.compile(r"^## (.+)$", re.MULTILINE)
@@ -264,6 +291,131 @@ def merge_proposed_into_memory(existing: str, proposed: str) -> str:
             existing_content = existing_content.rstrip() + f"\n\n## {section}\n\n{proposed_body}\n"
 
     return existing_content
+
+
+def _section_body(content: str, section: str) -> str:
+    """Return the body text of a section (between its ## header and the next ## or EOF)."""
+    pattern = re.compile(rf"^## {re.escape(section)}\s*$(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(str(content or ""))
+    return m.group(1).strip() if m else ""
+
+
+def _bullet_key(bullet: str) -> str:
+    """Normalise a bullet line for duplicate detection."""
+    return re.sub(r"\s+", " ", bullet.lstrip("-").strip().lower())
+
+
+def dedupe_memory(content: str) -> str:
+    """Remove duplicate bullets within each section."""
+    result = str(content or "")
+    for section in SECTIONS:
+        body = _section_body(result, section)
+        if not body:
+            continue
+        seen: set[str] = set()
+        new_lines: list[str] = []
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("-"):
+                key = _bullet_key(stripped)
+                if key in seen:
+                    continue
+                seen.add(key)
+            new_lines.append(line)
+        new_body = "\n".join(new_lines).strip()
+        # Replace section body
+        pattern = re.compile(rf"(^## {re.escape(section)}\s*$)(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+        m = pattern.search(result)
+        if m:
+            result = result[:m.start()] + m.group(1) + "\n\n" + new_body + "\n\n" + result[m.end():]
+    return result
+
+
+def detect_memory_conflicts(existing: str, proposed: str) -> list[dict[str, Any]]:
+    """Return list of conflicts where proposed would overwrite existing non-empty bullets.
+
+    Each conflict: {section, existing_value, proposed_value, conflict_type}.
+    """
+    conflicts: list[dict[str, Any]] = []
+    for section in SECTIONS:
+        ex_body = _section_body(existing, section)
+        pr_body = _section_body(proposed, section)
+        if not ex_body or not pr_body:
+            continue
+        ex_bullets = {_bullet_key(l): l.strip() for l in ex_body.splitlines() if l.strip().startswith("-")}
+        pr_bullets = {_bullet_key(l): l.strip() for l in pr_body.splitlines() if l.strip().startswith("-")}
+        # Detect signal/API-specific conflicts: same first token (e.g. signal name) with different value
+        for pr_key, pr_line in pr_bullets.items():
+            if pr_key in ex_bullets:
+                ex_line = ex_bullets[pr_key]
+                if ex_line.lower().strip() != pr_line.lower().strip():
+                    conflicts.append({
+                        "section": section,
+                        "existing_value": ex_line,
+                        "proposed_value": pr_line,
+                        "conflict_type": "value_differs",
+                    })
+            else:
+                # Check if a similar key (signal name) is mapped differently
+                # Extract first significant word after "Signal:" or "API:" etc.
+                sig_m = re.search(r"Signal:\s*`?(\w+)`?|API:\s*`?(\w+)`?", pr_line, re.IGNORECASE)
+                if sig_m:
+                    sig = sig_m.group(1) or sig_m.group(2)
+                    for ex_key, ex_line in ex_bullets.items():
+                        if sig.lower() in ex_key and ex_key != pr_key:
+                            conflicts.append({
+                                "section": section,
+                                "existing_value": ex_line,
+                                "proposed_value": pr_line,
+                                "conflict_type": "same_signal_different_mapping",
+                            })
+    return conflicts
+
+
+def merge_with_conflict_check(existing: str, proposed: str) -> dict[str, Any]:
+    """Merge proposed into existing, detecting conflicts before applying.
+
+    Returns: {merged, conflicts, duplicate_count}.
+    DOES NOT apply conflicting bullets automatically — caller decides.
+    """
+    conflicts = detect_memory_conflicts(existing, proposed)
+    # Identify which proposed bullets are already in existing (duplicates)
+    duplicate_count = 0
+    existing_lower = (existing or "").lower()
+    for section in SECTIONS:
+        pr_body = _section_body(proposed, section)
+        for line in pr_body.splitlines():
+            if line.strip().startswith("-"):
+                key = _bullet_key(line)
+                if key in existing_lower:
+                    duplicate_count += 1
+
+    # Build merged: skip conflicting and duplicate bullets
+    conflict_proposed = {c["proposed_value"].lower().strip() for c in conflicts}
+    merged = str(existing or DEFAULT_MEMORY)
+    for section in SECTIONS:
+        pr_body = _section_body(proposed, section)
+        if not pr_body:
+            continue
+        ex_body = _section_body(merged, section)
+        for line in pr_body.splitlines():
+            if not line.strip().startswith("-"):
+                continue
+            key = _bullet_key(line)
+            # Skip duplicates and conflicts
+            if key in (merged or "").lower():
+                continue
+            if line.strip().lower() in conflict_proposed:
+                continue
+            merged = append_to_section(merged, section, line.lstrip("- ").strip())
+
+    merged = dedupe_memory(merged)
+    return {
+        "merged": merged,
+        "conflicts": conflicts,
+        "duplicate_count": duplicate_count,
+        "conflict_count": len(conflicts),
+    }
 
 
 def memory_for_prompt(content: str, *, char_limit: int = 3000) -> str:

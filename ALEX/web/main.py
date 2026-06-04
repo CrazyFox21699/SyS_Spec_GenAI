@@ -3138,6 +3138,95 @@ async def api_upload_code_style_sample(
     return {"ok": True, "job_id": job_id, **result}
 
 
+# ---------------------------------------------------------------------------
+# Multi-file project context endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/review/project-context-files/upload")
+async def api_upload_project_context_files(
+    job_id: str,
+    files: list[UploadFile] = File(...),
+) -> dict[str, Any]:
+    from web.project_context_files import is_accepted_extension, process_file
+
+    gtest_state = _load_job_gtest_state(job_id)
+    results: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for file in files:
+        filename = file.filename or "unknown"
+        if not is_accepted_extension(filename):
+            skipped.append(filename)
+            continue
+        raw = await file.read()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+        desc = process_file(filename, text)
+        desc["content"] = text[:8000]  # store first 8K
+        results.append(desc)
+
+    # Persist in gtest_state for later use (exclude full content for storage efficiency)
+    stored = gtest_state.setdefault("project_context_files", [])
+    for desc in results:
+        # Replace existing file with same name
+        stored = [f for f in stored if f.get("filename") != desc["filename"]]
+        stored.append({k: v for k, v in desc.items() if k != "content"})
+    # Store content separately keyed by filename
+    content_store = gtest_state.setdefault("project_context_content", {})
+    for desc in results:
+        content_store[desc["filename"]] = desc.get("content", "")
+    gtest_state["project_context_files"] = stored
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "uploaded": len(results),
+        "skipped": skipped,
+        "files": [{k: v for k, v in d.items() if k != "content"} for d in results],
+    }
+
+
+@app.get("/api/review/project-context-files")
+def api_get_project_context_files(job_id: str) -> dict[str, Any]:
+    gtest_state = _load_job_gtest_state(job_id)
+    files = gtest_state.get("project_context_files") or []
+    return {"ok": True, "job_id": job_id, "files": files}
+
+
+@app.post("/api/review/project-context-files/extract-memory")
+def api_extract_memory_from_context_files(job_id: str) -> dict[str, Any]:
+    from web.project_context_files import build_memory_sections_from_files
+    from web.project_testcode_memory import load_memory_for_job, merge_with_conflict_check
+
+    gtest_state = _load_job_gtest_state(job_id)
+    file_descs = gtest_state.get("project_context_files") or []
+    content_store = gtest_state.get("project_context_content") or {}
+
+    # Rebuild full file descriptors with content
+    full_descs = []
+    for fd in file_descs:
+        full_fd = dict(fd)
+        full_fd["content"] = content_store.get(fd["filename"], "")
+        full_descs.append(full_fd)
+
+    if not full_descs:
+        return {"ok": False, "error": "No project context files loaded. Upload files first."}
+
+    proposed = build_memory_sections_from_files(full_descs)
+    existing = load_memory_for_job(_job_output_dir(job_id))
+    result = merge_with_conflict_check(existing, proposed)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "proposed": proposed,
+        "merged": result["merged"],
+        "conflicts": result["conflicts"],
+        "conflict_count": result["conflict_count"],
+        "duplicate_count": result["duplicate_count"],
+    }
+
+
 @app.get("/api/review/copilot/code/context")
 def api_copilot_code_context(job_id: str, candidate_id: str, language: str = "EN") -> dict[str, Any]:
     bundle = _bundle_for_job(job_id)
