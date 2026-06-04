@@ -305,7 +305,7 @@ def build_style_example_block(snippet: str, label: str = "") -> str:
         "- Use WillRepeatedly(DoAll(SetArgPointee<0>(value), Return(RTE_E_OK)))\n"
         "- Use igsw_Main_Run() as the execution/cycle step\n"
         "- Use EXPECT_THAT(signal, Eq(value)) for output assertions\n"
-        "- Do not replace this style with generic TODO_REVIEW unless the specific API is truly unknown\n"
+        "- If a required API is unknown, return [MISSING_CONTEXT] for this testcase — do not invent\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
@@ -387,10 +387,14 @@ def analyze_missing_generation_context(
 
 
 def _format_missing_context_for_prompt(missing_items: list[dict[str, str]]) -> str:
-    """Format missing context list as a compact prompt hint."""
+    """Format missing context list as a compact prompt hint — tells Copilot to return MISSING_CONTEXT."""
     if not missing_items:
         return ""
-    lines = ["MISSING CONTEXT (place TODO_REVIEW at these exact locations):"]
+    lines = [
+        "DETECTED MISSING CONTEXT for this testcase "
+        "(if any item below is required for correct code, return [MISSING_CONTEXT] — "
+        "do NOT invent APIs, do NOT put TODO_REVIEW placeholders for missing required mappings):"
+    ]
     for item in missing_items:
         sig = item.get("signal") or ""
         sig_str = f" for `{sig}`" if sig else ""
