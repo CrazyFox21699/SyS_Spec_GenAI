@@ -3930,19 +3930,117 @@ def api_extract_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, 
 
 @app.post("/api/review/testcode-memory/append")
 def api_append_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    from web.project_testcode_memory import append_to_section, load_memory_for_job, save_memory_for_job
+    from web.project_testcode_memory import (
+        append_to_section,
+        check_before_append,
+        load_memory_for_job,
+        save_memory_for_job,
+    )
 
     section = str(body.get("section") or "Reviewer Notes / Learned Fixes")
     note = str(body.get("note") or "").strip()
     if not note:
         return {"job_id": job_id, "ok": False, "error": "note required"}
     existing = load_memory_for_job(_job_output_dir(job_id))
+    check = check_before_append(existing, section, note)
+    if check["is_duplicate"]:
+        return {"job_id": job_id, "ok": False, "error": "already_exists",
+                "detail": "Identical rule already exists in memory.", "content": existing}
     updated = append_to_section(existing, section, note)
     save_memory_for_job(_job_output_dir(job_id), updated)
     gtest_state = _load_job_gtest_state(job_id)
     gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = updated
     _persist_job_gtest_state(job_id, gtest_state)
-    return {"job_id": job_id, "ok": True, "content": updated}
+    return {"job_id": job_id, "ok": True, "content": updated, "conflicts": check["conflicts"]}
+
+
+@app.post("/api/review/testcode-memory/quick-add")
+def api_quick_add_memory_rule(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Add a structured Quick Add rule to project memory with duplicate/conflict detection.
+
+    Body: {rule_type, fields: {…}, source_tag: bool, preview_only: bool,
+           force: bool (skip duplicate guard), replace_existing: str (bullet to replace)}
+    """
+    from web.project_testcode_memory import (
+        append_to_section,
+        check_before_append,
+        format_quick_add_rule,
+        load_memory_for_job,
+        rule_type_section,
+        save_memory_for_job,
+        QUICK_ADD_RULE_TYPES,
+    )
+
+    rule_type = str(body.get("rule_type") or "reviewer_note")
+    if rule_type not in QUICK_ADD_RULE_TYPES:
+        return {"job_id": job_id, "ok": False, "error": f"Unknown rule_type: {rule_type}"}
+
+    fields = dict(body.get("fields") or {})
+    source_tag = bool(body.get("source_tag", True))
+    preview_only = bool(body.get("preview_only", False))
+    force = bool(body.get("force", False))
+    replace_existing = str(body.get("replace_existing") or "").strip()
+
+    bullet = format_quick_add_rule(rule_type, fields, source_tag=source_tag)
+    if not bullet:
+        return {"job_id": job_id, "ok": False, "error": "Could not generate rule — fill required fields."}
+
+    section = rule_type_section(rule_type)
+
+    # Preview-only mode: return bullet + check without saving
+    existing = load_memory_for_job(_job_output_dir(job_id))
+    check = check_before_append(existing, section, bullet)
+
+    if preview_only:
+        return {
+            "job_id": job_id,
+            "ok": True,
+            "preview": True,
+            "bullet": bullet,
+            "section": section,
+            "is_duplicate": check["is_duplicate"],
+            "conflicts": check["conflicts"],
+        }
+
+    # Duplicate guard
+    if check["is_duplicate"] and not force:
+        return {
+            "job_id": job_id,
+            "ok": False,
+            "error": "already_exists",
+            "detail": "Identical rule already exists in memory.",
+            "bullet": bullet,
+            "section": section,
+            "content": existing,
+        }
+
+    # Replace existing bullet if requested
+    if replace_existing:
+        import re as _re
+        lines = existing.splitlines()
+        new_lines = [bullet if l.strip() == replace_existing.strip() else l for l in lines]
+        updated = "\n".join(new_lines)
+    else:
+        updated = append_to_section(existing, section, bullet)
+
+    save_memory_for_job(_job_output_dir(job_id), updated)
+    gtest_state = _load_job_gtest_state(job_id)
+    gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = updated
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {
+        "job_id": job_id,
+        "ok": True,
+        "bullet": bullet,
+        "section": section,
+        "conflicts": check["conflicts"],
+        "content": updated,
+    }
+
+
+@app.get("/api/review/testcode-memory/quick-add-schema")
+def api_quick_add_schema() -> dict[str, Any]:
+    from web.project_testcode_memory import QUICK_ADD_RULE_TYPES
+    return {"ok": True, "rule_types": QUICK_ADD_RULE_TYPES}
 
 
 def _config_bundle_text_from_body(body: ConfigBundleTextRequest) -> tuple[str, list[str]]:

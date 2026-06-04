@@ -216,14 +216,15 @@ def _project_instruction_block(gtest_state: dict[str, Any], *, slim_prompt: bool
 
 
 def _testcode_memory_block(gtest_state: dict[str, Any], *, slim_prompt: bool = True) -> str:
-    from web.project_testcode_memory import memory_for_prompt
+    from web.project_testcode_memory import memory_for_prompt_prioritized
 
     cache = gtest_state.get("project_code_config_cache") or {}
     mem = str(cache.get("project_testcode_memory.md") or "").strip()
     if not mem:
         return ""
     limit = 3000 if slim_prompt else 5000
-    clipped = memory_for_prompt(mem, char_limit=limit)
+    # Use prioritized version: quick_add rules + high-value sections first
+    clipped = memory_for_prompt_prioritized(mem, char_limit=limit)
     if not clipped:
         return ""
     return (

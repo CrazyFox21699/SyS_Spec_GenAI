@@ -418,6 +418,248 @@ def merge_with_conflict_check(existing: str, proposed: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Quick Add rule types — structured bullet generation
+# ---------------------------------------------------------------------------
+
+#: Maps rule_type key → (section_name, human_label, fields_spec)
+QUICK_ADD_RULE_TYPES: dict[str, dict[str, Any]] = {
+    "input_mock": {
+        "section": "Input Mock Pattern",
+        "label": "Input / Mock Rule",
+        "fields": [
+            {"key": "signal", "label": "Signal name", "placeholder": "e.g. APOK2", "required": True},
+            {"key": "mock_api", "label": "Mock/API pattern", "placeholder": "e.g. Rte_Read_COMRX_APOK2"},
+            {"key": "default_value", "label": "Default value (optional)", "placeholder": "e.g. 0"},
+        ],
+    },
+    "output_assertion": {
+        "section": "Output Assertion Pattern",
+        "label": "Output / Assertion Rule",
+        "fields": [
+            {"key": "output_var", "label": "Output variable", "placeholder": "e.g. V_PMODE_STS", "required": True},
+            {"key": "assertion_pattern", "label": "Assertion pattern", "placeholder": "e.g. EXPECT_THAT(V_PMODE_STS, Eq({expected}))"},
+        ],
+    },
+    "timing": {
+        "section": "Timing Pattern",
+        "label": "Timing Rule",
+        "fields": [
+            {"key": "timing_name", "label": "Timing name", "placeholder": "e.g. T7", "required": True},
+            {"key": "execution_pattern", "label": "Execution pattern", "placeholder": "e.g. repeated igsw_Main_Run() in for-loop"},
+        ],
+    },
+    "fixture_style": {
+        "section": "Fixture / Test Style",
+        "label": "Fixture / Test Style Rule",
+        "fields": [
+            {"key": "fixture_name", "label": "Fixture name", "placeholder": "e.g. TryToChangeOnToOffTest", "required": True},
+            {"key": "scope_note", "label": "Scope / note", "placeholder": "e.g. for this testcase group unless specified otherwise"},
+        ],
+    },
+    "signal_mapping": {
+        "section": "Spec Signal to Test Code Map",
+        "label": "API / Signal Mapping Rule",
+        "fields": [
+            {"key": "signal", "label": "Spec signal", "placeholder": "e.g. DRDYSTS", "required": True},
+            {"key": "rte_api", "label": "RTE API", "placeholder": "e.g. Rte_Read_COMRX_DRDYSTS", "required": True},
+            {"key": "direction", "label": "Direction (INPUT/OUTPUT/SERVICE)", "placeholder": "INPUT"},
+        ],
+    },
+    "forbidden_pattern": {
+        "section": "Allowed APIs / Forbidden APIs",
+        "label": "Forbidden Pattern",
+        "fields": [
+            {"key": "pattern", "label": "Pattern / API name", "placeholder": "e.g. WaitMs()", "required": True},
+            {"key": "reason", "label": "Reason", "placeholder": "e.g. not present in sample code"},
+        ],
+    },
+    "reviewer_note": {
+        "section": "Reviewer Notes / Learned Fixes",
+        "label": "Reviewer Note / Learned Fix",
+        "fields": [
+            {"key": "note", "label": "Note", "placeholder": "e.g. If API uncertain, use TODO_REVIEW at missing line", "required": True},
+        ],
+    },
+}
+
+
+def format_quick_add_rule(rule_type: str, fields: dict[str, str], *, source_tag: bool = True) -> str:
+    """Generate a structured bullet string for a given rule type and field values."""
+    tag = "[source: quick_add] " if source_tag else ""
+    f = {k: str(v or "").strip() for k, v in fields.items()}
+
+    if rule_type == "input_mock":
+        sig = f.get("signal") or "SIGNAL"
+        api = f.get("mock_api") or f"Rte_Read_COMRX_{sig}"
+        val = f.get("default_value") or "{value}"
+        return (
+            f"{tag}Input signal `{sig}` should be mocked by "
+            f"`EXPECT_CALL(rte, {api}(NotNull())).WillRepeatedly(DoAll(SetArgPointee<0>({val}), Return(RTE_E_OK)))`."
+        )
+
+    if rule_type == "output_assertion":
+        var = f.get("output_var") or "OUTPUT_VAR"
+        pat = f.get("assertion_pattern") or f"EXPECT_THAT({var}, Eq({{expected}}))"
+        return f"{tag}Output `{var}` should be asserted by `{pat}`."
+
+    if rule_type == "timing":
+        name = f.get("timing_name") or "T"
+        pat = f.get("execution_pattern") or "repeated `igsw_Main_Run()` calls in a for-loop"
+        return f"{tag}Timing `{name}` should be simulated by {pat}."
+
+    if rule_type == "fixture_style":
+        fix = f.get("fixture_name") or "TestFixture"
+        scope = f.get("scope_note") or "for this testcase group unless specified otherwise"
+        return f"{tag}Use fixture `{fix}` {scope}."
+
+    if rule_type == "signal_mapping":
+        sig = f.get("signal") or "SIGNAL"
+        api = f.get("rte_api") or f"Rte_Read_{sig}"
+        direction = (f.get("direction") or "INPUT").upper()
+        return f"{tag}Spec signal `{sig}` maps to RTE API `{api}` as {direction}."
+
+    if rule_type == "forbidden_pattern":
+        pat = f.get("pattern") or "unknown_api()"
+        reason = f.get("reason") or "not in sample or project memory"
+        return f"{tag}Do not use `{pat}`. Reason: {reason}."
+
+    if rule_type == "reviewer_note":
+        note = f.get("note") or ""
+        return f"{tag}{note}" if note else ""
+
+    # Fallback: generic free-text
+    note = " ".join(v for v in f.values() if v)
+    return f"{tag}{note}" if note else ""
+
+
+def rule_type_section(rule_type: str) -> str:
+    """Return the target memory section for a rule type."""
+    spec = QUICK_ADD_RULE_TYPES.get(rule_type) or {}
+    return str(spec.get("section") or "Reviewer Notes / Learned Fixes")
+
+
+def check_before_append(memory_content: str, section: str, bullet: str) -> dict[str, Any]:
+    """Check for duplicates and conflicts before inserting a bullet.
+
+    Returns:
+        is_duplicate: bool — exact (normalised) match already exists
+        conflicts: list — bullets with same signal/key but different value
+        bullet: str — the normalised bullet text
+    """
+    content = str(memory_content or "")
+    normalized = _bullet_key(bullet)
+    body = _section_body(content, section)
+
+    # Exact duplicate
+    existing_bullets = [l.strip() for l in body.splitlines() if l.strip().startswith("-")]
+    is_duplicate = any(_bullet_key(b) == normalized for b in existing_bullets)
+
+    # Conflict: same signal name, different value
+    conflicts: list[dict[str, str]] = []
+    sig_m = re.search(r"`([A-Za-z_][A-Za-z0-9_]*)`", bullet)
+    if sig_m and not is_duplicate:
+        target_sig = sig_m.group(1).lower()
+        for ex_bullet in existing_bullets:
+            ex_sig_m = re.search(r"`([A-Za-z_][A-Za-z0-9_]*)`", ex_bullet)
+            if ex_sig_m and ex_sig_m.group(1).lower() == target_sig:
+                if _bullet_key(ex_bullet) != normalized:
+                    conflicts.append({
+                        "existing": ex_bullet,
+                        "proposed": bullet,
+                        "conflict_type": "same_signal_different_rule",
+                    })
+
+    return {
+        "is_duplicate": is_duplicate,
+        "conflicts": conflicts,
+        "bullet": bullet,
+        "section": section,
+    }
+
+
+# Priority sections for compact memory output in prompts
+PROMPT_PRIORITY_SECTIONS = [
+    "Spec Signal to Test Code Map",
+    "Input Mock Pattern",
+    "Output Assertion Pattern",
+    "Timing Pattern",
+    "Fixture / Test Style",
+    "Reviewer Notes / Learned Fixes",
+    "Representative Test Style",
+    "RTE API Map",
+    "Default Mock Behavior",
+    "Entry Points / Call Order",
+    "Mock Interface",
+    "Mock Binding Pattern",
+    "Fixture / Observable Variables",
+    "Constants / Value Map",
+    "Allowed APIs / Forbidden APIs",
+    "Known Signal Rules",
+    "Temporary Regeneration Notes",
+]
+
+
+def memory_for_prompt_prioritized(content: str, *, char_limit: int = 3000) -> str:
+    """Return memory content for Copilot prompt, ordering high-value sections first.
+
+    Quick-add tagged lines (containing [source: quick_add]) are never trimmed
+    before generic prose or extracted content.
+    """
+    text = str(content or "").strip()
+    if not text or text == DEFAULT_MEMORY.strip():
+        return ""
+    content_lines = [l for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+    if not content_lines:
+        return ""
+
+    # Build prioritized output: ordered sections
+    parts: list[str] = []
+    seen_sections: set[str] = set()
+    for section in PROMPT_PRIORITY_SECTIONS:
+        body = _section_body(text, section)
+        if body:
+            parts.append(f"## {section}\n{body}")
+            seen_sections.add(section)
+    # Add any remaining sections not in priority list
+    for m in re.finditer(r"^## (.+)$", text, re.MULTILINE):
+        s = m.group(1).strip()
+        if s not in seen_sections:
+            body = _section_body(text, s)
+            if body:
+                parts.append(f"## {s}\n{body}")
+
+    reordered = "# Project Test Code Memory\n\n" + "\n\n".join(parts)
+    if len(reordered) <= char_limit:
+        return reordered
+
+    # Over budget: keep quick_add lines, trim non-tagged prose
+    output_parts: list[str] = []
+    remaining = char_limit - 30  # header reserve
+    for part in parts:
+        if remaining <= 0:
+            break
+        lines = part.splitlines()
+        kept: list[str] = []
+        for line in lines:
+            if not line.strip():
+                kept.append(line)
+                continue
+            # Always keep quick_add lines and section headers
+            if "[source: quick_add]" in line or line.startswith("##"):
+                kept.append(line)
+            elif remaining > len(line):
+                kept.append(line)
+                remaining -= len(line)
+        block = "\n".join(kept).strip()
+        if block and block != part.splitlines()[0]:  # not just a header
+            output_parts.append(block)
+            remaining -= len(block)
+
+    result = "# Project Test Code Memory\n\n" + "\n\n".join(output_parts)
+    return result if result.strip() != "# Project Test Code Memory" else ""
+
+
 def memory_for_prompt(content: str, *, char_limit: int = 3000) -> str:
     """Return memory clipped for Copilot prompt use. Returns empty if no real content."""
     text = str(content or "").strip()

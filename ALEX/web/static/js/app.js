@@ -8631,12 +8631,15 @@ function renderTestCodeMemoryEditor() {
     </div>
     <div class="alex-testcode-editor__actions" style="flex-wrap:wrap;gap:0.25rem;margin-top:0.25rem">
       <span class="detail" style="align-self:center">Quick add:</span>
-      <button type="button" class="btn secondary btn-inline" data-memory-section="Input Mock Pattern" id="btn-memory-add-mock">+ Input Rule</button>
-      <button type="button" class="btn secondary btn-inline" data-memory-section="Output Assertion Pattern" id="btn-memory-add-assert">+ Assertion Rule</button>
-      <button type="button" class="btn secondary btn-inline" data-memory-section="Timing Pattern" id="btn-memory-add-timing">+ Timing Rule</button>
-      <button type="button" class="btn secondary btn-inline" data-memory-section="Reviewer Notes / Learned Fixes" id="btn-memory-add-reviewer">+ Reviewer Note</button>
-      <button type="button" class="btn secondary btn-inline" data-memory-section="Temporary Regeneration Notes" id="btn-memory-add-regen">+ Regen Hint</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="input_mock">+ Input Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="output_assertion">+ Assertion Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="timing">+ Timing Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="fixture_style">+ Fixture Rule</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="signal_mapping">+ Signal Mapping</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="forbidden_pattern">+ Forbidden</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="reviewer_note">+ Reviewer Note</button>
     </div>
+    <div id="testcode-quick-add-form" style="display:none;margin-top:0.5rem;border:1px solid var(--border,#ccc);border-radius:4px;padding:0.5rem;background:var(--bg-card,#fafafa)"></div>
     ${hasMem ? "" : `<p class="detail" style="color:#888;margin-top:0.25rem">Memory is empty. Add rules or Extract Style from sample .cc to improve generation quality.</p>`}
   </div>`;
 }
@@ -10572,27 +10575,223 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     }
   });
 
-  // Quick-add buttons — prompt user for note then append to section
-  document.querySelectorAll("[data-memory-section]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const section = btn.dataset.memorySection || "Reviewer Notes / Learned Fixes";
-      const note = window.prompt(`Add to "${section}":`);
-      if (!note || !note.trim()) return;
-      try {
-        const data = await api(`/api/review/testcode-memory/append?job_id=${encodeURIComponent(state.jobId)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ section, note: note.trim() }),
-        });
-        tc.testcodeMemory = data.content || tc.testcodeMemory;
-        tc.testcodeMemoryDraft = data.content || tc.testcodeMemoryDraft;
-        tc.testcodeMemorySource = "local";
-        const el = $("#testcode-memory-editor");
-        if (el) el.value = tc.testcodeMemoryDraft || "";
-        if (statusEl) statusEl.textContent = `Added to ${section}.`;
-      } catch (e) {
-        if (statusEl) statusEl.textContent = e.message;
+  // Quick Add — schema-driven structured form with preview and conflict detection
+  const QUICK_ADD_FIELD_LABELS = {
+    signal: "Signal name",
+    mock_api: "Mock/API pattern",
+    default_value: "Default value (optional)",
+    output_var: "Output variable",
+    assertion_pattern: "Assertion pattern",
+    timing_name: "Timing name",
+    execution_pattern: "Execution pattern",
+    fixture_name: "Fixture name",
+    scope_note: "Scope / note",
+    rte_api: "RTE API",
+    direction: "Direction (INPUT/OUTPUT/SERVICE)",
+    pattern: "Pattern / API name",
+    reason: "Reason",
+    note: "Note",
+  };
+
+  const QUICK_ADD_PLACEHOLDERS = {
+    signal: "e.g. APOK2",
+    mock_api: "e.g. Rte_Read_COMRX_APOK2",
+    default_value: "e.g. 0",
+    output_var: "e.g. V_PMODE_STS",
+    assertion_pattern: "e.g. EXPECT_THAT(V_PMODE_STS, Eq({expected}))",
+    timing_name: "e.g. T7",
+    execution_pattern: "e.g. repeated igsw_Main_Run() in for-loop",
+    fixture_name: "e.g. TryToChangeOnToOffTest",
+    scope_note: "e.g. for this testcase group",
+    rte_api: "e.g. Rte_Read_COMRX_DRDYSTS",
+    direction: "INPUT",
+    pattern: "e.g. WaitMs()",
+    reason: "e.g. not present in sample code",
+    note: "e.g. If API uncertain, use TODO_REVIEW at missing line",
+  };
+
+  const QUICK_ADD_FIELDS_BY_TYPE = {
+    input_mock: ["signal", "mock_api", "default_value"],
+    output_assertion: ["output_var", "assertion_pattern"],
+    timing: ["timing_name", "execution_pattern"],
+    fixture_style: ["fixture_name", "scope_note"],
+    signal_mapping: ["signal", "rte_api", "direction"],
+    forbidden_pattern: ["pattern", "reason"],
+    reviewer_note: ["note"],
+  };
+
+  const QUICK_ADD_LABELS = {
+    input_mock: "Input / Mock Rule",
+    output_assertion: "Output / Assertion Rule",
+    timing: "Timing Rule",
+    fixture_style: "Fixture / Test Style Rule",
+    signal_mapping: "API / Signal Mapping Rule",
+    forbidden_pattern: "Forbidden Pattern",
+    reviewer_note: "Reviewer Note / Learned Fix",
+  };
+
+  function renderQuickAddForm(ruleType) {
+    const label = QUICK_ADD_LABELS[ruleType] || ruleType;
+    const fieldKeys = QUICK_ADD_FIELDS_BY_TYPE[ruleType] || ["note"];
+    const fields = fieldKeys.map((k) => `
+      <label class="detail" style="display:block;margin-top:0.3rem">${esc(QUICK_ADD_FIELD_LABELS[k] || k)}
+        <input id="qa-field-${k}" type="text" class="gtest-input" style="width:100%;box-sizing:border-box"
+          placeholder="${esc(QUICK_ADD_PLACEHOLDERS[k] || "")}" />
+      </label>`).join("");
+    return `
+      <p class="detail" style="font-weight:bold;margin:0 0 0.3rem">+ ${esc(label)}</p>
+      ${fields}
+      <div id="qa-preview-area" style="margin-top:0.4rem;display:none">
+        <p class="detail" style="margin:0">Preview:</p>
+        <pre id="qa-preview-text" style="font-size:0.78em;white-space:pre-wrap;background:var(--bg,#f5f5f5);padding:0.3rem;border-radius:3px;margin:0.2rem 0"></pre>
+        <p class="detail" id="qa-section-label" style="margin:0;color:#666"></p>
+        <div id="qa-conflict-area" style="display:none;margin-top:0.3rem">
+          <p class="tag warning detail" id="qa-conflict-msg" style="margin:0"></p>
+          <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap">
+            <button type="button" class="btn secondary btn-inline" id="qa-btn-keep">Keep existing</button>
+            <button type="button" class="btn secondary btn-inline" id="qa-btn-add-alt">Add as alternative</button>
+            <button type="button" class="btn secondary btn-inline" id="qa-btn-replace">Replace existing</button>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:0.4rem;display:flex;gap:0.3rem;flex-wrap:wrap">
+        <button type="button" class="btn secondary btn-inline" id="qa-btn-preview">Preview</button>
+        <button type="button" class="btn" id="qa-btn-confirm" disabled>Confirm</button>
+        <button type="button" class="btn secondary btn-inline" id="qa-btn-cancel">Cancel</button>
+      </div>`;
+  }
+
+  function getQuickAddFields(ruleType) {
+    const fieldKeys = QUICK_ADD_FIELDS_BY_TYPE[ruleType] || ["note"];
+    const fields = {};
+    fieldKeys.forEach((k) => {
+      const el = $(`#qa-field-${k}`);
+      if (el) fields[k] = el.value.trim();
+    });
+    return fields;
+  }
+
+  let _qaCurrentRuleType = "";
+  let _qaLastPreviewBullet = "";
+  let _qaLastConflicts = [];
+
+  async function handleQuickAddPreview() {
+    const ruleType = _qaCurrentRuleType;
+    const fields = getQuickAddFields(ruleType);
+    try {
+      const data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rule_type: ruleType, fields, source_tag: true, preview_only: true }),
+      });
+      _qaLastPreviewBullet = data.bullet || "";
+      _qaLastConflicts = data.conflicts || [];
+
+      const previewArea = $("#qa-preview-area");
+      const previewText = $("#qa-preview-text");
+      const sectionLabel = $("#qa-section-label");
+      const conflictArea = $("#qa-conflict-area");
+      const confirmBtn = $("#qa-btn-confirm");
+
+      if (previewArea) previewArea.style.display = "block";
+      if (previewText) previewText.textContent = `- ${_qaLastPreviewBullet}`;
+      if (sectionLabel) sectionLabel.textContent = `→ Section: ${data.section || ""}`;
+
+      if (data.is_duplicate) {
+        if (conflictArea) {
+          conflictArea.style.display = "block";
+          const conflictMsg = $("#qa-conflict-msg");
+          if (conflictMsg) conflictMsg.textContent = "Already exists in memory — identical rule will not be added.";
+        }
+        const keepBtn = $("#qa-btn-keep");
+        const addAltBtn = $("#qa-btn-add-alt");
+        const replaceBtn = $("#qa-btn-replace");
+        if (keepBtn) keepBtn.style.display = "none";
+        if (addAltBtn) addAltBtn.style.display = "none";
+        if (replaceBtn) replaceBtn.style.display = "none";
+        if (confirmBtn) confirmBtn.disabled = true;
+      } else if (_qaLastConflicts.length) {
+        if (conflictArea) {
+          conflictArea.style.display = "block";
+          const conflictMsg = $("#qa-conflict-msg");
+          const ex = _qaLastConflicts[0]?.existing || "";
+          if (conflictMsg) conflictMsg.textContent = `Conflict detected. Existing: "${ex}"`;
+        }
+        if (confirmBtn) confirmBtn.disabled = false;
+      } else {
+        if (conflictArea) conflictArea.style.display = "none";
+        if (confirmBtn) confirmBtn.disabled = false;
       }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  }
+
+  async function submitQuickAdd(forceMode) {
+    const ruleType = _qaCurrentRuleType;
+    const fields = getQuickAddFields(ruleType);
+    const replaceExisting = (forceMode === "replace" && _qaLastConflicts.length)
+      ? (_qaLastConflicts[0]?.existing || "")
+      : "";
+    try {
+      const data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rule_type: ruleType,
+          fields,
+          source_tag: true,
+          preview_only: false,
+          force: forceMode === "force" || forceMode === "add_alt",
+          replace_existing: replaceExisting,
+        }),
+      });
+      if (!data.ok && data.error !== "already_exists") {
+        if (statusEl) statusEl.textContent = data.error || "Quick add failed.";
+        return;
+      }
+      tc.testcodeMemory = data.content || tc.testcodeMemory;
+      tc.testcodeMemoryDraft = data.content || tc.testcodeMemoryDraft;
+      tc.testcodeMemorySource = "local";
+      const el = $("#testcode-memory-editor");
+      if (el) el.value = tc.testcodeMemoryDraft || "";
+      const form = $("#testcode-quick-add-form");
+      if (form) { form.style.display = "none"; form.innerHTML = ""; }
+      if (statusEl) statusEl.textContent = data.ok
+        ? `Added to ${data.section || "memory"}.${data.conflicts?.length ? " ⚠ Conflict noted." : ""}`
+        : "Rule already exists — not added again.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  }
+
+  // Wire Quick Add typed buttons
+  document.querySelectorAll("[data-rule-type]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ruleType = btn.dataset.ruleType || "reviewer_note";
+      _qaCurrentRuleType = ruleType;
+      _qaLastPreviewBullet = "";
+      _qaLastConflicts = [];
+      const form = $("#testcode-quick-add-form");
+      if (!form) return;
+      form.innerHTML = renderQuickAddForm(ruleType);
+      form.style.display = "block";
+      // Focus first input
+      form.querySelector("input")?.focus();
+      // Bind form actions
+      $("#qa-btn-preview")?.addEventListener("click", handleQuickAddPreview);
+      $("#qa-btn-confirm")?.addEventListener("click", () => submitQuickAdd("add_alt"));
+      $("#qa-btn-cancel")?.addEventListener("click", () => {
+        form.style.display = "none";
+        form.innerHTML = "";
+      });
+      $("#qa-btn-keep")?.addEventListener("click", () => {
+        form.style.display = "none";
+        form.innerHTML = "";
+        if (statusEl) statusEl.textContent = "Kept existing rule — no change.";
+      });
+      $("#qa-btn-add-alt")?.addEventListener("click", () => submitQuickAdd("add_alt"));
+      $("#qa-btn-replace")?.addEventListener("click", () => submitQuickAdd("replace"));
     });
   });
 
