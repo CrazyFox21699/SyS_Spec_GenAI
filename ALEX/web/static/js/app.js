@@ -384,6 +384,7 @@ let state = {
     testcodeMemory: null,
     testcodeMemoryDraft: null,
     testcodeMemorySource: "global",
+    instructionSource: "builtin_default",
     clarificationNote: "",
     showClarification: false,
     editingTestcaseId: "",
@@ -8313,7 +8314,38 @@ function renderTestCodeAdvancedBody(rows) {
         Shorter Copilot prompt for next testcase (same web chat)
       </label>
       <p class="detail">Workflow: [NO_CODE] [DRAFT] [SAVED] [MODIFIED_UNSAVED] [NEEDS_REVIEW] [ERROR] · Sources: COPILOT_WEB, COPILOT_API, LOCAL_TEMPLATE, MANUAL, CLAUDE_MANUAL (pack only)</p>
+    </details>
+    <details class="alex-testcode-advanced-section">
+      <summary>Global config diagnostics</summary>
+      <div id="testcode-global-diagnostics-panel">
+        <p class="detail">Loading…</p>
+      </div>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-refresh-diagnostics" style="margin-top:0.3rem">Refresh diagnostics</button>
     </details>`;
+}
+
+async function loadTestCodeGlobalDiagnostics() {
+  const panel = $("#testcode-global-diagnostics-panel");
+  if (!panel || !state.jobId) return;
+  try {
+    const data = await api(`/api/review/global-config-diagnostics?job_id=${encodeURIComponent(state.jobId)}`);
+    const tc = state.testCode;
+    const rows = [
+      ["Global memory (project_testcode_memory.md)", data.global_memory_exists ? "✓ Exists" : "✗ Not saved"],
+      ["Global instruction (project_instruction.md)", data.global_instruction_exists ? "✓ Exists" : "✗ Not saved"],
+      ["Global style samples", `${data.global_style_samples_count} sample(s)`],
+      ["Job memory override", data.job_memory_exists ? "✓ Exists" : "— Using global"],
+      ["Job instruction override", data.job_instruction_override_exists ? "✓ Exists" : "— Using global/default"],
+      ["Memory source", _sourceLabel(data.memory_source)],
+      ["Instruction source", _sourceLabel(data.instruction_source)],
+      ["Last sync", data.last_synced || "—"],
+    ];
+    panel.innerHTML = `<table class="detail" style="border-collapse:collapse;width:100%">
+      ${rows.map(([k, v]) => `<tr><td style="padding:0.1rem 0.5rem 0.1rem 0;white-space:nowrap;color:#666">${esc(k)}</td><td style="padding:0.1rem 0">${esc(v)}</td></tr>`).join("")}
+    </table>`;
+  } catch (e) {
+    if (panel) panel.textContent = e.message;
+  }
 }
 
 function patchTestCodeReviewDetailsUi() {
@@ -8332,6 +8364,12 @@ async function ensureProjectCodeConfigLoaded(force = false) {
   const data = await api(`/api/review/project-code-config?job_id=${encodeURIComponent(state.jobId)}`);
   state.testCode.projectCodeConfig = data;
   state.testCode.configVersions = data.versions || [];
+  // Store source metadata from API
+  state.testCode.instructionSource = data.instruction_source || "builtin_default";
+  state.testCode.memorySourceFromConfig = data.memory_source || "global";
+  if (state.testCode.testcodeMemorySource === "global" || !state.testCode.testcodeMemorySource) {
+    state.testCode.testcodeMemorySource = data.memory_source || "global";
+  }
   if (state.testCode.projectInstructionDraft == null && data.files?.["project_instruction.md"]) {
     state.testCode.projectInstructionDraft = String(data.files["project_instruction.md"].content || TESTCODE_PROJECT_INSTRUCTION_TEMPLATE);
   }
@@ -8608,11 +8646,14 @@ function renderTestCodeMemoryEditor() {
   const tc = state.testCode;
   const mem = tc.testcodeMemoryDraft != null ? tc.testcodeMemoryDraft : (tc.testcodeMemory || "");
   const source = tc.testcodeMemorySource || "global";
+  const memDirty = tc.testcodeMemoryDraft != null && tc.testcodeMemoryDraft !== tc.testcodeMemory;
+  const memSourceText = memDirty ? "Unsaved changes" : _sourceLabel(source);
+  const memBadgeClass = memDirty ? "tag warning" : (source === "global" ? "tag ok" : "");
   const hasMem = (mem || "").trim().length > 60;
   const sampleOk = (tc.codeStyleSamples || []).length > 0 || String(tc.samplePasteDraft || "").trim();
   return `<div class="alex-testcode-memory" id="testcode-memory-section">
     <label class="detail">Project Test Code Memory
-      <span class="detail" style="font-weight:normal;margin-left:0.5rem" id="testcode-memory-source-badge">(${esc(source === "global" ? "from global library" : "job-local")})</span>
+      <span id="testcode-memory-source-badge" class="${memBadgeClass} detail" style="margin-left:0.5rem;font-weight:normal">Source: ${esc(memSourceText)}</span>
     </label>
     <textarea id="testcode-memory-editor" class="gtest-input gtest-note alex-testcode-rules" rows="8" spellcheck="false" placeholder="# Project Test Code Memory
 ## Fixture / Test Style
@@ -8644,19 +8685,36 @@ function renderTestCodeMemoryEditor() {
   </div>`;
 }
 
+function _sourceLabel(source) {
+  if (source === "global") return "Global";
+  if (source === "job_override") return "Job override";
+  if (source === "builtin_default") return "Built-in default";
+  if (source === "extracted-preview") return "Extracted preview";
+  if (source === "local") return "Job override";
+  return source || "Unknown";
+}
+
 function renderTestCodeProjectInstructionEditor() {
+  const tc = state.testCode;
+  const instrSource = tc.instructionSource || "builtin_default";
+  const isDirty = tc.projectInstructionDraft != null;
+  const sourceText = isDirty ? "Unsaved changes" : _sourceLabel(instrSource);
+  const sourceBadgeClass = isDirty ? "tag warning" : (instrSource === "global" ? "tag ok" : "");
   return `<div class="alex-testcode-project-instruction">
     <label class="detail">Project Instruction Markdown
+      <span id="testcode-instruction-source-badge" class="${sourceBadgeClass} detail" style="margin-left:0.5rem;font-weight:normal">Source: ${esc(sourceText)}</span>
+    </label>
     <textarea id="testcode-project-instruction-main" class="gtest-input gtest-note alex-testcode-rules" rows="8" spellcheck="false" placeholder="- Fixture/style rules
 - Assertion rules
 - RTE/mock rules
 - Timing rules
 - Forbidden patterns
 - Customer-specific notes">${esc(getTestCodeProjectInstruction())}</textarea>
-    </label>
-    <div class="alex-testcode-editor__actions alex-testcode-instruction-actions">
-      <button type="button" class="btn secondary btn-inline" id="btn-testcode-use-default-instruction">Use default rulebook</button>
+    <div class="alex-testcode-editor__actions alex-testcode-instruction-actions" style="flex-wrap:wrap;gap:0.25rem">
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-project-instruction">Save Instruction</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-instruction-global">Save as Global</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-reload-instruction-global">Reload Global</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-use-default-instruction">Use built-in default</button>
     </div>
   </div>`;
 }
@@ -10461,11 +10519,54 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       });
       const savedAt = data.version?.timestamp || new Date().toISOString();
       tc.projectInstructionSavedAt = savedAt;
-      tc.projectInstructionDraft = content;
+      tc.projectInstructionDraft = null;  // clear draft — now saved
+      tc.instructionSource = "job_override";
       await ensureProjectCodeConfigLoaded(true);
       refreshTestCodeConfigUi(rows, statusEl);
       refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
-      if (statusEl) statusEl.textContent = `Saved Instruction · ${formatTestCodeTimestamp(savedAt)}.`;
+      if (statusEl) statusEl.textContent = `Saved Instruction (job-local) · ${formatTestCodeTimestamp(savedAt)}.`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Save Instruction as Global
+  bindClick("#btn-testcode-save-instruction-global", async () => {
+    const content = $("#testcode-project-instruction-main")?.value ?? "";
+    try {
+      const data = await api(
+        `/api/review/project-code-config/save-as-global?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        }
+      );
+      if (!data.ok) throw new Error(data.error || "Save failed");
+      tc.instructionSource = "global";
+      tc.projectInstructionDraft = null;
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = "Instruction saved as Global — new jobs will inherit this instruction automatically.";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Reload Global Instruction
+  bindClick("#btn-testcode-reload-instruction-global", async () => {
+    try {
+      const data = await api(
+        `/api/review/project-code-config/reload-global-instruction?job_id=${encodeURIComponent(state.jobId)}`,
+        { method: "POST" }
+      );
+      if (!data.ok) throw new Error(data.error || "No global instruction saved yet.");
+      tc.projectInstructionDraft = data.content || "";
+      tc.instructionSource = data.instruction_source || "global";
+      const el = $("#testcode-project-instruction-main");
+      if (el) el.value = tc.projectInstructionDraft;
+      await ensureProjectCodeConfigLoaded(true);
+      refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+      if (statusEl) statusEl.textContent = `Global instruction loaded. Source: ${_sourceLabel(tc.instructionSource)}.`;
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
@@ -11670,6 +11771,14 @@ function bindTestCodeHandlers(rows) {
   });
 
   bindClick("#btn-testcode-refresh-prompt", () => refreshTestCodePromptPreview(rows));
+  bindClick("#btn-testcode-refresh-diagnostics", () => loadTestCodeGlobalDiagnostics());
+
+  // Auto-load diagnostics when panel is opened
+  document.querySelector("#testcode-global-diagnostics-panel")
+    ?.closest("details")
+    ?.addEventListener("toggle", (ev) => {
+      if (ev.target.open) loadTestCodeGlobalDiagnostics();
+    }, { once: true });
 
   bindClick("#btn-testcode-import-copilot", () => applyImportedCopilotToEditor(rows));
 

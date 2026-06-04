@@ -122,11 +122,16 @@ def ensure_config_layers(job_output: Path) -> None:
 
     has_baseline = any((baseline / name).exists() for name in list_config_filenames())
     if not has_baseline:
+        from web.project_code_config import load_global_instruction
+        global_instruction = load_global_instruction()
         for name in list_config_filenames():
             flat = root / name
             dest = baseline / name
             if flat.exists():
                 dest.write_text(flat.read_text(encoding="utf-8"), encoding="utf-8")
+            elif name == "project_instruction.md" and global_instruction:
+                # Use global instruction as baseline for new jobs
+                dest.write_text(global_instruction, encoding="utf-8")
             elif name in CONFIG_FILES:
                 dest.write_text(CONFIG_FILES[name]["default"], encoding="utf-8")
 

@@ -3807,14 +3807,20 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
 def _sync_project_code_config_cache(job_id: str, gtest_state: dict[str, Any]) -> dict[str, Any]:
     from datetime import datetime, timezone
 
-    from web.project_code_config import load_project_code_config
-    from web.project_testcode_memory import copy_global_to_job
+    from web.project_code_config import effective_instruction_for_job, load_project_code_config
+    from web.project_testcode_memory import copy_global_to_job, load_memory_for_job, _job_memory_path
 
     config = load_project_code_config(_job_output_dir(job_id))
     cache = {name: str((meta or {}).get("content") or "") for name, meta in (config.get("files") or {}).items()}
-    # Auto-load testcode memory: copy global → job if no local copy, then add to cache
+
+    # Auto-load testcode memory: copy global → job if no local copy
     mem_content = copy_global_to_job(_job_output_dir(job_id))
     cache["project_testcode_memory.md"] = mem_content
+
+    # Determine source labels for UI
+    mem_source = "job_override" if _job_memory_path(_job_output_dir(job_id)).exists() else "global"
+    _, instr_source = effective_instruction_for_job(_job_output_dir(job_id))
+
     gtest_state["project_code_config_cache"] = cache
     gtest_state["project_code_config_meta"] = {
         "loaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -3823,6 +3829,8 @@ def _sync_project_code_config_cache(job_id: str, gtest_state: dict[str, Any]) ->
         "current_version": config.get("current_version"),
         "layers": config.get("layers"),
         "pending_proposal": config.get("pending_proposal"),
+        "memory_source": mem_source,
+        "instruction_source": instr_source,
     }
     return config
 
@@ -3832,7 +3840,13 @@ def api_get_project_code_config(job_id: str) -> dict[str, Any]:
     gtest_state = _load_job_gtest_state(job_id)
     config = _sync_project_code_config_cache(job_id, gtest_state)
     _persist_job_gtest_state(job_id, gtest_state)
-    return {"job_id": job_id, **config}
+    meta = gtest_state.get("project_code_config_meta") or {}
+    return {
+        "job_id": job_id,
+        **config,
+        "memory_source": meta.get("memory_source", "global"),
+        "instruction_source": meta.get("instruction_source", "builtin_default"),
+    }
 
 
 @app.get("/api/review/project-code-config/diagnostics")
@@ -3860,12 +3874,107 @@ def api_put_project_code_config(job_id: str, body: ProjectCodeConfigSaveRequest)
     return {"job_id": job_id, **result}
 
 
+@app.post("/api/review/project-code-config/save-as-global")
+def api_save_project_instruction_as_global(job_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Save current project_instruction.md to global library (web_data/.alex/project_instruction.md)."""
+    from web.project_code_config import effective_instruction_for_job, save_global_instruction
+
+    content = str((body or {}).get("content") or "").strip()
+    if not content:
+        # Load current effective instruction
+        content, _ = effective_instruction_for_job(_job_output_dir(job_id))
+    if not content:
+        return {"job_id": job_id, "ok": False, "error": "No instruction content to save globally."}
+    path = save_global_instruction(content)
+    # Sync cache so source label updates immediately
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    return {"job_id": job_id, "ok": True, "path": str(path), "instruction_source": "global"}
+
+
+@app.get("/api/review/project-code-config/global-instruction")
+def api_get_global_instruction() -> dict[str, Any]:
+    from web.project_code_config import load_global_instruction
+    content = load_global_instruction()
+    return {"ok": True, "exists": content is not None, "content": content or ""}
+
+
+@app.post("/api/review/project-code-config/reload-global-instruction")
+def api_reload_global_instruction(job_id: str) -> dict[str, Any]:
+    """Replace job instruction with global instruction (if global exists)."""
+    from web.project_code_config import (
+        load_global_instruction,
+        save_project_code_config_file,
+        effective_instruction_for_job,
+    )
+    global_content = load_global_instruction()
+    if not global_content:
+        return {"job_id": job_id, "ok": False, "error": "No global instruction saved yet. Save as Global first."}
+    result = save_project_code_config_file(_job_output_dir(job_id), "project_instruction.md", global_content)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "save failed")
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+    _persist_job_gtest_state(job_id, gtest_state)
+    _, source = effective_instruction_for_job(_job_output_dir(job_id))
+    return {"job_id": job_id, "ok": True, "content": global_content, "instruction_source": source}
+
+
+@app.get("/api/review/global-config-diagnostics")
+def api_global_config_diagnostics(job_id: str | None = None) -> dict[str, Any]:
+    """Return global and job config file status for diagnostics panel."""
+    from web.alex_storage import global_instruction_path, testcode_memory_path, code_style_samples_path
+    from web.project_testcode_memory import _job_memory_path, load_memory_for_job
+
+    gm_path = testcode_memory_path()
+    gi_path = global_instruction_path()
+    gs_path = code_style_samples_path()
+
+    diag: dict[str, Any] = {
+        "global_memory_exists": gm_path.exists(),
+        "global_memory_path": str(gm_path),
+        "global_instruction_exists": gi_path.exists(),
+        "global_instruction_path": str(gi_path),
+        "global_style_samples_count": 0,
+    }
+
+    # Style samples count
+    try:
+        import yaml
+        if gs_path.exists():
+            data = yaml.safe_load(gs_path.read_text(encoding="utf-8")) or {}
+            diag["global_style_samples_count"] = len(data.get("samples") or [])
+    except Exception:
+        pass
+
+    # Job-specific info
+    if job_id:
+        job_out = _job_output_dir(job_id)
+        job_mem = _job_memory_path(job_out)
+        diag["job_memory_exists"] = job_mem.exists()
+        diag["job_memory_path"] = str(job_mem)
+        gtest_state = _load_job_gtest_state(job_id)
+        meta = gtest_state.get("project_code_config_meta") or {}
+        diag["memory_source"] = meta.get("memory_source", "unknown")
+        diag["instruction_source"] = meta.get("instruction_source", "unknown")
+        diag["last_synced"] = meta.get("loaded_at", "")
+
+        from web.project_code_config import effective_instruction_for_job
+        from web.config_bundle_layers import _overrides_dir
+        override_path = _overrides_dir(job_out) / "project_instruction.md"
+        diag["job_instruction_override_exists"] = override_path.exists()
+
+    return {"ok": True, **diag}
+
+
 @app.get("/api/review/testcode-memory")
 def api_get_testcode_memory(job_id: str) -> dict[str, Any]:
-    from web.project_testcode_memory import load_memory_for_job
+    from web.project_testcode_memory import load_memory_for_job, _job_memory_path
 
     content = load_memory_for_job(_job_output_dir(job_id))
-    return {"job_id": job_id, "content": content}
+    source = "job_override" if _job_memory_path(_job_output_dir(job_id)).exists() else "global"
+    return {"job_id": job_id, "content": content, "source": source}
 
 
 @app.put("/api/review/testcode-memory")

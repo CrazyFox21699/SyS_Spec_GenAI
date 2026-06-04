@@ -102,6 +102,63 @@ def list_config_filenames() -> list[str]:
     return list(CONFIG_FILES.keys())
 
 
+# ---------------------------------------------------------------------------
+# Global project_instruction.md (stored in web_data/.alex/)
+# ---------------------------------------------------------------------------
+
+def load_global_instruction() -> str | None:
+    """Return global project_instruction.md content, or None if not saved yet."""
+    from web.alex_storage import global_instruction_path
+    path = global_instruction_path()
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def save_global_instruction(content: str) -> Path:
+    """Save project_instruction.md to global library (web_data/.alex/)."""
+    from web.alex_storage import global_instruction_path, ensure_alex_data_dir
+    ensure_alex_data_dir()
+    path = global_instruction_path()
+    path.write_text(str(content or ""), encoding="utf-8")
+    return path
+
+
+def effective_instruction_for_job(job_output: Path) -> tuple[str, str]:
+    """Return (instruction_content, source) for a job.
+
+    source is one of: 'job_override', 'global', 'builtin_default'.
+    Does NOT write to disk — caller decides.
+    """
+    from web.config_bundle_layers import _overrides_dir, _baseline_dir
+
+    # 1. Job-specific override (project_overrides layer)
+    override_path = _overrides_dir(job_output) / "project_instruction.md"
+    if override_path.exists():
+        text = override_path.read_text(encoding="utf-8").strip()
+        if text:
+            return text, "job_override"
+
+    # 2. Job baseline that differs from built-in default
+    baseline_path = _baseline_dir(job_output) / "project_instruction.md"
+    builtin_default = (CONFIG_FILES.get("project_instruction.md") or {}).get("default") or ""
+    if baseline_path.exists():
+        text = baseline_path.read_text(encoding="utf-8").strip()
+        if text and text != builtin_default.strip():
+            return text, "job_override"
+
+    # 3. Global instruction
+    global_content = load_global_instruction()
+    if global_content and global_content.strip():
+        return global_content, "global"
+
+    # 4. Builtin default
+    return builtin_default, "builtin_default"
+
+
 def load_project_code_config(job_output: Path) -> dict[str, Any]:
     """Load effective config (baseline + overrides + learned) and sync flat files."""
     from web.config_bundle_layers import load_layered_project_code_config
