@@ -8262,6 +8262,8 @@ function renderTestCodeAdvancedBody(rows) {
   const covLine = cov
     ? `Coverage: ${cov.ready_for_local_generation ?? 0} ready / ${cov.total_testcase_count ?? cov.total ?? 0} total · ${cov.missing_mapping_count ?? 0} missing map · detected keys: ${cov.detected_mapping_count ?? "—"}`
     : "Run Check Mapping Coverage to see readiness.";
+  const hasCtxFiles = (state.testCode.contextFiles || []).length > 0;
+  const hasSampleOk = (state.testCode.codeStyleSamples || []).length > 0 || String(state.testCode.samplePasteDraft || "").trim();
   return `<details class="alex-testcode-advanced-section">
       <summary>Fallback generation</summary>
       <div id="testcode-advanced-smart-wrap">${renderTestCodeSimpleToolbar()}</div>
@@ -8269,6 +8271,13 @@ function renderTestCodeAdvancedBody(rows) {
         <button type="button" class="btn secondary btn-inline" id="btn-testcode-local-template">Generate Local from Template</button>
       </div>
       <div id="testcode-advanced-exemplar-wrap">${renderTestCodeExemplarPanel(rows)}</div>
+    </details>
+    <details class="alex-testcode-advanced-section">
+      <summary>Re-extract memory from project files (manual)</summary>
+      <p class="detail">Normally extraction runs automatically when you load project context files. Use this only to re-run extraction or resolve issues.</p>
+      <div class="alex-testcode-editor__actions">
+        <button type="button" class="btn secondary btn-inline" id="btn-testcode-extract-to-memory" ${(hasSampleOk || hasCtxFiles) ? "" : "disabled title='Load project context files or sample .cc first'"}>Re-extract Style to Memory</button>
+      </div>
     </details>
     <details class="alex-testcode-advanced-section">
       <summary>Internal config</summary>
@@ -8668,8 +8677,8 @@ function renderTestCodeMemoryEditor() {
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory">Save Memory</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-save-memory-global">Save as Global</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-reload-memory-global">Reload Global</button>
-      <button type="button" class="btn secondary btn-inline" id="btn-testcode-extract-to-memory" ${(sampleOk || (state.testCode.contextFiles || []).length > 0) ? "" : "disabled title='Load project context files or sample .cc first'"}>Extract Style to Memory</button>
     </div>
+    <div id="testcode-extraction-result" style="display:none;margin-top:0.4rem"></div>
     <div class="alex-testcode-editor__actions" style="flex-wrap:wrap;gap:0.25rem;margin-top:0.25rem">
       <span class="detail" style="align-self:center">Quick add:</span>
       <button type="button" class="btn secondary btn-inline" data-rule-type="input_mock">+ Input Rule</button>
@@ -9483,8 +9492,9 @@ function renderTestCodeCopilotPrimaryBar(rows, samples) {
         ? esc(`Sample: ${first.label || first.source_file || "loaded"}`)
         : "No project context loaded yet."
     } · ${allCount} testcase(s) imported</p>
+    <p class="detail" style="margin:0.15rem 0 0.35rem;color:#555">Load .h/.cpp/.cc/mock/RTE/fixture files once — ALEX extracts reusable test code memory automatically.</p>
     <div class="alex-testcode-primary-sample-row">
-      <label class="btn secondary btn-inline upload-label" title="Load .h/.hpp/.c/.cc/.cpp/.txt files — RTE headers, mock headers, fixtures, sample tests, etc.">Load Project Context Files<input type="file" id="testcode-context-files-upload" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.txt" multiple hidden /></label>
+      <label class="btn btn-inline upload-label" title="Load .h/.hpp/.c/.cc/.cpp/.txt files — RTE headers, mock headers, fixtures, sample tests. ALEX extracts test code memory automatically.">Load Project Context Files<input type="file" id="testcode-context-files-upload" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.txt" multiple hidden /></label>
       <label class="btn secondary btn-inline upload-label" title="Load a single sample .cc as style anchor (legacy path)">Load sample .cc<input type="file" id="testcode-cpp-upload-primary" accept=".c,.cc,.cpp,.cxx,.h,.hpp,.hh,.md,.txt" hidden /></label>
     </div>
     ${ctxFiles.length ? `<p class="detail" id="testcode-ctx-files-summary">Loaded (${ctxFiles.length}): ${esc(ctxSummary)}${ctxFiles.length > 3 ? "…" : ""}</p>` : ""}
@@ -10466,10 +10476,11 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
   bindOnChange("#testcode-cpp-upload", handleCppUpload);
 
   // Multi-file project context upload
+  // Multi-file context upload + auto-extract
   bindOnChange("#testcode-context-files-upload", async (ev) => {
     const files = [...(ev.target.files || [])];
     if (!files.length) return;
-    if (statusEl) statusEl.textContent = `Uploading ${files.length} project context file(s)…`;
+    if (statusEl) statusEl.textContent = `Loading ${files.length} project context file(s) and extracting memory…`;
     try {
       const fd = new FormData();
       files.forEach((f) => fd.append("files", f));
@@ -10479,15 +10490,146 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       );
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || "Upload failed");
+
+      // Update state
       tc.contextFiles = data.files || [];
+      if (data.memory_content) {
+        tc.testcodeMemory = data.memory_content;
+        tc.testcodeMemoryDraft = data.memory_content;
+        tc.testcodeMemorySource = "job_override";
+      }
+
+      // Refresh UI so memory editor and source badge update immediately
       refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
-      const kinds = [...new Set((data.files || []).map((f) => f.kind))].join(", ");
-      if (statusEl) statusEl.textContent = `Loaded ${data.uploaded} file(s) [${kinds}].${data.skipped?.length ? ` Skipped: ${data.skipped.join(", ")}.` : ""} Click Extract Style to Memory to update memory.`;
+
+      // Update memory editor content directly (faster than full re-render)
+      const memEl = $("#testcode-memory-editor");
+      if (memEl && data.memory_content) memEl.value = data.memory_content;
+
+      // Show extraction result panel
+      _showExtractionResult(data, statusEl);
+
     } catch (e) {
       if (statusEl) statusEl.textContent = e.message;
     }
     ev.target.value = "";
   });
+
+  function _showExtractionResult(data, statusEl) {
+    const resultEl = $("#testcode-extraction-result");
+    if (!resultEl) return;
+
+    const s = data.extraction_summary || {};
+    const conflictCount = data.conflict_count || 0;
+    const dupCount = data.duplicate_count || 0;
+    const kinds = [...new Set((data.files || []).map((f) => f.kind))].join(", ");
+
+    const summaryLines = [
+      `Files: ${data.uploaded || 0} loaded [${esc(kinds)}]`,
+      s.rte_api_count ? `RTE APIs: ${s.rte_api_count} found` : "",
+      s.mock_api_count ? `Mock APIs: ${s.mock_api_count} found` : "",
+      s.fixture ? `Fixture: ${esc(s.fixture)}` : "",
+      s.output_var_count ? `Output variables: ${s.output_var_count} found` : "",
+      s.test_f_found ? "Representative TEST_F: ✓ extracted" : "",
+      dupCount ? `Duplicates skipped: ${dupCount}` : "",
+    ].filter(Boolean);
+
+    const conflictHtml = conflictCount > 0 ? `
+      <div style="margin-top:0.4rem">
+        <p class="tag warning detail" style="margin:0">⚠ ${conflictCount} conflict(s) — non-conflicting memory was applied. Review conflicts below:</p>
+        ${(data.conflicts || []).slice(0, 5).map((c) => `
+          <div style="background:var(--bg,#f8f8f8);border:1px solid var(--border,#ddd);border-radius:3px;padding:0.3rem;margin-top:0.3rem;font-size:0.82em">
+            <p style="margin:0;color:#c00"><b>Existing:</b> ${esc(c.existing_value || c.existing || "")}</p>
+            <p style="margin:0.1rem 0 0;color:#060"><b>Proposed:</b> ${esc(c.proposed_value || c.proposed || "")}</p>
+            <div style="margin-top:0.2rem;display:flex;gap:0.25rem;flex-wrap:wrap">
+              <button type="button" class="btn secondary btn-inline" style="font-size:0.78em"
+                data-conflict-action="keep" data-conflict-existing="${esc(c.existing_value || c.existing || "")}" data-conflict-proposed="${esc(c.proposed_value || c.proposed || "")}" data-conflict-section="${esc(c.section || "")}">Keep existing</button>
+              <button type="button" class="btn secondary btn-inline" style="font-size:0.78em"
+                data-conflict-action="apply" data-conflict-existing="${esc(c.existing_value || c.existing || "")}" data-conflict-proposed="${esc(c.proposed_value || c.proposed || "")}" data-conflict-section="${esc(c.section || "")}">Apply proposed</button>
+              <button type="button" class="btn secondary btn-inline" style="font-size:0.78em"
+                data-conflict-action="add_alt" data-conflict-existing="${esc(c.existing_value || c.existing || "")}" data-conflict-proposed="${esc(c.proposed_value || c.proposed || "")}" data-conflict-section="${esc(c.section || "")}">Add as alternative</button>
+            </div>
+          </div>`).join("")}
+        ${conflictCount > 5 ? `<p class="detail" style="margin:0.2rem 0 0">…and ${conflictCount - 5} more. Edit memory directly if needed.</p>` : ""}
+        <button type="button" class="btn secondary btn-inline" id="btn-ignore-all-conflicts" style="margin-top:0.3rem;font-size:0.82em">Ignore all conflicts</button>
+      </div>` : "";
+
+    const statusText = conflictCount > 0
+      ? "Memory partially updated — review conflicts below."
+      : "Project context extracted and memory updated.";
+    const statusClass = conflictCount > 0 ? "tag warning" : "tag ok";
+
+    const saveGlobalHtml = data.status === "applied" ? `
+      <div style="margin-top:0.4rem;display:flex;align-items:center;gap:0.5rem">
+        <span class="detail">Use this project memory for future Excel imports:</span>
+        <button type="button" class="btn secondary btn-inline" id="btn-extraction-save-global">Save Memory as Global</button>
+      </div>` : "";
+
+    resultEl.style.display = "block";
+    resultEl.innerHTML = `
+      <div style="background:var(--bg-card,#f9f9f9);border:1px solid var(--border,#ddd);border-radius:4px;padding:0.4rem 0.5rem">
+        <p class="${statusClass} detail" style="margin:0">${esc(statusText)}</p>
+        <ul class="detail" style="margin:0.25rem 0 0;padding-left:1.2rem">
+          ${summaryLines.map((l) => `<li>${esc(l)}</li>`).join("")}
+        </ul>
+        ${conflictHtml}
+        ${saveGlobalHtml}
+      </div>`;
+    if (statusEl) statusEl.textContent = statusText;
+
+    // Bind conflict action buttons
+    resultEl.querySelectorAll("[data-conflict-action]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const action = btn.dataset.conflictAction;
+        const proposed = btn.dataset.conflictProposed;
+        const section = btn.dataset.conflictSection;
+        if (action === "keep") {
+          btn.closest("div[style]").remove();
+          return;
+        }
+        if (action === "apply" || action === "add_alt") {
+          try {
+            const resp = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                rule_type: "reviewer_note",
+                fields: { note: proposed },
+                source_tag: false,
+                force: true,
+              }),
+            });
+            if (resp.content) {
+              tc.testcodeMemory = resp.content;
+              tc.testcodeMemoryDraft = resp.content;
+              const memEl = $("#testcode-memory-editor");
+              if (memEl) memEl.value = resp.content;
+            }
+            btn.closest("div[style]").remove();
+          } catch (_) {}
+        }
+      });
+    });
+
+    // Ignore all conflicts
+    $("#btn-ignore-all-conflicts")?.addEventListener("click", () => {
+      resultEl.querySelectorAll("[data-conflict-action]").forEach((btn) => btn.closest("div[style]")?.remove());
+      resultEl.querySelector(".tag.warning")?.remove();
+    });
+
+    // Save as Global suggestion
+    $("#btn-extraction-save-global")?.addEventListener("click", async () => {
+      try {
+        await api(`/api/review/testcode-memory/save-as-global?job_id=${encodeURIComponent(state.jobId)}`, { method: "POST" });
+        tc.testcodeMemorySource = "global";
+        refreshTestCodePrimaryUi(rows, statusEl, tc.codeStyleSamples);
+        if (statusEl) statusEl.textContent = "Memory saved as Global — new jobs will use this project memory automatically.";
+        $("#btn-extraction-save-global")?.closest("div")?.remove();
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message;
+      }
+    });
+  }
 
   bindTestCodeGenerateActionHandlers(rows, statusEl);
   bindOnChange("#testcode-batch-size", (ev) => {

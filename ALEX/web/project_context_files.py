@@ -320,6 +320,77 @@ def extract_from_kind(kind: str, content: str) -> dict[str, Any]:
     return {}
 
 
+def compute_extraction_summary(file_descs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a quick human-readable summary of what was extracted from context files."""
+    rte_apis: list[str] = []
+    mock_methods: list[str] = []
+    fixture: str = ""
+    output_vars: list[str] = []
+    test_f_found: bool = False
+    entry_points: list[str] = []
+
+    for fd in file_descs:
+        kind = fd.get("kind") or ""
+        ex = fd.get("extraction") or {}
+
+        if kind == "RTE_HEADER":
+            for api in ex.get("apis") or []:
+                sig = api.get("signal") or api.get("api") or ""
+                if sig:
+                    rte_apis.append(sig)
+
+        elif kind in ("MOCK_HEADER",):
+            mock_methods.extend(ex.get("mock_methods") or [])
+            if not mock_methods and ex.get("mock_class"):
+                mock_methods.append(ex["mock_class"])
+
+        elif kind == "MOCK_IMPL":
+            for b in ex.get("bindings") or []:
+                mm = b.get("mock_method") or b.get("real_api") or ""
+                if mm:
+                    mock_methods.append(mm)
+
+        elif kind == "TEST_FIXTURE":
+            if not fixture:
+                fixture = ex.get("fixture_class") or ""
+            output_vars.extend(ex.get("output_vars") or [])
+
+        elif kind == "SAMPLE_TEST":
+            if not fixture:
+                fixtures = ex.get("fixtures") or []
+                if fixtures:
+                    fixture = fixtures[0]
+            if ex.get("representative_test_f"):
+                test_f_found = True
+
+        elif kind == "ADAPTER_HEADER":
+            entry_points.extend([ep.get("fn", "") for ep in (ex.get("entry_points") or []) if ep.get("fn")])
+
+        elif kind == "DEFAULT_BEHAVIOR":
+            for d in ex.get("defaults") or []:
+                api = d.get("api") or ""
+                if api and api not in rte_apis:
+                    rte_apis.append(api)
+
+    # Dedupe
+    rte_apis = list(dict.fromkeys(rte_apis))
+    mock_methods = list(dict.fromkeys(mock_methods))
+    output_vars = list(dict.fromkeys(output_vars))
+    entry_points = list(dict.fromkeys(entry_points))
+
+    return {
+        "rte_api_count": len(rte_apis),
+        "rte_apis_sample": rte_apis[:5],
+        "mock_api_count": len(mock_methods),
+        "mock_apis_sample": mock_methods[:4],
+        "fixture": fixture,
+        "output_var_count": len(output_vars),
+        "output_vars_sample": output_vars[:5],
+        "test_f_found": test_f_found,
+        "entry_points": entry_points[:4],
+    }
+
+
 def process_file(filename: str, content: str) -> dict[str, Any]:
     """Detect kind, extract, return file descriptor."""
     kind = detect_file_kind(filename, content)

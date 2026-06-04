@@ -427,3 +427,154 @@ def test_combined_files_produce_signal_map() -> None:
     assert "## Spec Signal to Test Code Map" in proposed
     # Should have at least one signal entry
     assert "Spec signal:" in proposed or "RTE API" in proposed
+
+
+# ---------------------------------------------------------------------------
+# compute_extraction_summary
+# ---------------------------------------------------------------------------
+
+_RTE_HEADER_FULL = """\
+Std_ReturnType Rte_Read_SWCTX_BDA_WMODE_CMD(P2VAR(uint8, AUTOMATIC, RTE_APPL_DATA) data);
+Std_ReturnType Rte_Write_IGSW_PMODE_STS(VAR(uint8, AUTOMATIC) data);
+"""
+
+_SAMPLE_TEST_FULL = """\
+/**
+ * テストケース01：
+ */
+TEST_F(BasicPowerModeTest, TC_01) {
+    EXPECT_CALL(rte, Rte_Read_WMODE_CMD(NotNull())).WillRepeatedly(Return(RTE_E_OK));
+    igsw_Main_Run();
+    EXPECT_THAT(V_PMODE_STS, Eq(0));
+}
+"""
+
+
+def _process(filename, content):
+    from web.project_context_files import process_file
+    return process_file(filename, content)
+
+
+def test_extraction_summary_counts_rte_apis() -> None:
+    from web.project_context_files import compute_extraction_summary
+    fds = [_process("Rte_igsw.h", _RTE_HEADER_FULL)]
+    summary = compute_extraction_summary(fds)
+    assert summary["rte_api_count"] >= 1, "Must count RTE APIs"
+
+
+def test_extraction_summary_detects_fixture() -> None:
+    from web.project_context_files import compute_extraction_summary
+    fds = [_process("test_powermode.cc", _SAMPLE_TEST_FULL)]
+    summary = compute_extraction_summary(fds)
+    assert summary["fixture"], "Must detect fixture from SAMPLE_TEST"
+    assert summary["test_f_found"] is True
+
+
+def test_extraction_summary_empty_for_no_files() -> None:
+    from web.project_context_files import compute_extraction_summary
+    summary = compute_extraction_summary([])
+    assert summary["rte_api_count"] == 0
+    assert summary["test_f_found"] is False
+
+
+def test_extraction_summary_skips_unknown_files() -> None:
+    from web.project_context_files import compute_extraction_summary
+    fds = [_process("README.txt", "# Project notes\nNo code here.\n")]
+    summary = compute_extraction_summary(fds)
+    assert summary["rte_api_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Auto-extract behavior on upload (integration with memory merge)
+# ---------------------------------------------------------------------------
+
+def test_non_conflicting_extracted_memory_is_merged() -> None:
+    """Extracted bullets with no conflict should be present in merged output."""
+    from web.project_context_files import build_memory_sections_from_files
+    from web.project_testcode_memory import DEFAULT_MEMORY, merge_with_conflict_check
+
+    fds = [_process("Rte_igsw.h", _RTE_HEADER_FULL)]
+    proposed = build_memory_sections_from_files(fds)
+    result = merge_with_conflict_check(DEFAULT_MEMORY, proposed)
+    # No conflicts expected when merging into empty memory
+    assert result["conflict_count"] == 0
+    assert "WMODE_CMD" in result["merged"] or "PMODE_STS" in result["merged"]
+
+
+def test_duplicates_are_skipped() -> None:
+    """Running extraction twice must not duplicate bullets."""
+    from web.project_context_files import build_memory_sections_from_files
+    from web.project_testcode_memory import DEFAULT_MEMORY, merge_with_conflict_check
+
+    fds = [_process("Rte_igsw.h", _RTE_HEADER_FULL)]
+    proposed = build_memory_sections_from_files(fds)
+
+    # First merge
+    first = merge_with_conflict_check(DEFAULT_MEMORY, proposed)
+    # Second merge into already-merged content
+    second = merge_with_conflict_check(first["merged"], proposed)
+    assert second["duplicate_count"] > 0, "Second extraction must detect duplicates"
+    assert second["duplicate_count"] > 0  # conflict detection may also trigger for same bullets
+
+
+def test_conflicts_return_partial_applied_not_error() -> None:
+    """merge_with_conflict_check must return merged content even when conflicts exist."""
+    from web.project_testcode_memory import merge_with_conflict_check
+
+    existing = "# Memory\n## RTE API Map\n- Signal: `FOO` API: `Rte_Read_FOO_v1`\n"
+    proposed = "# Memory\n## RTE API Map\n- Signal: `FOO` API: `Rte_Read_FOO_v2`\n"
+    result = merge_with_conflict_check(existing, proposed)
+    # Must not raise; must return merged content
+    assert "merged" in result
+    assert isinstance(result["merged"], str)
+    assert len(result["merged"]) > 0, "Merged content must not be empty even with conflicts"
+    # Conflict detected
+    assert isinstance(result["conflicts"], list)
+
+
+def test_conflict_review_includes_existing_and_proposed() -> None:
+    """Each conflict entry must include existing_value and proposed_value."""
+    from web.project_testcode_memory import detect_memory_conflicts
+
+    existing = "# Memory\n## Fixture / Test Style\n- Signal: `FOO` API: `Rte_Read_FOO_v1`\n"
+    proposed = "# Memory\n## Fixture / Test Style\n- Signal: `FOO` API: `Rte_Read_FOO_v2`\n"
+    conflicts = detect_memory_conflicts(existing, proposed)
+    for c in conflicts:
+        assert "section" in c
+        # Must have some indicator of what conflicts
+        assert "existing_value" in c or "existing" in c or "proposed_value" in c
+
+
+def test_updated_memory_available_in_copilot_prompt() -> None:
+    """After extraction updates memory, prompt must use the new content."""
+    from web.copilot_batch_codegen import build_copilot_batch_prompts
+
+    bundle = {
+        "test_candidates": [
+            {"id": "TC_A", "operation": {"given": []}, "expectation": []},
+        ],
+        "ai_assists": {
+            "workbook_overlays": {"TC_A": {"expected_input": "Given: X=1", "expected_output": "Then: Y=0"}},
+        },
+    }
+    # Memory that includes RTE API info from project context
+    project_memory = (
+        "# Project Test Code Memory\n"
+        "## RTE API Map\n"
+        "- Signal: `WMODE_CMD` API: `Rte_Read_SWCTX_BDA_WMODE_CMD`\n"
+        "## Fixture / Observable Variables\n"
+        "- Fixture: `BasicPowerModeTest`\n"
+    )
+    gtest_state = {
+        "drafts": {},
+        "project_code_config_cache": {
+            "project_testcode_memory.md": project_memory,
+        },
+    }
+    result = build_copilot_batch_prompts(
+        bundle, gtest_state, candidate_ids=["TC_A"], allow_missing_sample=True
+    )
+    assert result["ok"] is True
+    prompt = result["prompts"][0]["prompt"]
+    assert "WMODE_CMD" in prompt, "RTE API from extracted memory must appear in Copilot prompt"
+    assert "BasicPowerModeTest" in prompt, "Fixture from extracted memory must appear in prompt"

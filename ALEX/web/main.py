@@ -3147,11 +3147,27 @@ async def api_upload_project_context_files(
     job_id: str,
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
-    from web.project_context_files import is_accepted_extension, process_file
+    """Upload project context files and automatically extract + apply memory.
+
+    Returns HTTP 200 always. If conflicts are detected, status is
+    'partial_applied_with_conflicts'; non-conflicting bullets are still applied.
+    """
+    from web.project_context_files import (
+        build_memory_sections_from_files,
+        compute_extraction_summary,
+        is_accepted_extension,
+        process_file,
+    )
+    from web.project_testcode_memory import (
+        load_memory_for_job,
+        merge_with_conflict_check,
+        save_memory_for_job,
+    )
 
     gtest_state = _load_job_gtest_state(job_id)
     results: list[dict[str, Any]] = []
     skipped: list[str] = []
+
     for file in files:
         filename = file.filename or "unknown"
         if not is_accepted_extension(filename):
@@ -3163,20 +3179,55 @@ async def api_upload_project_context_files(
         except UnicodeDecodeError:
             text = raw.decode("utf-8", errors="replace")
         desc = process_file(filename, text)
-        desc["content"] = text[:8000]  # store first 8K
+        desc["content"] = text[:8000]
         results.append(desc)
 
-    # Persist in gtest_state for later use (exclude full content for storage efficiency)
+    # Persist file descriptors + content
     stored = gtest_state.setdefault("project_context_files", [])
     for desc in results:
-        # Replace existing file with same name
         stored = [f for f in stored if f.get("filename") != desc["filename"]]
         stored.append({k: v for k, v in desc.items() if k != "content"})
-    # Store content separately keyed by filename
     content_store = gtest_state.setdefault("project_context_content", {})
     for desc in results:
         content_store[desc["filename"]] = desc.get("content", "")
     gtest_state["project_context_files"] = stored
+
+    # Auto-extract + apply memory from all stored files
+    extraction_result: dict[str, Any] = {
+        "applied_count": 0, "duplicate_count": 0, "conflict_count": 0,
+        "conflicts": [], "status": "no_files",
+        "extraction_summary": {}, "memory_content": "",
+    }
+    all_descs = []
+    for fd in stored:
+        full_fd = dict(fd)
+        full_fd["content"] = content_store.get(fd["filename"], "")
+        all_descs.append(full_fd)
+
+    if all_descs:
+        proposed = build_memory_sections_from_files(all_descs)
+        existing = load_memory_for_job(_job_output_dir(job_id))
+        merge_result = merge_with_conflict_check(existing, proposed)
+        merged_content = merge_result["merged"]
+
+        # Save merged (non-conflicting) memory immediately
+        save_memory_for_job(_job_output_dir(job_id), merged_content)
+        gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = merged_content
+
+        extraction_result = {
+            "applied_count": merge_result.get("conflict_count", 0) == 0
+                and len([l for l in merged_content.splitlines() if l.strip().startswith("-")]) or 0,
+            "duplicate_count": merge_result["duplicate_count"],
+            "conflict_count": merge_result["conflict_count"],
+            "conflicts": merge_result["conflicts"],
+            "status": (
+                "partial_applied_with_conflicts" if merge_result["conflict_count"] > 0
+                else "applied"
+            ),
+            "extraction_summary": compute_extraction_summary(all_descs),
+            "memory_content": merged_content,
+        }
+
     _persist_job_gtest_state(job_id, gtest_state)
     return {
         "ok": True,
@@ -3184,6 +3235,7 @@ async def api_upload_project_context_files(
         "uploaded": len(results),
         "skipped": skipped,
         "files": [{k: v for k, v in d.items() if k != "content"} for d in results],
+        **extraction_result,
     }
 
 
@@ -3196,14 +3248,25 @@ def api_get_project_context_files(job_id: str) -> dict[str, Any]:
 
 @app.post("/api/review/project-context-files/extract-memory")
 def api_extract_memory_from_context_files(job_id: str) -> dict[str, Any]:
-    from web.project_context_files import build_memory_sections_from_files
-    from web.project_testcode_memory import load_memory_for_job, merge_with_conflict_check
+    """Manual extract-and-apply endpoint (kept for Advanced/Fallback use).
+
+    Always returns HTTP 200. Conflicts are non-blocking — returns
+    status: 'partial_applied_with_conflicts' with non-conflicting bullets applied.
+    """
+    from web.project_context_files import (
+        build_memory_sections_from_files,
+        compute_extraction_summary,
+    )
+    from web.project_testcode_memory import (
+        load_memory_for_job,
+        merge_with_conflict_check,
+        save_memory_for_job,
+    )
 
     gtest_state = _load_job_gtest_state(job_id)
     file_descs = gtest_state.get("project_context_files") or []
     content_store = gtest_state.get("project_context_content") or {}
 
-    # Rebuild full file descriptors with content
     full_descs = []
     for fd in file_descs:
         full_fd = dict(fd)
@@ -3216,14 +3279,24 @@ def api_extract_memory_from_context_files(job_id: str) -> dict[str, Any]:
     proposed = build_memory_sections_from_files(full_descs)
     existing = load_memory_for_job(_job_output_dir(job_id))
     result = merge_with_conflict_check(existing, proposed)
+    merged_content = result["merged"]
+
+    # Always save the merged (non-conflicting) result
+    save_memory_for_job(_job_output_dir(job_id), merged_content)
+    gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = merged_content
+    _persist_job_gtest_state(job_id, gtest_state)
+
     return {
         "ok": True,
         "job_id": job_id,
         "proposed": proposed,
-        "merged": result["merged"],
+        "merged": merged_content,
+        "memory_content": merged_content,
         "conflicts": result["conflicts"],
         "conflict_count": result["conflict_count"],
         "duplicate_count": result["duplicate_count"],
+        "status": "partial_applied_with_conflicts" if result["conflict_count"] > 0 else "applied",
+        "extraction_summary": compute_extraction_summary(full_descs),
     }
 
 
