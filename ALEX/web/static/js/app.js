@@ -8849,7 +8849,9 @@ function renderTestCodeProgressPanel(rows) {
       ${retryNrCount > 0 ? `<button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-needs-review" title="Retry all NEEDS_REVIEW and ERROR testcases">Retry NEEDS_REVIEW / ERROR (${retryNrCount})</button>` : ""}
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-failed" title="Retry testcases from failed API chunks">${failedChunks > 0 ? `Retry Failed Chunks (${failedChunks})` : "Retry Failed Chunk"}</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-failed-chunk-prompt">Copy Failed Prompt</button>
+      <button type="button" class="btn secondary btn-inline" id="btn-testcode-api-debug" title="Debug one testcase API call end-to-end and show full trace">Debug API Call</button>
     </div>
+    <div id="testcode-api-debug-panel" style="display:none;margin-top:0.5rem;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:0.5rem;font-size:0.8em"></div>
   </section>`;
 }
 
@@ -11235,6 +11237,56 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       await navigator.clipboard.writeText(prompt);
       if (statusEl) statusEl.textContent = `Copied failed API chunk prompt (${failedIds.length} TC).`;
     } catch (e) {
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  // Debug API Call — single TC, minimal prompt, full trace
+  bindClick("#btn-testcode-api-debug", async () => {
+    const panel = $("#testcode-api-debug-panel");
+    const cid = tc.selectedCandidateId || "";
+    if (panel) { panel.style.display = "block"; panel.textContent = `Running API debug for ${cid || "first TC"}…`; }
+    if (statusEl) statusEl.textContent = "Running API debug call (may take up to 90s)…";
+    try {
+      const data = await api(
+        `/api/review/testcode-api-debug?job_id=${encodeURIComponent(state.jobId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidate_id: cid }),
+        }
+      );
+      const rc = data.root_cause || "UNKNOWN";
+      const rows = [
+        ["Root cause", rc],
+        ["Candidate ID", data.candidate_id || "—"],
+        ["Prompt length", `${data.prompt_length || 0} chars`],
+        ["Timeout setting", `${data.timeout_s || "?"}s`],
+        ["Elapsed", `${data.elapsed_s || "?"}s`],
+        ["API ok", data.api_ok ? "✓ YES" : "✗ NO"],
+        ["Error category", data.error_category || "—"],
+        ["Error", (data.error_message || "—").slice(0, 120)],
+        ["Response length", `${data.response_length || 0} chars`],
+        ["Code status", data.code_status || "—"],
+        ["Parsed blocks", data.parse_result?.parsed_count ?? "—"],
+        ["Missing context", data.parse_result?.missing_context_count ?? "—"],
+      ];
+      const tableHtml = rows.map(([k, v]) =>
+        `<tr><td style="color:#666;padding:0.1rem 0.5rem 0.1rem 0;white-space:nowrap">${esc(k)}</td>`
+        + `<td style="padding:0.1rem 0">${esc(String(v))}</td></tr>`
+      ).join("");
+      const promptPreview = data.prompt_preview_head
+        ? `<details style="margin-top:0.3rem"><summary>Prompt head (${data.prompt_length} chars)</summary><pre style="white-space:pre-wrap;max-height:10em;overflow:auto;font-size:0.75em">${esc(data.prompt_preview_head || "")}</pre></details>`
+        : "";
+      const responsePreview = data.response_preview
+        ? `<details style="margin-top:0.3rem"><summary>Response preview</summary><pre style="white-space:pre-wrap;max-height:10em;overflow:auto;font-size:0.75em">${esc(data.response_preview || "")}</pre></details>`
+        : "";
+      if (panel) {
+        panel.innerHTML = `<table style="width:100%;border-collapse:collapse"><tbody>${tableHtml}</tbody></table>${promptPreview}${responsePreview}`;
+      }
+      if (statusEl) statusEl.textContent = `API debug: ${rc} (${data.elapsed_s}s)`;
+    } catch (e) {
+      if (panel) panel.textContent = `Debug error: ${e.message}`;
       if (statusEl) statusEl.textContent = e.message;
     }
   });

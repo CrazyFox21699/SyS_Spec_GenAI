@@ -126,6 +126,24 @@ def _timezone(cfg: dict[str, Any]) -> str:
     return str(m.get("timezone") or "UTC")
 
 
+def _chat_timeout(cfg: dict[str, Any]) -> int:
+    """Return the Copilot chat request timeout in seconds.
+
+    Default 90 s — Copilot code-generation requests regularly take 45-90+ seconds.
+    Configurable via assist.m365.chat_timeout in config.yaml.
+    """
+    try:
+        assist = cfg.get("assist") if isinstance(cfg.get("assist"), dict) else {}
+        m = assist.get("m365") if isinstance(assist.get("m365"), dict) else {}
+        v = m.get("chat_timeout")
+        if v is not None:
+            n = int(v)
+            return max(30, min(n, 300))   # clamp 30-300 s
+    except (TypeError, ValueError):
+        pass
+    return 90   # was 35 — increased; 35 s is too short for code generation
+
+
 def _create_conversation(access_token: str) -> str:
     r = requests_post(
         f"{GRAPH}/copilot/conversations",
@@ -163,7 +181,14 @@ def _extract_assistant_text(response_json: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str) -> str:
+def _chat(
+    access_token: str,
+    conversation_id: str,
+    prompt: str,
+    *,
+    timezone: str,
+    timeout: int = 90,
+) -> str:
     r = requests_post(
         f"{GRAPH}/copilot/conversations/{conversation_id}/chat",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
@@ -171,7 +196,7 @@ def _chat(access_token: str, conversation_id: str, prompt: str, *, timezone: str
             "message": {"text": prompt[:28000]},
             "locationHint": {"timeZone": timezone},
         },
-        timeout=35,
+        timeout=timeout,
     )
     if r.status_code != 200:
         body = r.text or ""
@@ -216,7 +241,7 @@ def _run_chat_once(
     else:
         conv_id = _create_conversation(token)
         created = True
-    reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg))
+    reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg), timeout=_chat_timeout(cfg))
     if persist_conversation and conv_id:
         m365_auth.set_copilot_conversation_id(conv_id, user_id=uid)
     return {

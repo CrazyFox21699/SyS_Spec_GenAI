@@ -3994,6 +3994,188 @@ def api_reload_global_instruction(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "ok": True, "content": global_content, "instruction_source": source}
 
 
+@app.post("/api/review/testcode-api-debug")
+def api_testcode_api_debug(job_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Debug single-TC API generation end-to-end with full trace.
+
+    Sends the smallest possible prompt for one testcase and returns:
+    - auth/health status
+    - prompt text (full)
+    - request timing
+    - raw response summary
+    - parse result
+    - final code_status
+    """
+    import time
+    from web.m365_copilot import _chat_timeout, probe_copilot_api, run_copilot_chat_result
+    from web.copilot_batch_codegen import (
+        _extract_generation_critical_map,
+        build_style_example_block,
+        pick_representative_style_example,
+        _style_example_score,
+        collect_copilot_project_context,
+        parse_copilot_batch_response,
+        _clip,
+    )
+    from web.gtest_workspace import _workbench_row_for_candidate
+
+    cfg = _cfg()
+    uid = _m365_effective_user_id(cfg)
+
+    # --- Auth health check ---
+    m365_st = m365_auth.m365_status(cfg, user_id=uid)
+    if not m365_st.get("api_ready"):
+        return {
+            "ok": False,
+            "root_cause": "API_AUTH_PROBLEM",
+            "auth_status": m365_st,
+            "detail": "M365 API not ready. Sign in and authorize Copilot API first.",
+        }
+    if m365_st.get("copilot_chat_entitled") is False:
+        return {
+            "ok": False,
+            "root_cause": "API_AUTH_PROBLEM",
+            "auth_status": m365_st,
+            "detail": "M365 Copilot not entitled for this account.",
+        }
+
+    candidate_id = str((body or {}).get("candidate_id") or "")
+    language = str((body or {}).get("language") or "EN")
+
+    bundle = _bundle_for_job(job_id)
+    gtest_state = _load_job_gtest_state(job_id)
+    _sync_project_code_config_cache(job_id, gtest_state)
+
+    # Pick first NEEDS_REVIEW or first TC if no explicit candidate_id
+    if not candidate_id:
+        drafts = gtest_state.get("drafts") or {}
+        for cid, d in drafts.items():
+            if str((d or {}).get("code_status") or "").upper() in {"NEEDS_REVIEW", "ERROR", ""}:
+                candidate_id = cid
+                break
+    if not candidate_id:
+        rows = list((bundle.get("test_candidates") or [])[:1])
+        if rows:
+            candidate_id = str(rows[0].get("id") or rows[0].get("candidate_id") or "")
+    if not candidate_id:
+        return {"ok": False, "root_cause": "NO_TESTCASE", "detail": "No testcase found in job."}
+
+    row = _workbench_row_for_candidate(bundle, candidate_id, language=language) or {"candidate_id": candidate_id}
+    expected_input = str(row.get("expected_input") or "")
+    expected_output = str(row.get("expected_output") or "")
+
+    # --- Build minimal debug prompt ---
+    ctx = collect_copilot_project_context(bundle, gtest_state, language=language, slim_prompt=True)
+    cache = gtest_state.get("project_code_config_cache") or {}
+    memory_content = str(cache.get("project_testcode_memory.md") or "")
+    critical_map = _extract_generation_critical_map(memory_content, char_limit=600)
+
+    style_snippet = str(ctx.get("style_example_snippet") or "").strip()
+    style_label = str(ctx.get("style_example_label") or "")
+    style_score = _style_example_score(style_snippet) if style_snippet else 0
+    style_block = build_style_example_block(_clip(style_snippet, 600), label=style_label) if style_score > 1 else ""
+
+    prompt = (
+        f"TASK:\nGenerate one Google Test C++ TEST_F for testcase_id {candidate_id}.\n\n"
+        + (f"STYLE:\n{style_block}\n" if style_block else "")
+        + (f"MEMORY (fixture/API/assertion map):\n{critical_map}\n\n" if critical_map else "")
+        + f"TESTCASE:\ntestcase_id: {candidate_id}\n"
+        + f"Given/When (expected_input):\n{_clip(expected_input, 600)}\n"
+        + f"Then (expected_output):\n{_clip(expected_output, 600)}\n\n"
+        + "OUTPUT:\nReturn only:\n"
+        "[TESTCASE_CODE]\n"
+        f"testcase_id: {candidate_id}\n"
+        "```cpp\n<full TEST_F code>\n```\n\n"
+        "[MISSING_CONTEXT]\n"
+        f"testcase_id: {candidate_id}\n"
+        "missing_type: INPUT_API|OUTPUT_ASSERTION|FIXTURE|TIMING\n"
+        "signal_or_item: <name>\nreason: <brief>\n"
+        "(use MISSING_CONTEXT when required API/mapping is not available — do NOT invent)\n"
+    )
+
+    prompt_len = len(prompt)
+    timeout_s = _chat_timeout(cfg)
+
+    # --- Fire API ---
+    t0 = time.perf_counter()
+    result = run_copilot_chat_result(
+        cfg,
+        prompt,
+        user_id=uid,
+        reuse_session_conversation=False,
+        persist_conversation=False,
+    )
+    elapsed_s = round(time.perf_counter() - t0, 1)
+
+    ok = result.get("ok", False)
+    reply = str(result.get("reply") or result.get("content") or "")
+    error_cat = str(result.get("error_category") or "")
+    error_msg = str(result.get("error") or "")
+
+    # Classify root cause
+    if not ok:
+        if error_cat == "m365_graph_timeout":
+            root_cause = "API_TIMEOUT_PROBLEM"
+        elif error_cat in ("m365_not_ready", "m365_auth"):
+            root_cause = "API_AUTH_PROBLEM"
+        elif "429" in error_msg or "rate" in error_msg.lower():
+            root_cause = "API_RATE_LIMIT_429"
+        elif "payload" in error_msg.lower() or "too large" in error_msg.lower():
+            root_cause = "API_PAYLOAD_TOO_LARGE"
+        else:
+            root_cause = "API_UNKNOWN_FAILURE"
+    else:
+        if not reply.strip():
+            root_cause = "API_EMPTY_RESPONSE"
+        else:
+            root_cause = None  # may be SUCCESS or PARSE_PROBLEM
+
+    # Parse response
+    parse_result: dict[str, Any] = {}
+    code_status = "ERROR"
+    if reply:
+        parsed = parse_copilot_batch_response(reply)
+        parse_result = {
+            "parsed_count": parsed.get("parsed_count", 0),
+            "unresolved_count": len(parsed.get("unresolved_by_id") or {}),
+            "missing_context_count": len(parsed.get("missing_context_by_id") or {}),
+            "has_code_block": bool(parsed.get("items")),
+        }
+        if parsed.get("items"):
+            code_status = "NEEDS_REVIEW_OR_SAVED"
+            root_cause = root_cause or "SUCCESS"
+        elif parsed.get("missing_context_by_id"):
+            code_status = "MISSING_CONTEXT"
+            root_cause = root_cause or "PROMPT_REFUSAL_OR_MISSING_CONTEXT"
+        elif parsed.get("unresolved_by_id"):
+            code_status = "UNRESOLVED"
+            root_cause = root_cause or "PROMPT_REFUSAL_OR_MISSING_CONTEXT"
+        else:
+            root_cause = root_cause or "API_RESPONSE_PARSE_PROBLEM"
+
+    return {
+        "ok": ok,
+        "root_cause": root_cause or ("SUCCESS" if ok and code_status == "NEEDS_REVIEW_OR_SAVED" else "UNKNOWN"),
+        "candidate_id": candidate_id,
+        "prompt_length": prompt_len,
+        "prompt_preview_head": prompt[:800],
+        "prompt_preview_tail": prompt[-400:],
+        "timeout_s": timeout_s,
+        "elapsed_s": elapsed_s,
+        "api_ok": ok,
+        "error_category": error_cat,
+        "error_message": error_msg[:300],
+        "response_length": len(reply),
+        "response_preview": reply[:600],
+        "parse_result": parse_result,
+        "code_status": code_status,
+        "auth_status": {
+            "api_ready": m365_st.get("api_ready"),
+            "copilot_entitled": m365_st.get("copilot_chat_entitled"),
+        },
+    }
+
+
 @app.get("/api/review/global-config-diagnostics")
 def api_global_config_diagnostics(job_id: str | None = None) -> dict[str, Any]:
     """Return global and job config file status for diagnostics panel."""
