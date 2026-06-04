@@ -227,7 +227,8 @@ def test_style_example_appears_before_testcase_rows() -> None:
     """The style example must appear before the testcase rows section."""
     prompt = _make_prompt_with_japanese_sample()
     style_pos = prompt.find("STYLE EXAMPLE")
-    rows_pos = prompt.find("Testcase rows for this API chunk")
+    # Header changed from "Testcase rows for this API chunk" to "TESTCASES (N)"
+    rows_pos = max(prompt.find("Testcase rows for"), prompt.find("TESTCASES ("))
     assert style_pos >= 0, "STYLE EXAMPLE must be in prompt"
     assert rows_pos >= 0, "Testcase rows section must be in prompt"
     assert style_pos < rows_pos, "Style example must appear before testcase rows"

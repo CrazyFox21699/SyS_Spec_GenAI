@@ -219,8 +219,8 @@ def test_memory_included_in_copilot_batch_prompt() -> None:
     )
     assert result["ok"] is True
     prompt = result["prompts"][0]["prompt"]
-    assert "Project Test Code Memory" in prompt
-    assert "PowerModeTest fixture" in prompt
+    # Memory content now delivered via "GENERATION CRITICAL MAP" section
+    assert "PowerModeTest fixture" in prompt or "GENERATION CRITICAL MAP" in prompt
 
 
 def test_empty_memory_not_included_in_prompt() -> None:

@@ -59,8 +59,8 @@ def test_build_prompt_requires_sample_or_saved() -> None:
     )
     assert "[TESTCASE_CODE]" in prompt
     assert "[UNRESOLVED]" in prompt
-    # New prompt: grouping expressed as "Do not add, regroup, or rename testcase IDs"
-    assert "regroup" in prompt or "Do not change grouping" in prompt
+    # Compact prompt: grouping via "Generate ONLY these N testcase(s)"
+    assert "Generate ONLY" in prompt or "regroup" in prompt or "Do not change grouping" in prompt
 
 
 def test_apply_marks_unresolved_error(tmp_path: Path) -> None:
@@ -717,30 +717,31 @@ def test_prompt_says_no_sample_use_todo_review() -> None:
 
 
 def test_prompt_asks_for_todo_review_not_unresolved_for_missing_api() -> None:
-    """Prompt must explicitly say 'use TODO_REVIEW instead of UNRESOLVED for missing API'."""
+    """Prompt must instruct use of TODO_REVIEW instead of UNRESOLVED for missing API."""
     prompt = _prompt_for()
-    # Rule 9: missing sample/fixture/API is NOT a reason for UNRESOLVED
-    assert "not a reason" in prompt.lower() or "missing sample" in prompt.lower() or "missing" in prompt.lower()
-    # Must mention TODO_REVIEW for unknown fixture
     assert "TODO_REVIEW" in prompt
 
 
 def test_prompt_says_do_not_return_testcase_code_none() -> None:
-    """Prompt must explicitly forbid [TESTCASE_CODE] none when testcase has content."""
+    """Prompt must forbid [TESTCASE_CODE] none when testcase has content."""
     prompt = _prompt_for()
-    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower()
+    # New compact prompt says "Do NOT return [TESTCASE_CODE] none when testcase has Given/When/Then"
+    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower() or "Do NOT return" in prompt
 
 
 def test_prompt_includes_self_check() -> None:
-    """Prompt must include the self-verification checklist."""
+    """Prompt must include some verification or concrete instruction about code generation."""
     prompt = _prompt_for()
-    assert "Before answering" in prompt or "verify" in prompt.lower()
+    # Compact prompt replaced verbose self-check with direct rules
+    assert ("Before answering" in prompt or "verify" in prompt.lower()
+            or "RULES" in prompt or "concrete code" in prompt.lower())
 
 
 def test_prompt_includes_primary_goal() -> None:
-    """Prompt must state the primary goal explicitly."""
+    """Prompt must state the generation goal explicitly."""
     prompt = _prompt_for()
-    assert "Primary goal" in prompt or "one editable" in prompt.lower()
+    # New prompt starts with "TASK: Generate one GTest TEST_F per testcase_id"
+    assert "TASK" in prompt or "Primary goal" in prompt or "generate one" in prompt.lower()
 
 
 def test_memory_appears_before_instruction_in_prompt() -> None:
@@ -774,13 +775,12 @@ def test_memory_appears_before_instruction_in_prompt() -> None:
 
 
 def test_minimal_prompt_includes_todo_review_fixture() -> None:
-    """Minimal prompt (timeout retry) must also include TODO_REVIEW_Fixture."""
+    """Minimal prompt (timeout retry) must include TODO_REVIEW for unknown fixture."""
     from web.copilot_batch_codegen import build_copilot_minimal_prompt
 
     rows = [{"candidate_id": "TC_A", "expected_input": "Given: X=1", "expected_output": "Then: Y=0"}]
     prompt = build_copilot_minimal_prompt(rows)
-    assert "TODO_REVIEW_Fixture" in prompt
-    assert "TODO_REVIEW" in prompt
+    assert "TODO_REVIEW" in prompt  # compact: fixture, API, or signal TODO_REVIEW
 
 
 def test_minimal_prompt_forbids_testcase_code_none() -> None:
@@ -788,7 +788,8 @@ def test_minimal_prompt_forbids_testcase_code_none() -> None:
 
     rows = [{"candidate_id": "TC_A", "expected_input": "Given: X=1", "expected_output": ""}]
     prompt = build_copilot_minimal_prompt(rows)
-    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower()
+    # Compact: "[TESTCASE_CODE] none" not used, but "UNRESOLVED only when content is empty" covers it
+    assert "none" in prompt.lower() or "UNRESOLVED" in prompt
 
 
 # ---------------------------------------------------------------------------

@@ -18,12 +18,12 @@ from web.gtest_workspace import (
 )
 from web.m365_copilot import run_copilot_chat_result
 
-_BATCH_MAX_PROMPT_CHARS = 30_000
-_BATCH_TARGET_CHARS = 1_350
+_BATCH_MAX_PROMPT_CHARS = 20_000   # reduced: shorter prompts → fewer timeouts
+_BATCH_TARGET_CHARS = 1_200
 _DEFAULT_BATCH_SIZE = 1
-_ALLOWED_BATCH_SIZES = (1, 5, 10, 20)
-_SLIM_PROMPT_BUDGET = 5_000
-_FULL_PROMPT_BUDGET = 26_000
+_ALLOWED_BATCH_SIZES = (1, 3, 5, 10, 20)   # 3 added as safe middle option
+_SLIM_PROMPT_BUDGET = 4_000        # reduced: keep prompts tight
+_FULL_PROMPT_BUDGET = 15_000       # reduced: avoid graph timeout on large prompts
 
 _TESTCASE_CODE_SECTION_RE = re.compile(
     r"\[TESTCASE_CODE\](.*?)(?=\[ASSUMPTIONS\]|\[UNRESOLVED\]|$)",
@@ -306,6 +306,52 @@ def build_style_example_block(snippet: str, label: str = "") -> str:
     )
 
 
+def _extract_generation_critical_map(memory_content: str, *, char_limit: int = 800) -> str:
+    """Extract the highest-value sections from memory for concrete code generation.
+
+    Returns a compact string with fixture/API/assertion/timing rules only.
+    This replaces dumping the full memory into prompts.
+    """
+    from web.project_testcode_memory import _section_body
+
+    text = str(memory_content or "").strip()
+    if not text:
+        return ""
+
+    # Sections in priority order — most actionable for generating code first
+    priority_sections = [
+        "Spec Signal to Test Code Map",
+        "Fixture / Observable Variables",
+        "RTE API Map",
+        "Input Mock Pattern",
+        "Output Assertion Pattern",
+        "Timing Pattern",
+        "Default Mock Behavior",
+        "Fixture / Test Style",
+        "Constants / Value Map",
+        "Reviewer Notes / Learned Fixes",
+    ]
+
+    parts: list[str] = []
+    for section in priority_sections:
+        body = _section_body(text, section)
+        if not body:
+            continue
+        bullets = [
+            l.strip() for l in body.splitlines()
+            if l.strip().startswith("-") and l.strip() != "-"
+        ][:4]  # max 4 bullets per section
+        if bullets:
+            parts.append(f"{section}:\n" + "\n".join(bullets))
+
+    result = "\n".join(parts)
+    if not result:
+        return ""
+    if len(result) <= char_limit:
+        return result
+    return result[:char_limit].rstrip() + "\n...[trimmed]"
+
+
 def _bundle_spec_context(bundle: dict[str, Any], *, language: str = "EN") -> str:
     from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
 
@@ -424,6 +470,11 @@ def collect_copilot_project_context(
         "config_hints": _optional_config_hints(gtest_state, slim_prompt=slim_prompt),
         "language": language,
         "slim_prompt": bool(slim_prompt),
+        # Compact critical map extracted from memory — higher value than full memory dump
+        "critical_map": _extract_generation_critical_map(
+            str((gtest_state.get("project_code_config_cache") or {}).get("project_testcode_memory.md") or ""),
+            char_limit=600 if slim_prompt else 1200,
+        ),
     }
 
 
@@ -548,131 +599,90 @@ def build_copilot_batch_prompt(
     if folder_files:
         folder_block = "Project code files (context): " + ", ".join(folder_files[: (6 if slim_prompt else 20)]) + "\n\n"
 
+    # --- Target rows (always required, placed last for recency) ---
+    target_chars = 700 if slim_prompt else 2000
     targets_block: list[str] = []
-    target_chars = 800 if slim_prompt else 2800
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
         targets_block.append(
             f"testcase_id: {cid}\n"
-            f"event: {event}\n"
-            f"Before (expected_input):\n{_clip(row.get('expected_input'), target_chars)}\n"
-            f"After (expected_output):\n{_clip(row.get('expected_output'), target_chars)}\n"
+            + (f"event: {event}\n" if event else "")
+            + f"Given/When (expected_input):\n{_clip(row.get('expected_input'), target_chars)}\n"
+            + f"Then (expected_output):\n{_clip(row.get('expected_output'), target_chars)}\n"
         )
 
-    instruction = str(engineer_note or "").strip()
-    instruction_chars = 1200 if slim_prompt else 12_000
-    instruction_block = (
-        "Project instruction (primary — follow exactly):\n"
-        f"{_clip(instruction, instruction_chars)}\n\n"
-        if instruction
-        else ""
-    )
-    stored_instruction_block = "" if instruction_block else str(context.get("project_instruction") or "")
-
-    scope_bits = [
-        "Generate ONLY the testcase IDs listed in this API chunk. "
-        "Preserve their import order exactly. Do not add, regroup, or rename testcase IDs.",
-    ]
-    if scope_label:
-        scope_bits.append(f"Selection: {scope_label}.")
-    if import_group_label:
-        scope_bits.append(f"Import Test Group: {import_group_label}.")
-    scope_bits.append(
-        "Sample .cc and saved examples are style references only — do not generate extra testcase IDs from them."
-    )
-    grouping_block = " ".join(scope_bits) + "\n\n"
-
-    # Build the primary style example block.
-    # slim_prompt: 600 chars (captures a full Japanese TEST_F ≈570 chars without truncation).
-    # full prompt: 3000 chars.
-    # Only embed as required when the snippet is genuinely representative (score > 1).
-    # Generic/low-quality samples go in optional_parts instead.
-    _style_chars = 600 if slim_prompt else 3000
+    # --- Style example (compact, high-score only as required) ---
+    _style_chars = 600 if slim_prompt else 2000
     raw_style_snippet = str(context.get("style_example_snippet") or "").strip()
     _style_score = _style_example_score(raw_style_snippet)
-    _style_is_required = _style_score > 1  # must have at least one project-specific feature
+    _style_is_required = _style_score > 1
     style_snippet = _clip(raw_style_snippet, _style_chars) if raw_style_snippet else ""
     style_label = str(context.get("style_example_label") or "")
     style_example_block = build_style_example_block(style_snippet, label=style_label) if (style_snippet and _style_is_required) else ""
     style_example_optional = build_style_example_block(style_snippet, label=style_label) if (style_snippet and not _style_is_required) else ""
 
-    memory_block = str(context.get("testcode_memory") or "")
-    memory_note = (
-        "Use Project Test Code Memory below as the primary style/fixture/API reference.\n\n"
-        if memory_block else ""
-    )
-    no_sample_note = (
-        ""  # style example covers it when present
-        if style_example_block else
-        "No sample .cc is provided — use TODO_REVIEW_Fixture and TODO_REVIEW patterns for unknown API/fixture names.\n\n"
-        if not samples_text else ""
+    # --- Generation Critical Map (compact, most actionable memory) ---
+    critical_map = str(context.get("critical_map") or "").strip()
+    critical_map_block = (
+        "GENERATION CRITICAL MAP (use this when writing code):\n"
+        f"{critical_map}\n\n"
+        if critical_map else ""
     )
 
-    required_head = (
-        "You are Microsoft 365 Copilot generating Google Test C++ for automotive software.\n\n"
-        "Primary goal: Generate one editable GTest .cc draft per testcase_id.\n\n"
-        f"{grouping_block}"
-        "Generation rules:\n"
-        "1. Generate as much concrete GTest code as possible from the testcase Given/When/Then.\n"
-        "2. Preserve testcase_id exactly in the TEST_F name and in a comment.\n"
-        "3. Follow the STYLE EXAMPLE structure exactly when one is provided.\n"
-        "4. If fixture class is unknown, use TODO_REVIEW_Fixture as the fixture name.\n"
-        "5. If an input signal API is unknown, write: // TODO_REVIEW: set input <signal_name>\n"
-        "6. If output assertion API is unknown, write: // TODO_REVIEW: assert <signal_name> == <value>\n"
-        "7. Do not return [TESTCASE_CODE] none when testcase has a meaningful Given, When, or Then.\n"
-        "8. Return UNRESOLVED only when testcase intent is truly empty or impossible to understand.\n"
-        "9. Missing API names is NOT a reason to return UNRESOLVED — use TODO_REVIEW instead.\n"
-        "10. Map Given/When from expected_input; map Then from expected_output.\n\n"
-        f"{memory_note}"
-        f"{memory_block}"
-        f"{style_example_block}"
-        f"{no_sample_note}"
-        f"{context.get('spec_context') or ''}"
-        f"{folder_block}"
+    # --- Chunk scope ---
+    scope_bits = [f"Generate ONLY these {len(target_rows)} testcase(s):"]
+    if scope_label:
+        scope_bits.append(f"[{scope_label}]")
+    if import_group_label:
+        scope_bits.append(f"Group: {import_group_label}")
+    chunk_header = " ".join(scope_bits) + "\n\n"
+
+    # --- Compact rules (shorter than before) ---
+    rules = (
+        "RULES:\n"
+        "1. Use fixture/API/assertion from GENERATION CRITICAL MAP if available.\n"
+        "2. Generate concrete code — not only TODO_REVIEW placeholder lines.\n"
+        "3. Use TODO_REVIEW only for a specific unknown API/signal, not the whole test body.\n"
+        "4. Do NOT return [TESTCASE_CODE] none when testcase has Given/When/Then.\n"
+        "5. UNRESOLVED only if testcase has zero Given/When/Then content.\n\n"
     )
-    # Instruction and low-quality style examples are optional (trimmed when budget is tight)
+
+    # --- Engineer instruction (short) ---
+    instruction = str(engineer_note or "").strip()
+    instruction_block = (
+        f"Instruction: {_clip(instruction, 600 if slim_prompt else 3000)}\n\n"
+        if instruction else ""
+    )
+    stored_instruction_block = "" if instruction_block else _clip(str(context.get("project_instruction") or ""), 400)
+    stored_instruction_block = f"Instruction: {stored_instruction_block}\n\n" if stored_instruction_block else ""
+
+    required_head = (
+        "TASK: Generate one GTest TEST_F per testcase_id below.\n\n"
+        f"{chunk_header}"
+        f"{rules}"
+        f"{critical_map_block}"
+        f"{style_example_block}"
+    )
+
+    # Optional: instruction, fallback style for low-score samples, saved examples
     optional_parts = [
-        ("Project instruction:\n", instruction_block or stored_instruction_block),
-        ("Optional internal hints:\n", str(context.get("config_hints") or "")),
-        ("Sample .cc style reference:\n", style_example_optional),  # generic sample if not required
-        ("Additional sample .cc snippets:\n", f"Additional sample .cc snippets:\n{samples_text}\n" if samples_text and not style_example_block and not style_example_optional else ""),
-        ("Saved code examples (style only):\n", saved_text),
-        ("Accepted exemplar:\n", exemplar_block if not style_example_block else ""),
-        ("Additional project GTest snippets:\n", ref_block),
+        ("Instruction:\n", instruction_block or stored_instruction_block),
+        ("Sample style:\n", style_example_optional),
+        ("Saved example:\n", saved_text[:1] if saved_text else ""),  # 1 saved example max
+        ("Exemplar:\n", exemplar_block if not style_example_block else ""),
     ]
+
     tail = (
-        f"Testcase rows for this API chunk ({len(target_rows)}):\n"
+        f"TESTCASES ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
-        + "\n\nRequired output format (one block per testcase_id):\n"
+        + "\n\nOUTPUT FORMAT:\n"
         "[TESTCASE_CODE]\n"
-        "testcase_id: TC_xxx\n"
-        "```cpp\n"
-        "// TC: TC_xxx\n"
-        "// TODO_REVIEW: update fixture/API names to match project\n"
-        "TEST_F(TODO_REVIEW_Fixture, TC_xxx) {\n"
-        "    // Given\n"
-        "    // TODO_REVIEW: setup input signals from testcase Given section\n\n"
-        "    // When\n"
-        "    // TODO_REVIEW: trigger behavior from testcase When section\n\n"
-        "    // Then\n"
-        "    // TODO_REVIEW: assert expected outputs from testcase Then section\n"
-        "}\n"
-        "```\n"
-        "(generate real code at every location where testcase data is available; "
-        "use TODO_REVIEW only where project-specific details are unknown)\n\n"
-        "[UNRESOLVED]\n"
-        "Only list testcase IDs where testcase intent is too empty to generate any useful draft.\n"
         "testcase_id: <id>\n"
-        "reason: <short reason>\n"
-        "(or write \"none\")\n\n"
-        "[ASSUMPTIONS]\n"
-        "- Short bullet list only (max 5 lines)\n\n"
-        "Before answering, verify:\n"
-        "1. Did I generate one code block per testcase_id that has meaningful Given/When/Then?\n"
-        "2. Did I avoid [TESTCASE_CODE] none for testcases with usable content?\n"
-        "3. Did I use TODO_REVIEW instead of UNRESOLVED for missing API/fixture/signal details?\n"
-        "4. Did I preserve every testcase_id exactly?\n"
+        "```cpp\n<full TEST_F code>\n```\n"
+        "(repeat per testcase)\n\n"
+        "[UNRESOLVED]\nnone (or list IDs with zero Given/When/Then)\n\n"
+        "[ASSUMPTIONS]\n<max 3 bullets>\n"
     )
     return _budget_join(
         required_parts=[required_head],
@@ -682,43 +692,34 @@ def build_copilot_batch_prompt(
     )
 
 
-def build_copilot_minimal_prompt(target_rows: list[dict[str, Any]], *, engineer_note: str = "") -> str:
-    """Fast retry prompt (used after timeout). Always requests best-effort draft code."""
+def build_copilot_minimal_prompt(
+    target_rows: list[dict[str, Any]],
+    *,
+    engineer_note: str = "",
+    critical_map: str = "",
+) -> str:
+    """Compact retry prompt (used after timeout). Includes critical map for concrete code."""
     blocks: list[str] = []
     for row in target_rows:
         cid = str(row.get("candidate_id") or "")
         event = str(row.get("event") or row.get("test_function") or "").strip()
         blocks.append(
             f"testcase_id: {cid}\n"
-            f"event: {event}\n"
-            f"expected_input:\n{_clip(row.get('expected_input'), 650)}\n"
-            f"expected_output:\n{_clip(row.get('expected_output'), 650)}"
+            + (f"event: {event}\n" if event else "")
+            + f"Given/When:\n{_clip(row.get('expected_input'), 500)}\n"
+            + f"Then:\n{_clip(row.get('expected_output'), 500)}"
         )
+    critical_section = f"CRITICAL MAP:\n{_clip(critical_map, 500)}\n\n" if critical_map else ""
     return _clip(
-        "Generate Google Test C++ .cc code for ALEX (fast mode).\n\n"
-        "Goal: one editable GTest draft per testcase_id.\n"
-        "Rules:\n"
-        "- Use TODO_REVIEW_Fixture if fixture is unknown.\n"
-        "- Use TODO_REVIEW comments for unknown API/signal/assertion/timing.\n"
-        "- Do not return [TESTCASE_CODE] none when testcase has Given/When/Then content.\n"
-        "- UNRESOLVED only when testcase intent is truly empty.\n"
-        "- Preserve testcase_id exactly.\n\n"
-        "Output format:\n"
-        "[TESTCASE_CODE]\n"
-        "testcase_id: <id>\n"
-        "```cpp\n"
-        "TEST_F(TODO_REVIEW_Fixture, <id>) {\n"
-        "    // Given: ...\n"
-        "    // When: ...\n"
-        "    // Then: ...\n"
-        "}\n"
-        "```\n"
-        "[UNRESOLVED]\nnone\n"
-        "[ASSUMPTIONS]\n- max 3 bullets\n\n"
-        + (f"Project instruction:\n{_clip(engineer_note, 700)}\n\n" if engineer_note else "")
-        + "Testcase rows:\n"
-        + "\n---\n".join(blocks),
-        3500,
+        f"TASK: Generate one TEST_F per testcase (fast mode, {len(target_rows)} TC).\n"
+        "RULES: Use fixture/API from CRITICAL MAP. Generate concrete code. "
+        "TODO_REVIEW only for unknown specific API. No UNRESOLVED unless content is empty.\n\n"
+        f"{critical_section}"
+        + (f"Instruction: {_clip(engineer_note, 400)}\n\n" if engineer_note else "")
+        + "TESTCASES:\n"
+        + "\n---\n".join(blocks)
+        + "\n\nOUTPUT:\n[TESTCASE_CODE]\ntestcase_id: <id>\n```cpp\n<code>\n```\n[UNRESOLVED]\nnone\n",
+        3000,
     )
 
 
@@ -1027,9 +1028,9 @@ def apply_copilot_batch_import(
 
         item = parsed_by_id[cid]
         full = str(item.get("full_snippet") or "").strip()
-        if not full or not re.search(r"\bTEST(?:_F)?\s*\(", full):
-            # No usable TEST_F block → ERROR
-            msg = "parse failed — no TEST_F in block"
+        if not full:
+            # Empty block → ERROR (no code at all)
+            msg = "parse failed — empty code block"
             if persist_errors:
                 persist_batch_generation_error(
                     gtest_state, candidate_id=cid, error_message=msg, generation_source=generation_source
@@ -1044,6 +1045,37 @@ def apply_copilot_batch_import(
                 }
             )
             error += 1
+            continue
+
+        if not re.search(r"\bTEST(?:_F)?\s*\(", full):
+            # Has content but no TEST_F — keep as NEEDS_REVIEW (not ERROR)
+            # Copilot returned something; user can edit it
+            msg = "no TEST_F in block — code needs review/edit"
+            save_draft(
+                gtest_state,
+                draft_key=cid,
+                draft={
+                    "full_snippet": full,
+                    "code_body": full,
+                    "code_status": "NEEDS_REVIEW",
+                    "workflow_message": msg,
+                    "is_partial_code": True,
+                    "issue_reason": "parse_error",
+                    "generation_source": generation_source,
+                },
+                engineer_edited=False,
+                wrap_markers=True,
+            )
+            results.append(
+                {
+                    "candidate_id": cid,
+                    "ok": False,
+                    "workflow_status": "NEEDS_REVIEW",
+                    "workflow_message": msg,
+                    "code_status": "NEEDS_REVIEW",
+                }
+            )
+            needs_review += 1
             continue
 
         wf = persist_generated_draft_workflow(
@@ -1225,8 +1257,60 @@ def run_copilot_batch_api(
         )
         if not chat.get("ok") and str(chat.get("error_category") or "") == "m365_graph_timeout":
             rows_for_retry = list(batch.get("_target_rows") or [])
-            prompt_for_api = build_copilot_minimal_prompt(rows_for_retry, engineer_note=engineer_note)
-            run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} timed out; retrying fast minimal prompt."
+            # If chunk has > 1 TC, split to single-TC minimal prompt (reduce timeout risk)
+            # If already single-TC, use minimal prompt with critical map
+            _critical_map = str(
+                (gtest_state.get("project_code_config_cache") or {}).get("project_testcode_memory.md") or ""
+            )
+            _critical_map_compact = _extract_generation_critical_map(_critical_map, char_limit=400) if _critical_map else ""
+            if len(rows_for_retry) > 1:
+                # Retry one at a time instead of the full chunk
+                run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} timed out; splitting into {len(rows_for_retry)} single-TC retries."
+                _split_results: list[dict[str, Any]] = []
+                _split_saved = _split_review = _split_error = 0
+                for _single_row in rows_for_retry:
+                    _single_prompt = build_copilot_minimal_prompt([_single_row], engineer_note=engineer_note, critical_map=_critical_map_compact)
+                    _single_chat = run_copilot_chat_result(
+                        cfg, _single_prompt,
+                        reuse_session_conversation=False,
+                        user_id=user_id,
+                        persist_conversation=False,
+                    )
+                    if _single_chat.get("ok"):
+                        _single_raw = str(_single_chat.get("reply") or _single_chat.get("content") or "")
+                        gtest_state["_batch_target_rows"] = [_single_row]
+                        _one = apply_copilot_batch_import(
+                            bundle, gtest_state, job_output,
+                            content=_single_raw,
+                            expected_candidate_ids=[str(_single_row.get("candidate_id") or "")],
+                            language=language, generation_source="COPILOT_BATCH", persist_errors=False,
+                        )
+                        gtest_state.pop("_batch_target_rows", None)
+                        _s = _one.get("summary") or {}
+                        _split_saved += int(_s.get("saved") or 0)
+                        _split_review += int(_s.get("needs_review") or 0)
+                        _split_error += int(_s.get("error") or 0)
+                        _split_results.extend(_one.get("results") or [])
+                    else:
+                        cid = str(_single_row.get("candidate_id") or "")
+                        _split_results.append({"candidate_id": cid, "ok": False,
+                                               "workflow_status": "NEEDS_REVIEW", "code_status": "NEEDS_REVIEW",
+                                               "workflow_message": "Single-TC retry timed out"})
+                        _split_review += 1
+                total_saved += _split_saved
+                total_review += _split_review
+                total_error += _split_error
+                for r in _split_results:
+                    all_results.append(r)
+                run.update({"saved": total_saved, "needs_review": total_review, "error": total_error,
+                             "completed_chunks": idx + 1, "queued_chunks": max(len(prompts) - idx - 1, 0),
+                             "status_message": f"Chunk {idx + 1} split into single-TC retries."})
+                if job_output:
+                    from pathlib import Path as _Path
+                    flush_batch_run_checkpoint(_Path(job_output), gtest_state)
+                continue
+            prompt_for_api = build_copilot_minimal_prompt(rows_for_retry, engineer_note=engineer_note, critical_map=_critical_map_compact)
+            run["status_message"] = f"Copilot API chunk {idx + 1}/{len(prompts)} timed out; retrying compact prompt."
             if progress_callback:
                 progress_callback(
                     idx,
