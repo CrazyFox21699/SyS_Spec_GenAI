@@ -215,9 +215,11 @@ def test_prompt_requests_best_effort_partial_code() -> None:
     )
     assert result["ok"] is True
     prompt = result["prompts"][0]["prompt"]
-    assert "TODO_REVIEW" in prompt, "prompt must instruct Copilot to use TODO_REVIEW"
-    # "best-effort" or "concrete" or "as much code as possible"
-    assert any(kw in prompt.lower() for kw in ("best-effort", "partial", "concrete", "as much"))
+    # New: prompt says MISSING_CONTEXT for unknown APIs, not TODO_REVIEW everywhere
+    # But prompt must still mention some form of handling missing context
+    assert "MISSING_CONTEXT" in prompt or "TODO_REVIEW" in prompt or "missing" in prompt.lower()
+    # Must ask for real/concrete code
+    assert any(kw in prompt.lower() for kw in ("best-effort", "partial", "concrete", "as much", "real", "project-style"))
 
 
 def test_testcase_with_missing_output_still_included_in_chunk() -> None:

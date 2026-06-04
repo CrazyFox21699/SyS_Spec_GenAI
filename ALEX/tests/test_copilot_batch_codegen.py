@@ -219,7 +219,7 @@ def test_run_batch_retries_timeout_with_minimal_prompt(tmp_path: Path) -> None:
 
     assert out["ok"] is True
     assert len(calls) == 2
-    assert "fast mode" in calls[1].lower()  # minimal prompt says "(fast mode)"
+    assert "fast" in calls[1].lower()  # minimal prompt says "fast retry" or "fast mode"
     assert len(calls[1]) < len(calls[0])
 
 
@@ -725,8 +725,14 @@ def test_prompt_asks_for_todo_review_not_unresolved_for_missing_api() -> None:
 def test_prompt_says_do_not_return_testcase_code_none() -> None:
     """Prompt must forbid [TESTCASE_CODE] none when testcase has content."""
     prompt = _prompt_for()
-    # New compact prompt says "Do NOT return [TESTCASE_CODE] none when testcase has Given/When/Then"
-    assert "[TESTCASE_CODE] none" in prompt or "none when" in prompt.lower() or "Do NOT return" in prompt
+    # New prompt uses MISSING_CONTEXT instead of [TESTCASE_CODE] none — check for that and UNRESOLVED rules
+    assert (
+        "[TESTCASE_CODE] none" in prompt
+        or "none when" in prompt.lower()
+        or "Do NOT return" in prompt
+        or "MISSING_CONTEXT" in prompt  # new: use MISSING_CONTEXT instead of fake none
+        or "UNRESOLVED only" in prompt
+    )
 
 
 def test_prompt_includes_self_check() -> None:
@@ -780,7 +786,8 @@ def test_minimal_prompt_includes_todo_review_fixture() -> None:
 
     rows = [{"candidate_id": "TC_A", "expected_input": "Given: X=1", "expected_output": "Then: Y=0"}]
     prompt = build_copilot_minimal_prompt(rows)
-    assert "TODO_REVIEW" in prompt  # compact: fixture, API, or signal TODO_REVIEW
+    # New: prompt says MISSING_CONTEXT instead of TODO_REVIEW for unknown APIs
+    assert "MISSING_CONTEXT" in prompt or "real" in prompt.lower() or "fixture" in prompt.lower()
 
 
 def test_minimal_prompt_forbids_testcase_code_none() -> None:

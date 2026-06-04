@@ -26,14 +26,18 @@ _SLIM_PROMPT_BUDGET = 4_000        # reduced: keep prompts tight
 _FULL_PROMPT_BUDGET = 15_000       # reduced: avoid graph timeout on large prompts
 
 _TESTCASE_CODE_SECTION_RE = re.compile(
-    r"\[TESTCASE_CODE\](.*?)(?=\[ASSUMPTIONS\]|\[UNRESOLVED\]|$)",
+    r"\[TESTCASE_CODE\](.*?)(?=\[ASSUMPTIONS\]|\[UNRESOLVED\]|\[MISSING_CONTEXT\]|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _ASSUMPTIONS_SECTION_RE = re.compile(
-    r"\[ASSUMPTIONS\](.*?)(?=\[UNRESOLVED\]|$)",
+    r"\[ASSUMPTIONS\](.*?)(?=\[UNRESOLVED\]|\[MISSING_CONTEXT\]|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _UNRESOLVED_SECTION_RE = re.compile(r"\[UNRESOLVED\](.*)$", re.IGNORECASE | re.DOTALL)
+_MISSING_CONTEXT_SECTION_RE = re.compile(
+    r"\[MISSING_CONTEXT\](.*?)(?=\[TESTCASE_CODE\]|\[UNRESOLVED\]|\[ASSUMPTIONS\]|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 _BLOCK_RE = re.compile(
     r"testcase_id\s*:\s*([A-Za-z0-9_]+)\s*(?:\n\s*)?```(?:cpp|c\+\+)?\s*\n([\s\S]*?)```",
     re.IGNORECASE,
@@ -733,14 +737,15 @@ def build_copilot_batch_prompt(
         scope_bits.append(f"Group: {import_group_label}")
     chunk_header = " ".join(scope_bits) + "\n\n"
 
-    # --- Compact rules (shorter than before) ---
+    # --- Compact rules (no TODO_REVIEW encouragement) ---
     rules = (
         "RULES:\n"
         "1. Use fixture/API/assertion from GENERATION CRITICAL MAP if available.\n"
-        "2. Generate concrete code — not only TODO_REVIEW placeholder lines.\n"
-        "3. Use TODO_REVIEW only for a specific unknown API/signal, not the whole test body.\n"
-        "4. Do NOT return [TESTCASE_CODE] none when testcase has Given/When/Then.\n"
-        "5. UNRESOLVED only if testcase has zero Given/When/Then content.\n\n"
+        "2. Follow the STYLE EXAMPLE structure exactly.\n"
+        "3. Do NOT invent API names. Do NOT fill unknown APIs with TODO_REVIEW placeholders.\n"
+        "4. If required API/mapping is missing, return MISSING_CONTEXT for that testcase.\n"
+        "5. Generate real code only when fixture, input API, and output variable are known.\n"
+        "6. UNRESOLVED only if testcase has zero Given/When/Then content.\n\n"
     )
 
     # --- Engineer instruction (short) ---
@@ -771,12 +776,18 @@ def build_copilot_batch_prompt(
     tail = (
         f"TESTCASES ({len(target_rows)}):\n"
         + "\n---\n".join(targets_block)
-        + "\n\nOUTPUT FORMAT:\n"
+        + "\n\nOUTPUT FORMAT (use exactly one section per testcase):\n"
         "[TESTCASE_CODE]\n"
         "testcase_id: <id>\n"
-        "```cpp\n<full TEST_F code>\n```\n"
-        "(repeat per testcase)\n\n"
-        "[UNRESOLVED]\nnone (or list IDs with zero Given/When/Then)\n\n"
+        "```cpp\n<real project-style TEST_F code — no TODO_REVIEW placeholders>\n```\n\n"
+        "[MISSING_CONTEXT]\n"
+        "testcase_id: <id>\n"
+        "missing_type: INPUT_API | OUTPUT_ASSERTION | FIXTURE | TIMING | CONSTANT\n"
+        "signal_or_item: <signal or variable name>\n"
+        "reason: <brief reason>\n"
+        "suggested_rule_type: Input / Mock Rule | Output / Assertion Rule | Fixture Rule | Timing Rule\n"
+        "(use [MISSING_CONTEXT] when required API/mapping is not in memory — do NOT write fake code)\n\n"
+        "[UNRESOLVED]\nnone (only for testcases with no Given/When/Then at all)\n\n"
         "[ASSUMPTIONS]\n<max 3 bullets>\n"
     )
     return _budget_join(
@@ -806,14 +817,18 @@ def build_copilot_minimal_prompt(
         )
     critical_section = f"CRITICAL MAP:\n{_clip(critical_map, 500)}\n\n" if critical_map else ""
     return _clip(
-        f"TASK: Generate one TEST_F per testcase (fast mode, {len(target_rows)} TC).\n"
-        "RULES: Use fixture/API from CRITICAL MAP. Generate concrete code. "
-        "TODO_REVIEW only for unknown specific API. No UNRESOLVED unless content is empty.\n\n"
+        f"TASK: Generate real project-style TEST_F per testcase (fast retry, {len(target_rows)} TC).\n"
+        "RULES: Use fixture/API from CRITICAL MAP. Do NOT invent API names. "
+        "If API/mapping unknown, return MISSING_CONTEXT. No UNRESOLVED unless content is empty.\n\n"
         f"{critical_section}"
         + (f"Instruction: {_clip(engineer_note, 400)}\n\n" if engineer_note else "")
         + "TESTCASES:\n"
         + "\n---\n".join(blocks)
-        + "\n\nOUTPUT:\n[TESTCASE_CODE]\ntestcase_id: <id>\n```cpp\n<code>\n```\n[UNRESOLVED]\nnone\n",
+        + "\n\nOUTPUT:\n"
+        "[TESTCASE_CODE]\ntestcase_id: <id>\n```cpp\n<real TEST_F code>\n```\n"
+        "[MISSING_CONTEXT]\ntestcase_id: <id>\nmissing_type: INPUT_API|OUTPUT_ASSERTION|FIXTURE|TIMING\n"
+        "signal_or_item: <name>\nreason: <brief>\nsuggested_rule_type: <rule type>\n"
+        "[UNRESOLVED]\nnone\n",
         3000,
     )
 
@@ -953,8 +968,47 @@ def _parse_unresolved_map(block: str) -> dict[str, str]:
     return out
 
 
+def _parse_missing_context_blocks(raw: str) -> dict[str, list[dict[str, str]]]:
+    """Parse all [MISSING_CONTEXT] blocks from a Copilot response.
+
+    Returns: {testcase_id: [list of missing item dicts]}
+    Each item has: missing_type, signal_or_item, reason, suggested_rule_type.
+    """
+    result: dict[str, list[dict[str, str]]] = {}
+    # Find all [MISSING_CONTEXT] blocks, each may cover one testcase_id
+    for block_m in _MISSING_CONTEXT_SECTION_RE.finditer(raw):
+        block = block_m.group(1).strip()
+        if not block:
+            continue
+        # A single block may contain multiple entries separated by blank lines or repeated testcase_id
+        # Parse key:value lines
+        current_id = ""
+        current_item: dict[str, str] = {}
+        for line in block.splitlines():
+            line = line.strip()
+            if not line:
+                if current_id and current_item:
+                    result.setdefault(current_id, []).append(current_item)
+                    current_item = {}
+                continue
+            if ":" in line:
+                key, _, val = line.partition(":")
+                key = key.strip().lower().replace(" ", "_").replace("-", "_")
+                val = val.strip()
+                if key == "testcase_id":
+                    if current_id and current_item:
+                        result.setdefault(current_id, []).append(current_item)
+                        current_item = {}
+                    current_id = val
+                elif key in ("missing_type", "signal_or_item", "reason", "suggested_rule_type"):
+                    current_item[key] = val
+        if current_id and current_item:
+            result.setdefault(current_id, []).append(current_item)
+    return result
+
+
 def parse_copilot_batch_response(text: str) -> dict[str, Any]:
-    """Parse [TESTCASE_CODE] / [UNRESOLVED] / [ASSUMPTIONS] batch Copilot output."""
+    """Parse [TESTCASE_CODE] / [MISSING_CONTEXT] / [UNRESOLVED] / [ASSUMPTIONS] batch output."""
     raw = str(text or "").strip()
     if not raw:
         return {
@@ -1022,13 +1076,17 @@ def parse_copilot_batch_response(text: str) -> dict[str, Any]:
                     }
                 )
 
+    # Parse [MISSING_CONTEXT] blocks — Copilot signals missing API/fixture info
+    missing_context_by_id = _parse_missing_context_blocks(raw)
+
     unresolved_list = [f"{k}: {v}" for k, v in unresolved_by_id.items()]
     return {
-        "ok": bool(items) or bool(unresolved_by_id),
+        "ok": bool(items) or bool(unresolved_by_id) or bool(missing_context_by_id),
         "items": items,
         "assumptions": assumptions,
         "unresolved": unresolved_list,
         "unresolved_by_id": unresolved_by_id,
+        "missing_context_by_id": missing_context_by_id,
         "parsed_count": len(items),
     }
 
@@ -1046,12 +1104,13 @@ def apply_copilot_batch_import(
 ) -> dict[str, Any]:
     parsed = parse_copilot_batch_response(content)
     unresolved_by_id = dict(parsed.get("unresolved_by_id") or {})
+    missing_context_by_id = dict(parsed.get("missing_context_by_id") or {})
     parsed_by_id = {str(i["candidate_id"]): i for i in parsed.get("items") or [] if i.get("candidate_id")}
 
-    if not parsed_by_id and not unresolved_by_id:
+    if not parsed_by_id and not unresolved_by_id and not missing_context_by_id:
         return {
             "ok": False,
-            "error": parsed.get("error") or "No [TESTCASE_CODE] or [UNRESOLVED] blocks parsed.",
+            "error": parsed.get("error") or "No [TESTCASE_CODE], [MISSING_CONTEXT], or [UNRESOLVED] blocks parsed.",
             "parse": parsed,
             "results": [],
             "summary": {"saved": 0, "needs_review": 0, "error": 0, "skipped": 0, "total": 0},
@@ -1069,12 +1128,51 @@ def apply_copilot_batch_import(
     api_catalog = str(cfg_cache.get("api_catalog.yaml") or "")
 
     expected = set(expected_candidate_ids or [])
-    target_ids = list(expected) if expected else list(set(parsed_by_id) | set(unresolved_by_id))
+    target_ids = list(expected) if expected else list(
+        set(parsed_by_id) | set(unresolved_by_id) | set(missing_context_by_id)
+    )
 
     results: list[dict[str, Any]] = []
     saved = needs_review = error = skipped = 0
 
     for cid in target_ids:
+        if cid in missing_context_by_id:
+            # [MISSING_CONTEXT] from Copilot → NEEDS_REVIEW with structured missing info.
+            # No GTEST_SKIP, no fake TODO_REVIEW code.
+            mc_items = missing_context_by_id[cid]
+            mc_summary = "; ".join(
+                f"{it.get('missing_type','?')}/{it.get('signal_or_item','?')}"
+                for it in mc_items
+            )[:200]
+            msg = f"Copilot MISSING_CONTEXT: {mc_summary}"
+            # Store missing items in the draft for the UI Missing Input Report
+            save_draft(
+                gtest_state, draft_key=cid,
+                draft={
+                    "full_snippet": "",
+                    "code_body": "",
+                    "code_status": "NEEDS_REVIEW",
+                    "workflow_message": msg,
+                    "is_fallback_scaffold": False,
+                    "is_partial_code": False,
+                    "issue_reason": "missing_generation_context",
+                    "missing_context": mc_items,
+                    "generation_source": generation_source,
+                },
+                engineer_edited=False, wrap_markers=False,
+            )
+            results.append({
+                "candidate_id": cid,
+                "ok": False,
+                "workflow_status": "NEEDS_REVIEW",
+                "workflow_message": msg,
+                "code_status": "NEEDS_REVIEW",
+                "issue_reason": "missing_generation_context",
+                "missing_context": mc_items,
+            })
+            needs_review += 1
+            continue
+
         if cid in unresolved_by_id:
             # UNRESOLVED from Copilot → NEEDS_REVIEW, never ERROR.
             unresolved_reason = str(unresolved_by_id[cid] or "Copilot returned UNRESOLVED for this testcase.")
@@ -1231,6 +1329,7 @@ def apply_copilot_batch_import(
         "at": _now_iso(),
         "parsed_count": parsed.get("parsed_count"),
         "unresolved_count": len(unresolved_by_id),
+        "missing_context_count": len(missing_context_by_id),
         "assumptions": parsed.get("assumptions"),
     }
     gtest_state.setdefault("copilot_batch", {})["last_results"] = results
@@ -1241,6 +1340,7 @@ def apply_copilot_batch_import(
         "error": error,
         "skipped": skipped,
         "total": len(target_ids),
+        "missing_context": len(missing_context_by_id),
     }
     return {
         "ok": saved > 0 or needs_review > 0,
