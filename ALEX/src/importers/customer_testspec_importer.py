@@ -63,7 +63,7 @@ _HEADER_ALIASES: dict[str, str] = {
 _CANONICAL_HEADERS = set(CUSTOMER_TESTSPEC_HEADERS) | {"Test Group", "Remarks"}
 
 # Grouped JP template columns — forward-fill when Excel merged cells leave blanks.
-_FILL_DOWN_COLUMNS = ("Test Function", "Test Group", "Event", "UseCase")
+_FILL_DOWN_COLUMNS = ("Test Function", "Test Group", "UseCase")
 
 _IO_LINE_RE = re.compile(
     r"^(given|when|then|precondition)\s*[:：]\s*(.*)$",
@@ -136,7 +136,44 @@ def _is_jp_template(colmap: dict[str, int]) -> bool:
     return "Test Group" in colmap or "Remarks" in colmap
 
 
+def _backfill_event_in_groups(valid_rows: list[tuple[int, list[Any]]], colmap: dict[str, int]) -> None:
+    """Second-pass: fill blank Event cells across a contiguous Test Function + Test Group block.
+
+    For each contiguous group of rows sharing the same normalized TF+TG, find the
+    first non-empty Event in that group (regardless of its row position) and assign
+    it to all blank-Event rows in the group. Does not cross into a different group.
+    """
+    ev_idx = colmap.get("Event")
+    if ev_idx is None or not valid_rows:
+        return
+
+    def _tftg(row_list: list[Any]) -> tuple[str, str]:
+        return (_cell(row_list, colmap, "Test Function"), _cell(row_list, colmap, "Test Group"))
+
+    # Walk valid_rows and group contiguous rows with same TF+TG key
+    groups: list[list[list[Any]]] = []
+    for _, row_list in valid_rows:
+        key = _tftg(row_list)
+        if groups and _tftg(groups[-1][-1]) == key:
+            groups[-1].append(row_list)
+        else:
+            groups.append([row_list])
+
+    for group in groups:
+        first_event = next(
+            (str(rl[ev_idx] or "").strip() for rl in group if ev_idx < len(rl) and str(rl[ev_idx] or "").strip()),
+            "",
+        )
+        # Fallback: if no Event found in the block, use Test Group as normalized event.
+        fill_event = first_event or _cell(group[0], colmap, "Test Group")
+        if fill_event:
+            for rl in group:
+                if ev_idx < len(rl) and not str(rl[ev_idx] or "").strip():
+                    rl[ev_idx] = fill_event
+
+
 def _fill_grouped_columns(row_list: list[Any], colmap: dict[str, int], carry: dict[str, str]) -> None:
+    # Unconditional fill-down for grouping columns
     for key in _FILL_DOWN_COLUMNS:
         idx = colmap.get(key)
         if idx is None:
@@ -147,6 +184,25 @@ def _fill_grouped_columns(row_list: list[Any], colmap: dict[str, int], carry: di
             carry[key] = text
         elif carry.get(key) and idx < len(row_list):
             row_list[idx] = carry[key]
+    # Event: fill-down only within the same Test Function / Test Group visual block
+    ev_idx = colmap.get("Event")
+    if ev_idx is not None and ev_idx < len(row_list):
+        tf_idx = colmap.get("Test Function")
+        tg_idx = colmap.get("Test Group")
+        cur_tf = str(row_list[tf_idx] or "").strip() if tf_idx is not None and tf_idx < len(row_list) else ""
+        cur_tg = str(row_list[tg_idx] or "").strip() if tg_idx is not None and tg_idx < len(row_list) else ""
+        ev_raw = row_list[ev_idx]
+        ev_text = str(ev_raw).strip() if ev_raw is not None else ""
+        if ev_text:
+            carry["Event"] = ev_text
+            carry["_event_block_tf"] = cur_tf
+            carry["_event_block_tg"] = cur_tg
+        elif (
+            carry.get("Event")
+            and cur_tf == carry.get("_event_block_tf", "")
+            and cur_tg == carry.get("_event_block_tg", "")
+        ):
+            row_list[ev_idx] = carry["Event"]
 
 
 def _cell(row: list[Any], colmap: dict[str, int], key: str) -> str:
@@ -339,7 +395,7 @@ def _candidate_from_row(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     test_function = _cell(row, colmap, "Test Function") or "Imported test"
     test_group = _cell(row, colmap, "Test Group")
-    event = _cell(row, colmap, "Event") or test_group or "imported"
+    event = _cell(row, colmap, "Event")
     use_case = _cell(row, colmap, "UseCase")
     operation_text = _cell(row, colmap, "Operation")
     expected_input = _cell(row, colmap, "Expected value for input")
@@ -441,6 +497,17 @@ def _candidate_from_row(
     overlay["spec_hash"] = compute_spec_hash(structured_io)
     overlay["body_hash"] = compute_body_hash(structured_io)
     overlay["no"] = structured_io.get("no") or ""
+    overlay["import_diagnostics"] = {
+        "candidate_id": cid,
+        "test_function": test_function,
+        "test_group": test_group,
+        "event": event,
+        "expected_input": expected_input,
+        "expected_output": expected_output,
+        "expected_input_empty_is_valid": not expected_input and bool(expected_output),
+        "source_column_for_expected_input": "Expected value for input",
+        "source_column_for_expected_output": "Expected value for output",
+    }
 
     return cand, overlay, logic_id
 
@@ -543,8 +610,9 @@ def import_customer_testspec_workbook(
                 "jp_template": _is_jp_template(colmap),
             }
         )
-        imported = 0
+        # First pass: fill-down TF/TG/UseCase/Event row-by-row and collect valid rows.
         carry: dict[str, str] = {}
+        valid_rows: list[tuple[int, list[Any]]] = []
         for row_no, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
             if not any(str(c or "").strip() for c in row):
                 continue
@@ -556,6 +624,12 @@ def import_customer_testspec_workbook(
                 or _cell(row_list, colmap, "Expected value for output")
             ):
                 continue
+            valid_rows.append((row_no, row_list))
+        # Second pass: if a visual block's Event appears only in a middle/later row,
+        # backfill it to all blank-Event rows in the same TF+TG block.
+        _backfill_event_in_groups(valid_rows, colmap)
+        imported = 0
+        for row_no, row_list in valid_rows:
             cand, overlay, logic_id = _candidate_from_row(
                 row_list,
                 colmap,

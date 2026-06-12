@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_project_testcode_memory.py tests/test_copilot_batch_codegen.py -q --tb=short)",
+      "Bash(python -m pytest tests/test_copilot_batch_codegen.py tests/test_project_testcode_memory.py -q --tb=short)",
+      "Bash(python -m pytest tests/test_project_context_files.py::test_fallback_scaffold_strips_json -q --tb=long)",
+      "Bash(python -m pytest tests/test_copilot_batch_codegen.py tests/test_project_testcode_memory.py tests/test_project_context_files.py -q --tb=short)",
+      "Bash(python -m pytest tests/test_copilot_batch_codegen.py tests/test_project_context_files.py tests/test_partial_code_generation.py tests/test_code_quality_gate.py -x -q)",
+      "Bash(python -m pytest tests/test_golden_cross_spec.py::test_discover_golden_fixtures_finds_shutoff_and_gpt -v)",
+      "Bash(git stash *)",
+      "Bash(python -m pytest tests/ -x -q --ignore=tests/test_golden_cross_spec.py)",
+      "Bash(python -m pytest tests/test_m365_auth.py::test_client_id_from_local_config -v)",
+      "Bash(python -m pytest tests/ -q --ignore=tests/test_golden_cross_spec.py)",
+      "Bash(git -C /Users/tranthaonguyen/TruongHuy/VibeCoder/ALEX diff --name-only)",
+      "Bash(md5 /Users/tranthaonguyen/TruongHuy/VibeCoder/ALEX/web/main.py)",
+      "Bash(python -m pytest tests/test_copilot_batch_codegen.py -x -q)",
+      "Bash(python -m pytest tests/ -x -q --ignore=tests/test_golden_cross_spec.py --ignore=tests/test_m365_auth.py --ignore=tests/test_review_translate.py)",
+      "Bash(python3 -c ' *)",
+      "Bash(python -c \"from web.m365_auth import record_copilot_api_probe, is_copilot_chat_entitled, m365_status; print\\('imports OK'\\)\")"
+    ]
+  }
+}

@@ -40,8 +40,50 @@ def approve_test_code_drafts(
             continue
         draft["engineer_approved"] = True
         draft["approved_at"] = _now_iso()
+        draft["approval_status"] = "CONFIRMED"
+        draft["exportable"] = True
         approved.append(cid)
     return {"ok": True, "approved": approved, "skipped": skipped, "approved_count": len(approved)}
+
+
+def confirm_test_code_drafts(
+    gtest_state: dict[str, Any],
+    candidate_ids: list[str],
+) -> dict[str, Any]:
+    """User-driven confirm: sets approval_status=CONFIRMED, exportable=True regardless of code_status.
+
+    Only skips when code is genuinely empty. Does not require code_status=SAVED so
+    quality-warning drafts (NEEDS_REVIEW) are confirmed and become exportable.
+    """
+    confirmed: list[str] = []
+    skipped_empty_code: list[str] = []
+    skipped_no_draft: list[str] = []
+    selected_count = len([c for c in candidate_ids if str(c or "").strip()])
+    for cid in candidate_ids:
+        cid = str(cid or "").strip()
+        if not cid:
+            continue
+        draft = _draft(gtest_state, cid)
+        if not draft:
+            skipped_no_draft.append(cid)
+            continue
+        full = str(draft.get("full_snippet") or draft.get("code_body") or "").strip()
+        if not full:
+            skipped_empty_code.append(cid)
+            continue
+        draft["engineer_approved"] = True
+        draft["approved_at"] = _now_iso()
+        draft["approval_status"] = "CONFIRMED"
+        draft["exportable"] = True
+        confirmed.append(cid)
+    return {
+        "ok": True,
+        "confirmed": confirmed,
+        "confirmed_count": len(confirmed),
+        "skipped_empty_code": skipped_empty_code,
+        "skipped_no_draft": skipped_no_draft,
+        "selected_count": selected_count,
+    }
 
 
 def approve_all_saved_test_code(gtest_state: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +131,8 @@ def reopen_test_code_drafts(
         draft.pop("approved_at", None)
         draft.pop("engineer_reviewed", None)
         draft.pop("reviewed_at", None)
+        draft.pop("approval_status", None)
+        draft.pop("exportable", None)
         reopened.append(cid)
     return {"ok": True, "reopened": reopened, "reopened_count": len(reopened)}
 

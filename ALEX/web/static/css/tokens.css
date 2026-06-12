@@ -83,6 +83,7 @@
   --blue: var(--accent);
   --blue-bg: var(--accent-bg);
   --gray: #6e7681;
+  --bg-card: var(--surface-raised);
 }
 
 :root[data-theme="light"] {
@@ -143,4 +144,5 @@
   --blue: var(--accent);
   --blue-bg: var(--accent-bg);
   --gray: #8c959f;
+  --bg-card: var(--bg-elevated);
 }

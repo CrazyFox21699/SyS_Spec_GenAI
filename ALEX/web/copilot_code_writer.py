@@ -413,3 +413,305 @@ def code_write_batch_size(cfg: dict[str, Any] | None) -> int:
         return 3
     assist = cfg.get("assist") or {}
     return max(1, min(8, int(assist.get("copilot_code_batch_size", assist.get("copilot_write_batch_size", 3)))))
+
+
+# ─── Post-generation comment normalizer ───────────────────────────────────────
+
+_BC_RE = re.compile(r"/\*\*?[\s\S]*?\*/")
+
+_BC_FIELD_KEYS = ("testcase_id", "event", "test design", "given", "when", "then")
+
+_PLACEHOLDER_FIXTURE_RE = re.compile(r"^TryTo[A-Za-z0-9_]+$")
+_TESTF_FIXTURE_RE = re.compile(r"\bTEST_F\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def extract_testf_fixture_name(code: str) -> str:
+    """Return the fixture class name from the first TEST_F(...) in code, or ''."""
+    m = _TESTF_FIXTURE_RE.search(str(code or ""))
+    return m.group(1) if m else ""
+
+
+def replace_testf_fixture(code: str, new_fixture: str) -> str:
+    """Replace the fixture class in all TEST_F(OldFixture, ...) with new_fixture."""
+    return re.sub(
+        r"(\bTEST_F\s*\(\s*)[A-Za-z_][A-Za-z0-9_]*",
+        lambda m: m.group(1) + new_fixture,
+        str(code or ""),
+    )
+
+
+def is_placeholder_testf_fixture(fixture: str, group_fixture: str = "") -> bool:
+    """Return True when fixture looks like an auto-generated TryTo placeholder.
+
+    A TryTo-prefixed name that matches the real group fixture is NOT a placeholder.
+    """
+    if not fixture:
+        return False
+    if not _PLACEHOLDER_FIXTURE_RE.match(fixture):
+        return False
+    return fixture != group_fixture if group_fixture else True
+
+
+def _parse_block_comment_fields(block: str) -> dict[str, str]:
+    """Extract key→value pairs from a /* … */ block comment.
+
+    Handles both compact (``* key: value``) and verbose bullet formats.
+    """
+    inner = re.sub(r"^\s*/\*+\s*", "", block).rstrip()
+    inner = re.sub(r"\s*\*+/\s*$", "", inner)
+    lines = [re.sub(r"^\s*\*\s?", "", ln) for ln in inner.splitlines()]
+
+    fields: dict[str, str] = {}
+    cur_key: str | None = None
+    cur_parts: list[str] = []
+
+    def _flush() -> None:
+        if cur_key:
+            fields[cur_key] = _squash_bullets(cur_parts)
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        matched_kw = None
+        for kw in _BC_FIELD_KEYS:
+            if stripped.lower().startswith(kw + ":"):
+                matched_kw = kw
+                break
+        if matched_kw:
+            _flush()
+            cur_key = matched_kw.lower().replace(" ", "_")
+            val = stripped[len(matched_kw) + 1 :].strip()
+            cur_parts = [val] if val else []
+        elif cur_key:
+            cur_parts.append(stripped)
+
+    _flush()
+    return fields
+
+
+def _squash_bullets(lines: list[str]) -> str:
+    """Join bullet-list lines into one semicolon-separated string."""
+    parts = []
+    for ln in lines:
+        ln = re.sub(r"^[-•*]\s+", "", ln.strip())
+        if ln:
+            parts.append(ln)
+    return "; ".join(parts)
+
+
+def _extract_given_when(text: str) -> tuple[str, str]:
+    """Return (given_text, when_text) from an expected_input string."""
+    given: list[str] = []
+    when: list[str] = []
+    mode = "given"
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if re.match(r"^(?:When|Action)\s*:", s, re.I):
+            mode = "when"
+            val = re.sub(r"^[^:]+:\s*", "", s).strip()
+            if val:
+                when.append(val)
+        elif re.match(r"^Given\s*:", s, re.I):
+            mode = "given"
+            val = re.sub(r"^Given\s*:\s*", "", s, flags=re.I).strip()
+            if val:
+                given.append(val)
+        elif mode == "given":
+            given.append(s)
+        else:
+            when.append(s)
+    return "; ".join(p for p in given if p)[:200], "; ".join(p for p in when if p)[:200]
+
+
+def _extract_then(text: str) -> str:
+    """Return condensed then text from an expected_output string."""
+    parts = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        s = re.sub(r"^Then\s*:\s*", "", s, flags=re.I).strip()
+        s = re.sub(r"^[-•*]\s*", "", s).strip()
+        if s:
+            parts.append(s)
+    return "; ".join(parts)[:200]
+
+
+def _compact_block_comment(fields: dict[str, str]) -> str:
+    """Build a compact ``/* … */`` block comment from a fields dict."""
+    _LABELS = [
+        ("testcase_id", "testcase_id"),
+        ("event", "event"),
+        ("test_design", "Test design"),
+        ("given", "Given"),
+        ("when", "When"),
+        ("then", "Then"),
+    ]
+    lines = ["/*"]
+    for key, label in _LABELS:
+        val = str(fields.get(key) or "").strip()
+        if val:
+            lines.append(f" * {label}: {val}")
+    lines.append(" */")
+    return "\n".join(lines)
+
+
+def _fill_section_labels(code: str, given: str, when: str, then: str) -> str:
+    """Replace empty ``// Given:``, ``// When:``, ``// Then:`` lines with actual text."""
+    vals: dict[str, str] = {"Given": given, "When": when, "Then": then}
+
+    def _rep(m: re.Match) -> str:  # type: ignore[type-arg]
+        indent = m.group(1)
+        label = m.group(2)
+        val = vals.get(label, "")
+        return f"{indent}// {label}: {val}" if val else m.group(0)
+
+    return re.compile(r"([ \t]*)//\s*(Given|When|Then)\s*:\s*$", re.MULTILINE).sub(_rep, code)
+
+
+def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> str:
+    """Normalize comment style in a generated TEST_F snippet.
+
+    - If a design block comment (containing testcase_id/event/Given/When/Then)
+      is found inside the TEST_F body, move it to before TEST_F.
+    - Reformat any such block comment to compact single-line-per-field style.
+    - Fill empty ``// Given:``, ``// When:``, ``// Then:`` section labels using
+      field values from the block comment or from the row metadata fallback.
+    - Code body (EXPECT_CALL, igsw_Main_Run, EXPECT_THAT) is not modified.
+    - ``@alex:begin`` / ``@alex:spec_hash`` lines (if already present) are
+      preserved above the block comment.
+
+    Returns the snippet unchanged when there is nothing to normalize.
+    """
+    row = row or {}
+    if not snippet:
+        return snippet
+    testf_m = re.search(r"\bTEST_?F?\s*\(", snippet)
+    if not testf_m:
+        return snippet
+
+    testf_start = testf_m.start()
+    pre = snippet[:testf_start]
+    body = snippet[testf_start:]
+
+    brace_m = re.search(r"\{", body)
+    if not brace_m:
+        return snippet
+    head_end = brace_m.end()
+
+    # Scan for a design block comment INSIDE the body (after the opening {)
+    inner_text = body[head_end:]
+    inner_bc_m = _BC_RE.search(inner_text)
+    inner_bc = ""
+    fields: dict[str, str] = {}
+    if inner_bc_m:
+        candidate = inner_bc_m.group(0)
+        f = _parse_block_comment_fields(candidate)
+        if f.get("testcase_id") or f.get("given") or f.get("event"):
+            inner_bc = candidate
+            fields = f
+
+    # Also check for an existing block comment BEFORE TEST_F
+    pre_bc_m = _BC_RE.search(pre)
+    pre_bc = ""
+    if pre_bc_m:
+        pre_bc = pre_bc_m.group(0)
+        if not fields:
+            f2 = _parse_block_comment_fields(pre_bc)
+            if f2.get("testcase_id") or f2.get("given"):
+                fields = f2
+
+    # Nothing to normalize if no design block comment found anywhere
+    if not inner_bc and not pre_bc:
+        return snippet
+
+    # Rebuild fields from row metadata — row spec is authoritative when available.
+    # This prevents malformed Copilot comments (e.g. event containing "Test design / purpose:")
+    # from corrupting the final block comment.
+    # Operation is NAMESPACE METADATA ONLY — never used as When.
+    _row_cid = str(row.get("candidate_id") or row.get("id") or "").strip()
+    _row_event = str(row.get("event") or row.get("test_function") or "").strip()
+    _row_ei = str(row.get("expected_input") or "").strip()
+    _row_eo = str(row.get("expected_output") or "").strip()
+
+    if _row_cid:
+        fields["testcase_id"] = _row_cid
+    if _row_event:
+        fields["event"] = _row_event
+    _has_explicit_when = False
+    if _row_ei:
+        _rg, _rw = _extract_given_when(_row_ei)
+        if _rg:
+            fields["given"] = _rg
+        if _rw:
+            fields["when"] = _rw
+            _has_explicit_when = True
+        else:
+            # No explicit When in spec — clear any Operation-derived When from generated comment.
+            fields["when"] = ""
+    if _row_eo:
+        _rt = _extract_then(_row_eo)
+        if _rt:
+            fields["then"] = _rt
+
+    # Generate test_design from spec data if not already present
+    if not fields.get("test_design"):
+        _g1 = str(fields.get("given") or "").split(";")[0].strip()[:60].rstrip(".")
+        _t1 = str(fields.get("then") or "").split(";")[0].strip()[:80].rstrip(".")
+        if _t1 and _g1:
+            fields["test_design"] = f"Verify that {_t1} when {_g1}."
+        elif _t1:
+            fields["test_design"] = f"Verify that {_t1}."
+
+    canonical = _compact_block_comment(fields)
+
+    # Rebuild pre: remove old block comment
+    if pre_bc:
+        pre = pre.replace(pre_bc, "", 1).strip()
+
+    # Rebuild body: remove inner block comment and collapse leading blank lines to one newline
+    if inner_bc:
+        inner_clean = inner_text.replace(inner_bc, "", 1)
+        inner_clean = re.sub(r"^(\s*\n)+", "\n", inner_clean)
+        body = body[:head_end] + inner_clean
+
+    # Strip // When: body comment lines that were generated from Operation metadata.
+    # Operation is namespace-only — any // When: in the body is invalid unless the spec
+    # has an explicit executable When field.
+    if not _has_explicit_when:
+        inner_body = body[head_end:]
+        # Remove "// When: ..." line and the igsw_Main_Run(); call immediately following it
+        # (both are injected from Operation + default_main_function, not from executable spec).
+        inner_body = re.sub(
+            r"[ \t]*//[ \t]*When\s*:[^\n]*\n(?:[ \t]*igsw_Main_Run\s*\([^)]*\)\s*;\s*\n)?",
+            "",
+            inner_body,
+        )
+        body = body[:head_end] + inner_body
+
+    # Fill empty section labels
+    body = _fill_section_labels(
+        body,
+        str(fields.get("given") or ""),
+        str(fields.get("when") or ""),
+        str(fields.get("then") or ""),
+    )
+
+    # Reassemble: preserve @alex lines, then canonical block, then TEST_F
+    alex_lines: list[str] = []
+    other_lines: list[str] = []
+    for line in pre.splitlines():
+        (alex_lines if line.strip().startswith("// @alex:") else other_lines).append(line)
+
+    parts: list[str] = []
+    if alex_lines:
+        parts.append("\n".join(alex_lines))
+    if other_lines:
+        parts.append("\n".join(ln for ln in other_lines if ln.strip()))
+    parts.append(canonical)
+    parts.append(body.strip())
+
+    return "\n".join(parts)

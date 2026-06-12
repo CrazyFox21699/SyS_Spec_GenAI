@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import json
+import re
 
 from web.copilot_batch_codegen import (
     apply_copilot_batch_import,
@@ -53,14 +54,18 @@ def test_build_prompt_requires_sample_or_saved() -> None:
     bundle["ai_assists"] = {"code_style_samples": [{"label": "s", "snippet": "TEST_F(F, T) { igsw_Main_Run(); }"}]}
     ctx = collect_copilot_project_context(bundle, gtest_state)
     assert ctx["sample_blocks"]
-    prompt = build_copilot_batch_prompt(
+    built = build_copilot_batch_prompt(
         ctx,
         [{"candidate_id": "TC_A", "expected_input": "Given: X", "expected_output": "Then: Y"}],
     )
+    prompt = built["prompt"]
     assert "[TESTCASE_CODE]" in prompt
     assert "[UNRESOLVED]" in prompt
     # Compact prompt: grouping via "Generate ONLY these N testcase(s)"
     assert "Generate ONLY" in prompt or "regroup" in prompt or "Do not change grouping" in prompt
+    # tc_diagnostics returned per testcase
+    assert isinstance(built.get("tc_diagnostics"), list)
+    assert built["tc_diagnostics"][0]["testcase_id"] == "TC_A"
 
 
 def test_apply_marks_unresolved_error(tmp_path: Path) -> None:
@@ -126,7 +131,9 @@ def test_run_progress_records_failed_chunk_reason() -> None:
         )
 
     run = gtest_state["copilot_batch"]["run"]
-    assert out["summary"]["error"] == 2
+    # All API failures (timeout, auth, network) are now NEEDS_REVIEW with metadata only
+    assert out["summary"]["needs_review"] == 2
+    assert out["summary"]["error"] == 0
     assert run["failed_chunks"] == 1
     assert run["failed_chunk_reason"] == "graph timeout"
     assert run["failed_candidate_ids"] == ["TC_A", "TC_B"]
@@ -316,11 +323,11 @@ def test_run_batch_uses_copilot_reply_field(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Spec item 1: API timeout creates NEEDS_REVIEW fallback scaffold, not SAVED
+# Spec item 1: API timeout stores NEEDS_REVIEW metadata only — no scaffold code
 # ---------------------------------------------------------------------------
 
 def test_api_timeout_creates_needs_review_not_saved(tmp_path: Path) -> None:
-    """On m365_graph_timeout, fallback scaffold must be NEEDS_REVIEW and never SAVED."""
+    """On m365_graph_timeout, failure must be stored as NEEDS_REVIEW with no scaffold code."""
     bundle = _basic_bundle()
     gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
 
@@ -340,13 +347,15 @@ def test_api_timeout_creates_needs_review_not_saved(tmp_path: Path) -> None:
     draft = gtest_state["drafts"].get("TC_A") or {}
     assert draft.get("code_status") == "NEEDS_REVIEW", "timeout must produce NEEDS_REVIEW"
     assert draft.get("code_status") != "SAVED"
-    assert draft.get("is_fallback_scaffold") is True, "must be marked as fallback scaffold"
-    assert draft.get("fallback_reason"), "must include fallback_reason"
+    assert draft.get("is_fallback_scaffold") is False, "must NOT be marked as fallback scaffold"
+    assert draft.get("api_result_class") == "API_TIMEOUT", "must record API_TIMEOUT class"
+    assert not re.search(r"\bGTEST_SKIP\b", str(draft.get("full_snippet") or "")), "must not contain GTEST_SKIP"
+    assert not re.search(r"\bAlexGeneratedFallback\b", str(draft.get("full_snippet") or "")), "must not contain AlexGeneratedFallback"
     assert out["fallback_required"] is True
 
 
-def test_fallback_scaffold_is_visible_and_editable(tmp_path: Path) -> None:
-    """Fallback scaffold must have non-empty full_snippet (visible in editor)."""
+def test_api_timeout_stores_metadata_only_no_testcode(tmp_path: Path) -> None:
+    """API timeout draft must have empty snippet — failure stored as metadata, not fake code."""
     bundle = _basic_bundle()
     gtest_state: dict = {"drafts": {}, "project_code_config_cache": {}}
 
@@ -365,9 +374,10 @@ def test_fallback_scaffold_is_visible_and_editable(tmp_path: Path) -> None:
 
     draft = gtest_state["drafts"].get("TC_A") or {}
     snippet = draft.get("full_snippet") or draft.get("code_body") or ""
-    assert snippet.strip(), "fallback scaffold must have visible code content"
-    # New timeout fallback: short comment, no GTEST_SKIP dump (GTEST_SKIP only from _persist_review_scaffold)
-    assert "NEEDS_REVIEW" in snippet or "timed out" in snippet.lower() or draft.get("code_status") == "NEEDS_REVIEW"
+    assert not re.search(r"\bTEST(?:_F)?\s*\(", snippet), "timeout draft must not contain TEST/TEST_F"
+    assert not re.search(r"\bGTEST_SKIP\b", snippet), "timeout draft must not contain GTEST_SKIP"
+    assert draft.get("api_result_class") == "API_TIMEOUT"
+    assert draft.get("api_error_message"), "must store human-readable error message"
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +827,7 @@ reason: Missing required sample .cc / harness fixture / available API names.
 
 
 def test_unresolved_due_to_missing_sample_is_needs_review(tmp_path: Path) -> None:
-    """UNRESOLVED from Copilot → NEEDS_REVIEW + visible scaffold, not ERROR."""
+    """UNRESOLVED from Copilot → NEEDS_REVIEW + LOCAL_REVIEW_DRAFT (never empty editor, no GTEST_SKIP)."""
     bundle = {
         "test_candidates": [
             {
@@ -851,12 +861,17 @@ def test_unresolved_due_to_missing_sample_is_needs_review(tmp_path: Path) -> Non
     draft = gtest_state["drafts"].get("TC_A") or {}
     assert draft.get("code_status") == "NEEDS_REVIEW", \
         f"UNRESOLVED must be NEEDS_REVIEW, got {draft.get('code_status')}"
-    assert (draft.get("full_snippet") or draft.get("code_body") or "").strip(), \
-        "UNRESOLVED must produce visible scaffold code, not be empty"
+    snippet = (draft.get("full_snippet") or draft.get("code_body") or "").strip()
+    assert snippet, "UNRESOLVED must produce a LOCAL_REVIEW_DRAFT, not an empty editor"
+    assert "GTEST_SKIP" not in snippet, "UNRESOLVED must never produce GTEST_SKIP"
+    assert "AutoFixture" not in snippet, "UNRESOLVED must never synthesise AutoFixture"
+    assert "ALEX_REVIEW" in snippet, "UNRESOLVED review draft must contain // ALEX_REVIEW: comments"
+    assert (draft.get("api_diag") or {}).get("api_result_class") == "UNRESOLVED", \
+        "UNRESOLVED draft must carry api_result_class=UNRESOLVED in api_diag"
 
 
 def test_unresolved_produces_visible_scaffold(tmp_path: Path) -> None:
-    """UNRESOLVED scaffold must contain GTEST_SKIP or TODO_REVIEW so editor is not empty."""
+    """UNRESOLVED must produce a LOCAL_REVIEW_DRAFT (not empty editor, not GTEST_SKIP), NEEDS_REVIEW."""
     bundle = {
         "test_candidates": [
             {"id": "TC_B", "logic_id": "L1", "operation": {"given": []}, "expectation": []},
@@ -879,6 +894,10 @@ def test_unresolved_produces_visible_scaffold(tmp_path: Path) -> None:
         )
 
     draft = gtest_state["drafts"].get("TC_B") or {}
-    snippet = draft.get("full_snippet") or draft.get("code_body") or ""
-    assert snippet.strip(), "UNRESOLVED must leave visible scaffold in editor"
+    snippet = (draft.get("full_snippet") or draft.get("code_body") or "").strip()
+    assert snippet, "UNRESOLVED must produce a LOCAL_REVIEW_DRAFT, not an empty editor"
+    assert "GTEST_SKIP" not in snippet, "UNRESOLVED must never produce GTEST_SKIP"
+    assert "AutoFixture" not in snippet, "UNRESOLVED must never synthesise AutoFixture"
+    assert "ALEX_REVIEW" in snippet, "UNRESOLVED review draft must contain // ALEX_REVIEW: comments"
     assert draft.get("code_status") == "NEEDS_REVIEW"
+    assert (draft.get("api_diag") or {}).get("api_result_class") == "UNRESOLVED"

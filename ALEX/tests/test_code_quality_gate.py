@@ -56,12 +56,12 @@ def test_fallback_scaffold_detection() -> None:
     assert is_fallback_scaffold("") is False
 
 
-def test_fallback_scaffold_quality_gate_returns_needs_review() -> None:
-    """Quality gate on fallback scaffold must return WARNING (→ NEEDS_REVIEW), not PASS or FAIL."""
+def test_fallback_scaffold_quality_gate_returns_fail() -> None:
+    """Quality gate on fallback scaffold must return FAIL (→ ERROR) to block save."""
     qg = run_quality_gate(_FALLBACK_SCAFFOLD, candidate_id="TC_A")
-    assert qg["summary"] == "WARNING", "fallback scaffold must be WARNING, not SAVED"
+    assert qg["summary"] == "FAIL", "fallback scaffold must be FAIL so it cannot be saved"
     assert any(c["check_name"] == "fallback_scaffold" for c in qg["checks"])
-    assert quality_to_code_status(qg["summary"]) == "NEEDS_REVIEW"
+    assert quality_to_code_status(qg["summary"]) == "ERROR"
 
 
 def test_fallback_scaffold_not_saved() -> None:

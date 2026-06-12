@@ -1030,7 +1030,11 @@ function m365AuthBadge(m) {
   if (!m) return `<span class="auth-badge auth-badge--warn">LOADING</span>`;
   if (m.api_ready || m.connected) {
     if (m.copilot_chat_entitled === false) {
-      const label = m.not_entitled_reason === "msa" ? "MSA (NO API)" : "NO LICENSE";
+      let label;
+      if (m.not_entitled_reason === "msa") label = "MSA (NO API)";
+      else if (m.not_entitled_reason === "no_copilot_license") label = "NO LICENSE";
+      else if (m.not_entitled_reason === "api_reachable_probe_failed") label = "API UNCERTAIN";
+      else label = "LICENSE UNKNOWN";
       return `<span class="auth-badge auth-badge--warn" title="${esc(m.entitlement_note || "Copilot Chat API not entitled")}">${label}</span>`;
     }
     if (m.copilot_api_probe_ok === true) {
@@ -1051,14 +1055,24 @@ function renderM365EntitlementBanner(m, { compact = false } = {}) {
   if (!m || m.copilot_chat_entitled !== false || !(m.api_ready || m.connected)) {
     return "";
   }
-  const reasonText =
-    m.not_entitled_reason === "msa"
-      ? "Personal Microsoft account — Microsoft 365 Copilot Chat API is blocked. Use Apply locally, or sign in with a licensed work account on the Review tab."
-      : "No Microsoft 365 Copilot license assigned to this work account. Ask IT to add the SKU Microsoft_365_Copilot, or use Apply locally.";
+  let bannerTitle, reasonText;
+  if (m.not_entitled_reason === "msa") {
+    bannerTitle = "M365 Copilot API not entitled.";
+    reasonText = "Personal Microsoft account — Microsoft 365 Copilot Chat API is blocked. Use Apply locally, or sign in with a licensed work account on the Review tab.";
+  } else if (m.not_entitled_reason === "no_copilot_license") {
+    bannerTitle = "M365 Copilot API not entitled.";
+    reasonText = "No Microsoft 365 Copilot license assigned to this work account. Ask IT to add the SKU Microsoft_365_Copilot, or use Apply locally.";
+  } else if (m.not_entitled_reason === "api_reachable_probe_failed") {
+    bannerTitle = "Copilot API entitlement uncertain.";
+    reasonText = m.entitlement_note || "Copilot API was reachable but the generation test failed. Click Test Copilot API to retest.";
+  } else {
+    bannerTitle = "M365 Copilot API status unknown.";
+    reasonText = "License status could not be verified. Click Test Copilot API to check entitlement.";
+  }
   const guide = m.activation_guide_url || "README.md";
   const cls = compact ? "m365-entitlement-banner m365-entitlement-banner--compact" : "m365-entitlement-banner";
   return `<div class="${cls}" role="status">
-    <strong>M365 Copilot API not entitled.</strong>
+    <strong>${esc(bannerTitle)}</strong>
     <span class="detail"> ${esc(reasonText)}</span>
     <a class="detail" href="${esc(guide)}" target="_blank" rel="noreferrer">Activation guide</a>
   </div>`;
@@ -1443,8 +1457,9 @@ function refreshM365TaskBanner() {
   const running = tasks.filter((t) => t.status === "running");
   const done = tasks.filter((t) => t.status === "completed" && !t._seen);
   const failed = tasks.filter((t) => (t.status === "failed" || t.status === "cancelled") && !t._seen);
+  const missing = tasks.filter((t) => t.status === "MISSING" && !t._seen);
 
-  if (!running.length && !done.length && !failed.length) {
+  if (!running.length && !done.length && !failed.length && !missing.length) {
     host.hidden = true;
     host.innerHTML = "";
     return;
@@ -1497,6 +1512,15 @@ function refreshM365TaskBanner() {
         <span class="tag error">Lỗi</span>
         <span>${esc(m365TaskLabel(t))}${cat ? ` [${esc(cat)}]` : ""}: ${esc(detail)}</span>
         ${viewBtn}
+        <button type="button" class="btn secondary btn-inline" data-m365-dismiss="${esc(t.task_id)}">Đóng</button>
+      </div>`
+    );
+  });
+  missing.forEach((t) => {
+    lines.push(
+      `<div class="m365-task-banner__row m365-task-banner__row--failed">
+        <span class="tag error">Không tìm thấy</span>
+        <span>${esc(m365TaskLabel(t))}: Generation task no longer exists. Please retry.</span>
         <button type="button" class="btn secondary btn-inline" data-m365-dismiss="${esc(t.task_id)}">Đóng</button>
       </div>`
     );
@@ -1658,6 +1682,12 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
     if (kind === "code_copilot_batch") {
       const drafts = state.testCode.workspace?.drafts || {};
       const tc = state.testCode;
+      // Clear empty stashed edits for TCs that now have fresh code so workspace draft shows
+      for (const [cid, draft] of Object.entries(drafts)) {
+        if (String(draft?.full_snippet || draft?.code_body || "").trim() && tc.stashedEdits?.[cid] === "") {
+          delete tc.stashedEdits[cid];
+        }
+      }
       Object.entries(tc.generateStatus || {}).forEach(([cid, st]) => {
         if (st === "confirmed") return;
         if (st === "running" || st === "queued") {
@@ -1675,6 +1705,13 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
     if (kind === "code_copilot_batch" && state.jobId) {
       try {
         const drafts = state.testCode.workspace?.drafts || {};
+        const newMap = { ...(state.testCode.missingContextMap || {}) };
+        // Clear stale map entries for SAVED candidates and candidates that now have TEST_F code
+        for (const [cid, draft] of Object.entries(drafts)) {
+          const cs = String(draft?.code_status || "").toUpperCase();
+          const hasCode = /\bTEST(?:_F)?\s*\(/.test(String(draft?.full_snippet || draft?.code_body || ""));
+          if (cs === "SAVED" || hasCode) delete newMap[cid];
+        }
         const needsReviewIds = Object.entries(drafts)
           .filter(([, d]) => ["NEEDS_REVIEW", "ERROR"].includes(String(d?.code_status || "").toUpperCase()))
           .map(([cid]) => cid)
@@ -1685,12 +1722,13 @@ async function handleM365TaskComplete(task, { fromView = false } = {}) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ candidate_ids: needsReviewIds }),
           });
-          const newMap = { ...(state.testCode.missingContextMap || {}) };
           for (const rep of mData.reports || []) {
             if (rep.has_issues) newMap[rep.candidate_id] = rep.missing_items;
+            else delete newMap[rep.candidate_id];
           }
-          state.testCode.missingContextMap = newMap;
+          if (mData.memory_diagnostics) state.testCode.memoryDiagnostics = mData.memory_diagnostics;
         }
+        state.testCode.missingContextMap = newMap;
       } catch (_) { /* non-fatal */ }
     }
     if (state.currentPageId === "test-code") {
@@ -1829,10 +1867,12 @@ function pollM365Tasks() {
           if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
           patchTestCodeCaseStatusUi();
         }
-        if (st.status === "completed" || st.status === "failed" || st.status === "cancelled") {
+        if (st.status === "completed" || st.status === "failed" || st.status === "cancelled" || st.status === "MISSING") {
           state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
           persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
-          if (st.status === "completed") await handleM365TaskComplete(state.m365Tasks.byId[id]);
+          if (st.status === "MISSING") {
+            /* Task expired or backend restarted — stop polling, do not overwrite existing draft */
+          } else if (st.status === "completed") await handleM365TaskComplete(state.m365Tasks.byId[id]);
           else if (st.status === "failed" && (st.kind === "code_generate" || st.kind === "code_refine")) {
             setTestCodeApiStatus("failed", st.error || st.result?.error || "Generation failed");
             const normalized = normalizeTestCodeTaskResult(state.m365Tasks.byId[id]);
@@ -1888,16 +1928,22 @@ async function resumeM365Tasks() {
   if (!state.jobId) return;
   const ids = readM365TaskIds(state.jobId);
   if (!ids.length) return;
-  state.m365Tasks.activeIds = ids;
+  state.m365Tasks.activeIds = [...ids];
   for (const id of ids) {
     try {
       const st = await api(
         `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`
       );
-      state.m365Tasks.byId[id] = st;
-      if (st.status === "completed") await handleM365TaskComplete(st);
+      if (st.status === "MISSING") {
+        /* Task gone (backend restarted or expired) — prune from active list, don't resume polling */
+        state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
+        persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+      } else {
+        state.m365Tasks.byId[id] = st;
+        if (st.status === "completed") await handleM365TaskComplete(st);
+      }
     } catch (_) {
-      /* task may be gone */
+      /* network error — leave in activeIds so pollM365Tasks can retry */
     }
   }
   refreshM365TaskBanner();
@@ -3703,6 +3749,7 @@ function workbookColumns(language) {
     { key: "no", label: "No", editable: false, colClass: "col-no" },
     { key: "candidate_id", label: "TestCase ID", editable: false, colClass: "col-tcid" },
     { key: "test_function", label: "Test Function", editable: true, colClass: "col-fn" },
+    { key: "test_group", label: "Test Group", editable: false, colClass: "col-tg" },
     { key: "event", label: "Event", editable: true },
     { key: "use_case", label: "UseCase", editable: true, multiline: true, colClass: "col-usecase" },
     { key: "operation", label: "Operation", editable: true, multiline: true, colClass: "col-op" },
@@ -3871,7 +3918,13 @@ function m365KnowledgeBlockReason() {
     if (st.not_entitled_reason === "msa") {
       return "Tài khoản Microsoft cá nhân — Copilot API không khả dụng. Dùng tài khoản công ty có license Copilot.";
     }
-    return "Tài khoản chưa có license Microsoft 365 Copilot — liên hệ IT.";
+    if (st.not_entitled_reason === "no_copilot_license") {
+      return "Tài khoản chưa có license Microsoft 365 Copilot — liên hệ IT.";
+    }
+    if (st.not_entitled_reason === "api_reachable_probe_failed") {
+      return "Copilot API có thể truy cập nhưng test thất bại — nhấn Test Copilot API để kiểm tra lại.";
+    }
+    return "Trạng thái license không rõ — nhấn Test Copilot API để kiểm tra.";
   }
   if (st.copilot_api_probe_ok === false) {
     return (
@@ -4890,11 +4943,12 @@ const WORKBOOK_SPREADSHEET_COL_WIDTHS = {
   no: "3rem",
   candidate_id: "7.5rem",
   test_function: "9rem",
-  event: "9rem",
-  use_case: "12%",
-  operation: "12%",
-  expected_input: "18%",
-  expected_output: "18%",
+  test_group: "9rem",
+  event: "7rem",
+  use_case: "7%",
+  operation: "14%",
+  expected_input: "20%",
+  expected_output: "20%",
   review_status: "7rem",
   engineer_confirmation_required: "7.75rem",
   open_questions: "11rem",
@@ -7319,6 +7373,7 @@ async function fetchGtestWorkspace(force = false) {
   state.testCode.variableMapDraft = { ...(data.code_variable_map || {}) };
   state.testCode.harnessDraft = { ...(data.harness || {}) };
   state.testCode.codeStyleSamples = data.code_style_samples || [];
+  if (data.group_mapping) state.testCode.groupMapping = data.group_mapping;
   if (data.copilot_batch?.last_results) {
     state.testCode.batchResults = data.copilot_batch.last_results;
     state.testCode.batchSummary = summarizeBatchWorkflowResults(state.testCode.batchResults);
@@ -7409,15 +7464,20 @@ async function switchTestCodeCandidate(candidateId, rows = state.testCode.rows |
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidate_ids: [candidateId] }),
       }).then((mData) => {
+        if (mData.memory_diagnostics) state.testCode.memoryDiagnostics = mData.memory_diagnostics;
         const rep = (mData.reports || []).find((r) => r.candidate_id === candidateId);
         if (rep?.has_issues) {
           state.testCode.missingContextMap = { ...(state.testCode.missingContextMap || {}), [candidateId]: rep.missing_items };
-          // Re-render IO context to show the report
-          const strip = document.getElementById("testcode-io-context");
-          const currentRow = (state.testCode.rows || []).find((r) => r.candidate_id === candidateId);
-          if (strip && currentRow) strip.outerHTML = renderTestCodeIoContext(currentRow);
-          bindMissingContextPanelHandlers(state.testCode.rows || [], document.getElementById("testcode-status"));
+        } else {
+          const m = { ...(state.testCode.missingContextMap || {}) };
+          delete m[candidateId];
+          state.testCode.missingContextMap = m;
         }
+        // Re-render IO context to show updated report
+        const strip = document.getElementById("testcode-io-context");
+        const currentRow = (state.testCode.rows || []).find((r) => r.candidate_id === candidateId);
+        if (strip && currentRow) strip.outerHTML = renderTestCodeIoContext(currentRow);
+        bindMissingContextPanelHandlers(state.testCode.rows || [], document.getElementById("testcode-status"));
       }).catch(() => {});
     }
     if (statusEl) statusEl.textContent = "Testcase loaded.";
@@ -7701,7 +7761,7 @@ function testCodeWorkflowTagClass(wf) {
 
 function testCodeAvailabilityStatus(candidateId) {
   const draft = getTestCodeDraftRecord(candidateId);
-  return state.testCode.generateStatus?.[candidateId] === "confirmed" || draft.engineer_approved
+  return state.testCode.generateStatus?.[candidateId] === "confirmed" || draft.exportable || draft.engineer_approved
     ? "AVAILABLE"
     : "OPEN";
 }
@@ -8702,9 +8762,15 @@ function renderTestCodeMemoryEditor() {
   const memBadgeClass = memDirty ? "tag warning" : (source === "global" ? "tag ok" : "");
   const hasMem = (mem || "").trim().length > 60;
   const sampleOk = (tc.codeStyleSamples || []).length > 0 || String(tc.samplePasteDraft || "").trim();
+  // Memory diagnostics (populated by missing-context API call)
+  const diag = tc.memoryDiagnostics || {};
+  const diagText = diag.chars > 0
+    ? `chars: ${diag.chars} · fixture: ${diag.fixture_found ? "✓" : "✗"} · input rules: ${diag.input_rules ?? "?"} · output rules: ${diag.output_rules ?? "?"}`
+    : "";
   return `<div class="alex-testcode-memory" id="testcode-memory-section">
     <label class="detail">Project Test Code Memory
       <span id="testcode-memory-source-badge" class="${memBadgeClass} detail" style="margin-left:0.5rem;font-weight:normal">Source: ${esc(memSourceText)}</span>
+      ${diagText ? `<span class="detail" style="margin-left:0.75rem;color:#888">${esc(diagText)}</span>` : ""}
     </label>
     <textarea id="testcode-memory-editor" class="gtest-input gtest-note alex-testcode-rules" rows="8" spellcheck="false" placeholder="# Project Test Code Memory
 ## Fixture / Test Style
@@ -8730,6 +8796,7 @@ function renderTestCodeMemoryEditor() {
       <button type="button" class="btn secondary btn-inline" data-rule-type="signal_mapping">+ Signal Mapping</button>
       <button type="button" class="btn secondary btn-inline" data-rule-type="forbidden_pattern">+ Forbidden</button>
       <button type="button" class="btn secondary btn-inline" data-rule-type="reviewer_note">+ Reviewer Note</button>
+      <button type="button" class="btn secondary btn-inline" data-rule-type="group_context">+ Group Context</button>
     </div>
     <div id="testcode-quick-add-form" style="display:none;margin-top:0.5rem;border:1px solid var(--border,#ccc);border-radius:4px;padding:0.5rem;background:var(--bg-card,#fafafa)"></div>
     ${hasMem ? "" : `<p class="detail" style="color:#888;margin-top:0.25rem">Memory is empty. Add rules or Extract Style from sample .cc to improve generation quality.</p>`}
@@ -9047,20 +9114,209 @@ function renderTestCodeProgressSummary(rows) {
 
 function renderTestCodeCaseRow(row, idx, activeId) {
   const cid = row.candidate_id || "";
-  const event = row.event || row.test_function || row.use_case || "";
-  const group = row.test_group || row.logic_id || "";
+  // Short title: Event preferred; Test Group as fallback
+  const shortTitle = row.event || row.test_group || "";
+  // Convert G001/G003 → TestGroup1/TestGroup3 prefix
+  const gNumStr = row.group_id ? (String(row.group_id).match(/^G0*(\d+)$/i)?.[1] ?? "") : "";
+  const displayCid = gNumStr ? `TestGroup${parseInt(gNumStr, 10)}_${cid}` : cid;
   const checked = state.testCode.generateSelection?.[cid] !== false;
   const genLabel = testCodeGenerateStatusLabel(cid);
-  const sub = [group ? `Group: ${group}` : "", genLabel].filter(Boolean).join(" · ");
   return `<div role="button" tabindex="0" class="alex-testcode-case-row ${cid === activeId ? "is-active" : ""}" data-testcode-generate="${esc(cid)}">
     <input type="checkbox" class="testcode-generate-cb" data-testcode-pick="${esc(cid)}" ${checked ? "checked" : ""} />
     ${renderTestCodeProgressMarker(cid)}
     <span class="alex-testcode-case-row__main">
-      <span><b>${idx + 1}.</b> <code>${esc(cid)}</code> ${esc(event)}</span>
-      ${sub ? `<span class="detail">${esc(sub)}</span>` : ""}
+      <span><b>${idx + 1}.</b> <code>${esc(displayCid)}</code> ${esc(shortTitle)}</span>
+      ${genLabel ? `<span class="detail">${esc(genLabel)}</span>` : ""}
     </span>
     ${renderTestCodeAvailabilityBadge(cid)}
   </div>`;
+}
+
+function renderGroupMappingTable(groups) {
+  const gids = Object.keys(groups || {});
+  if (!gids.length) return `<p class="detail" style="margin:0.25rem 0">No groups built yet.</p>`;
+  const rows = gids.map((gid) => {
+    const g = groups[gid];
+    const ns = esc(g.suggested_namespace || "");
+    const fx = esc(g.suggested_fixture_class || "");
+    const mf = esc(g.default_main_function || "");
+    return `<tr>
+      <td style="padding:0.15rem 0.3rem;white-space:nowrap"><code>${esc(gid)}</code></td>
+      <td style="padding:0.15rem 0.3rem;max-width:10em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.test_function || "")}">${esc(g.test_function || "—")}</td>
+      <td style="padding:0.15rem 0.3rem;max-width:10em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.event || "")}">${esc(g.event || "—")}</td>
+      <td style="padding:0.15rem 0.3rem;text-align:center">${g.tc_count ?? 0}</td>
+      <td style="padding:0.1rem 0.2rem"><input type="text" class="gtest-input grp-field" data-gid="${esc(gid)}" data-field="suggested_namespace" style="width:100%;min-width:8em;font-size:0.8em;padding:0.1rem 0.2rem" value="${ns}" /></td>
+      <td style="padding:0.1rem 0.2rem"><input type="text" class="gtest-input grp-field" data-gid="${esc(gid)}" data-field="suggested_fixture_class" style="width:100%;min-width:8em;font-size:0.8em;padding:0.1rem 0.2rem" value="${fx}" /></td>
+      <td style="padding:0.1rem 0.2rem"><input type="text" class="gtest-input grp-field" data-gid="${esc(gid)}" data-field="default_main_function" style="width:100%;min-width:8em;font-size:0.8em;padding:0.1rem 0.2rem" value="${mf}" /></td>
+    </tr>`;
+  }).join("");
+  return `<div style="overflow-x:auto;margin-bottom:0.25rem">
+    <table style="width:100%;border-collapse:collapse;font-size:0.8em">
+      <thead><tr style="border-bottom:1px solid var(--border,#ccc);text-align:left">
+        <th style="padding:0.15rem 0.3rem">ID</th>
+        <th style="padding:0.15rem 0.3rem">Test Function</th>
+        <th style="padding:0.15rem 0.3rem">Event</th>
+        <th style="padding:0.15rem 0.3rem">#</th>
+        <th style="padding:0.15rem 0.3rem">Namespace</th>
+        <th style="padding:0.15rem 0.3rem">Fixture</th>
+        <th style="padding:0.15rem 0.3rem">Main function</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderGroupMappingPanel() {
+  const tc = state.testCode;
+  const mapping = tc.groupMapping || {};
+  const groups = mapping.groups || {};
+  const total = mapping.total_groups || Object.keys(groups).length;
+  const expanded = tc.groupMappingExpanded ?? false;
+  const bodyHtml = total > 0
+    ? renderGroupMappingTable(groups) +
+      `<div style="margin-top:0.25rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn btn-inline" id="btn-save-group-mapping">Save Mapping</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-apply-group-mapping-to-drafts" title="Replace TEST_F fixture in existing drafts using Group Mapping — no Copilot call">Apply to Drafts</button>
+        <button type="button" class="btn secondary btn-inline" id="btn-rebuild-group-mapping">Rebuild</button>
+        <span class="detail" id="group-mapping-save-status" style="color:#666"></span>
+      </div>`
+    : `<p class="detail" style="margin:0.25rem 0;color:#666">No group mapping built yet.</p>
+       <button type="button" class="btn secondary btn-inline" id="btn-rebuild-group-mapping">Build group mapping</button>`;
+  return `<div id="testcode-group-mapping-panel" style="margin-bottom:0.5rem;border:1px solid var(--border,#e0e0e0);border-radius:4px;background:var(--bg-card,#fafafa)">
+    <div style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.5rem;cursor:pointer" id="testcode-group-mapping-header">
+      <span class="detail" style="font-weight:600;font-size:0.85em">Group Mapping / Test Context</span>
+      ${total ? `<span class="tag detail" style="font-size:0.72em;padding:0 0.25em">${total} group${total !== 1 ? "s" : ""}</span>` : ""}
+      <span style="margin-left:auto;font-size:0.8em;color:#888">${expanded ? "▴" : "▾"}</span>
+    </div>
+    <div id="testcode-group-mapping-body" style="padding:0 0.5rem 0.4rem;display:${expanded ? "block" : "none"}">
+      ${bodyHtml}
+    </div>
+  </div>`;
+}
+
+function refreshGroupMappingPanel() {
+  const panel = $("#testcode-group-mapping-panel");
+  if (!panel) return;
+  const wasExpanded = state.testCode.groupMappingExpanded ?? false;
+  panel.outerHTML = renderGroupMappingPanel();
+  if (wasExpanded) bindGroupMappingHandlers();
+}
+
+function bindGroupMappingHandlers() {
+  const tc = state.testCode;
+  const statusEl = $("#testcode-status");
+
+  const header = $("#testcode-group-mapping-header");
+  if (header && !header._gmBound) {
+    header._gmBound = true;
+    header.addEventListener("click", () => {
+      tc.groupMappingExpanded = !(tc.groupMappingExpanded ?? false);
+      const body = $("#testcode-group-mapping-body");
+      const chevron = header.querySelector("span:last-child");
+      if (body) body.style.display = tc.groupMappingExpanded ? "block" : "none";
+      if (chevron) chevron.textContent = tc.groupMappingExpanded ? "▴" : "▾";
+    });
+  }
+
+  bindClick("#btn-apply-group-mapping-to-drafts", async () => {
+    const saveStatus = $("#group-mapping-save-status");
+    try {
+      if (saveStatus) saveStatus.textContent = "Applying…";
+      const data = await api(
+        `/api/review/testcode-group-mapping/apply-to-drafts?job_id=${encodeURIComponent(state.jobId)}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }
+      );
+      if (!data.ok) throw new Error(data.error || "Apply failed");
+      // Reload workspace to pick up updated drafts
+      const wsData = await api(`/api/review/gtest-workspace?job_id=${encodeURIComponent(state.jobId)}`);
+      if (wsData?.workspace) tc.workspace = wsData.workspace;
+      else if (wsData?.workbench_rows) { (tc.workspace = tc.workspace || {}).workbench_rows = wsData.workbench_rows; (tc.workspace || {}).drafts = wsData.drafts || tc.workspace?.drafts; }
+      if (saveStatus) saveStatus.textContent = `Applied: ${data.updated} updated, ${data.skipped} skipped.`;
+      if (statusEl) statusEl.textContent = `Apply to Drafts: ${data.updated} fixture(s) replaced, ${data.skipped} skipped.`;
+      // Re-render currently selected TC if it was updated
+      const selCid = state.testCode.selectedCandidateId;
+      if (selCid && (data.detail || []).some((d) => d.candidate_id === selCid && d.status === "updated")) {
+        const ioCtx = $("#testcode-io-context");
+        const activeRow = (tc.workspace?.workbench_rows || []).find((r) => r.candidate_id === selCid);
+        if (ioCtx && activeRow) ioCtx.outerHTML = renderTestCodeIoContext(activeRow);
+      }
+    } catch (e) {
+      if (saveStatus) saveStatus.textContent = "";
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-rebuild-group-mapping", async () => {
+    const saveStatus = $("#group-mapping-save-status");
+    try {
+      if (saveStatus) saveStatus.textContent = "Building…";
+      const data = await api(`/api/review/testcode-group-mapping/build?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "POST",
+      });
+      if (!data.ok) throw new Error(data.error || "Build failed");
+      // Reload from disk
+      const mapData = await api(`/api/review/testcode-group-mapping?job_id=${encodeURIComponent(state.jobId)}`);
+      tc.groupMapping = mapData;
+      tc.groupMappingExpanded = true;
+      refreshGroupMappingPanel();
+      bindGroupMappingHandlers();
+      if (statusEl) statusEl.textContent = `Group mapping built: ${data.total_groups} group(s).`;
+    } catch (e) {
+      if (saveStatus) saveStatus.textContent = "";
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
+
+  bindClick("#btn-save-group-mapping", async () => {
+    const saveStatus = $("#group-mapping-save-status");
+    const edits = {};
+    document.querySelectorAll(".grp-field").forEach((inp) => {
+      const gid = inp.dataset.gid;
+      const field = inp.dataset.field;
+      if (!gid || !field) return;
+      if (!edits[gid]) edits[gid] = {};
+      edits[gid][field] = inp.value.trim();
+    });
+    try {
+      if (saveStatus) saveStatus.textContent = "Saving…";
+      const data = await api(`/api/review/testcode-group-mapping?job_id=${encodeURIComponent(state.jobId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groups: edits }),
+      });
+      if (!data.ok) throw new Error(data.error || "Save failed");
+      if (tc.groupMapping) tc.groupMapping.groups = data.groups || tc.groupMapping.groups;
+      // Clear stale missing_fixture from draft.missing_context for groups with fixture now set.
+      // Prevents the "Missing FIXTURE" panel from persisting after user maps a real fixture.
+      if (tc.workspace?.drafts) {
+        Object.entries(edits).forEach(([gid, gEdit]) => {
+          const fx = String(gEdit?.suggested_fixture_class || "").trim();
+          if (!fx) return;
+          const grpCids = (tc.groupMapping?.groups?.[gid]?.candidate_ids) || [];
+          grpCids.forEach((cid) => {
+            const draft = tc.workspace.drafts[cid];
+            if (!draft?.missing_context) return;
+            draft.missing_context = draft.missing_context.filter((m) => {
+              const mt = String(m.missing_type || m.type || "").toUpperCase();
+              return mt !== "FIXTURE" && mt !== "MISSING_FIXTURE";
+            });
+          });
+        });
+        // Re-render IO context for the currently selected TC if it was affected
+        const selCid = state.testCode.selectedCandidateId;
+        if (selCid) {
+          const ioCtx = $("#testcode-io-context");
+          const activeRow = (tc.workspace?.workbench_rows || []).find((r) => r.candidate_id === selCid);
+          if (ioCtx && activeRow) ioCtx.outerHTML = renderTestCodeIoContext(activeRow);
+        }
+      }
+      if (saveStatus) saveStatus.textContent = `Saved ${Object.keys(edits).length} group(s).`;
+      if (statusEl) statusEl.textContent = `Group mapping saved (${data.total_groups} groups).`;
+    } catch (e) {
+      if (saveStatus) saveStatus.textContent = "";
+      if (statusEl) statusEl.textContent = e.message;
+    }
+  });
 }
 
 function renderTestCodeCaseBar(rows) {
@@ -9068,9 +9324,21 @@ function renderTestCodeCaseBar(rows) {
   const activeId = state.testCode.selectedCandidateId || currentFocusRow(rows, "testcode")?.candidate_id;
   const dirty = state.testCode.dirtyMap?.[activeId];
   const visibleRows = testCodeRowOrder(rows);
-  const rowButtons = visibleRows
-    .map((row, idx) => renderTestCodeCaseRow(row, idx, activeId))
-    .join("");
+  // Group by test_group, preserving Excel row order within each group
+  const _tgOrder = [];
+  const _tgMap = {};
+  for (const _r of visibleRows) {
+    const _tg = _r.test_group || "";
+    if (!_tgMap[_tg]) { _tgOrder.push(_tg); _tgMap[_tg] = []; }
+    _tgMap[_tg].push(_r);
+  }
+  let _tgIdx = 0;
+  const rowButtons = _tgOrder.map((_tg) => {
+    const _hdr = _tg
+      ? `<div class="testcode-group-header" style="padding:0.15rem 0.5rem 0.05rem;font-size:0.78em;font-weight:600;color:#555;border-top:1px solid var(--border,#e0e0e0);margin-top:0.2rem">${esc(_tg)}</div>`
+      : "";
+    return _hdr + _tgMap[_tg].map((_r) => renderTestCodeCaseRow(_r, _tgIdx++, activeId)).join("");
+  }).join("");
   const allSelected = visibleRows.length > 0 && visibleRows.every((row) => state.testCode.generateSelection?.[row.candidate_id || ""] !== false);
   return `<div class="alex-testcode-step1-controls" data-tcase-scope="testcode">
     <label class="alex-testcode-select-all" title="Select / unselect all testcases"><input type="checkbox" id="testcode-select-all-toggle" aria-label="Select all testcases" ${allSelected ? "checked" : ""} /></label>
@@ -9173,7 +9441,18 @@ function testCodeIoTextareaRows(text, minRows = 12, maxRows = 80) {
 }
 
 function renderMissingContextPanel(missingItems) {
-  if (!missingItems || !missingItems.length) return "";
+  // Normalize both field-naming conventions:
+  //   analyze_missing_generation_context  → type, signal, suggested_action, rule_type
+  //   _parse_missing_context_blocks       → missing_type, signal_or_item, reason, suggested_rule_type
+  const normalized = (missingItems || []).map((item) => ({
+    type: item.type || item.missing_type || "",
+    signal: item.signal || item.signal_or_item || "",
+    fix: item.suggested_action || item.reason || item.description || "",
+    rule_type: item.rule_type || item.suggested_rule_type || "",
+  }));
+  // Drop items where all three display fields are blank
+  const validItems = normalized.filter((n) => n.type || n.signal || n.fix);
+  if (!validItems.length) return "";
   const RULE_TYPE_LABELS = {
     input_mock: "Input Rule",
     output_assertion: "Assertion Rule",
@@ -9183,21 +9462,33 @@ function renderMissingContextPanel(missingItems) {
     forbidden_pattern: "Forbidden",
     reviewer_note: "Reviewer Note",
   };
-  const rows = missingItems.map((item) => {
-    const rt = item.rule_type || "";
+  // Separate fixture-related items (review notes) from blocking items
+  const _FIXTURE_TYPES = new Set(["missing_fixture", "fixture_needs_review", "FIXTURE"]);
+  const blockingItems = validItems.filter((n) => !_FIXTURE_TYPES.has(n.type) && !_FIXTURE_TYPES.has((n.type || "").toUpperCase()));
+  const fixtureItems = validItems.filter((n) => _FIXTURE_TYPES.has(n.type) || _FIXTURE_TYPES.has((n.type || "").toUpperCase()));
+
+  const rows = validItems.map((n) => {
+    const rt = n.rule_type;
     const label = RULE_TYPE_LABELS[rt] || rt;
-    const btnHtml = rt
-      ? `<button type="button" class="btn secondary btn-inline" style="font-size:0.78em" data-quickadd-type="${esc(rt)}" data-quickadd-signal="${esc(item.signal || "")}">+ ${esc(label)}</button>`
+    const isFixture = _FIXTURE_TYPES.has(n.type) || _FIXTURE_TYPES.has((n.type || "").toUpperCase());
+    const typeColor = isFixture ? "#886600" : "#a00";
+    const btnHtml = rt && !isFixture
+      ? `<button type="button" class="btn secondary btn-inline" style="font-size:0.78em" data-quickadd-type="${esc(rt)}" data-quickadd-signal="${esc(n.signal)}">+ ${esc(label)}</button>`
       : "";
+    const displayType = isFixture ? "fixture (review note)" : n.type.replace(/_/g, " ");
     return `<tr>
-      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;white-space:nowrap;color:#a00">${esc(item.type?.replace(/_/g, " ") || "")}</td>
-      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0">${item.signal ? `<code>${esc(item.signal)}</code>` : "—"}</td>
-      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;color:#555">${esc(item.suggested_action || "")}</td>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;white-space:nowrap;color:${typeColor}">${esc(displayType)}</td>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0">${n.signal ? `<code>${esc(n.signal)}</code>` : "—"}</td>
+      <td class="detail" style="padding:0.1rem 0.4rem 0.1rem 0;color:#555">${esc(n.fix)}</td>
       <td style="padding:0.1rem 0">${btnHtml}</td>
     </tr>`;
   }).join("");
+  const headerLabel = blockingItems.length > 0
+    ? "Missing information for generation:"
+    : "Generation review notes (not blocking):";
+  const headerColor = blockingItems.length > 0 ? "#a55" : "#886600";
   return `<div id="testcode-missing-context-panel" style="background:#fff8f0;border:1px solid #f5a623;border-radius:4px;padding:0.4rem 0.5rem;margin-bottom:0.35rem">
-    <p class="detail" style="margin:0 0 0.2rem;font-weight:bold;color:#a55">Missing information for generation:</p>
+    <p class="detail" style="margin:0 0 0.2rem;font-weight:bold;color:${headerColor}">${esc(headerLabel)}</p>
     <table style="width:100%;border-collapse:collapse">
       <thead><tr>
         <th class="detail" style="text-align:left;color:#666;padding:0 0.4rem 0.1rem 0">Type</th>
@@ -9223,9 +9514,37 @@ function renderTestCodeIoContext(row) {
   const isFallback = draft.is_fallback_scaffold;
   const isEditing = state.testCode.editingTestcaseId === cid;
 
-  // Missing context report from draft or live analysis
-  const missingItems = draft.missing_context || state.testCode.missingContextMap?.[cid] || [];
-  const missingPanel = renderMissingContextPanel(missingItems);
+  // Compute diagnostics
+  const hasTestF = /\bTEST(?:_F)?\s*\(/.test(String(draft.full_snippet || draft.code_body || ""));
+  const rawMissingItems = draft.missing_context || state.testCode.missingContextMap?.[cid] || [];
+  const rawMissingCount = rawMissingItems.length;
+
+  // If code has TEST_F, suppress the missing-context panel — it reflects a prior generation
+  // failure and is no longer relevant now that code exists. Quality gate issues are shown separately.
+  let filteredMissing = rawMissingItems;
+  let missingPanelHiddenReason = "";
+  if (hasTestF) {
+    filteredMissing = [];
+    missingPanelHiddenReason = issueReason
+      ? `has_testf+issue_reason=${issueReason}`
+      : "has_testf+stale_map";
+  } else {
+    // Suppress missing_fixture if group mapping already has a fixture suggestion for this TC's group.
+    // Auto-suggested fixture values are usable — user can replace in Group Mapping table.
+    const _gid = row?.group_id || "";
+    const _grp = _gid ? ((state.testCode.groupMapping?.groups || {})[_gid] || null) : null;
+    if (_grp && String(_grp.suggested_fixture_class || "").trim()) {
+      const beforeLen = filteredMissing.length;
+      filteredMissing = filteredMissing.filter(
+        (item) => (item.type || item.missing_type || "") !== "missing_fixture"
+      );
+      if (filteredMissing.length < beforeLen) {
+        missingPanelHiddenReason = "group_mapping_has_fixture";
+      }
+    }
+  }
+  const filteredMissingCount = filteredMissing.length;
+  const missingPanel = renderMissingContextPanel(filteredMissing);
 
   const staleWarning = isStale
     ? `<p class="tag warning detail" id="testcode-stale-warning">⚠ Testcase content changed after code generation. Regenerate or review.</p>`
@@ -9254,7 +9573,11 @@ function renderTestCodeIoContext(row) {
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-edit-testcase">Edit Testcase</button>
     </div>`;
 
-  return `<div class="alex-testcode-io-context" id="testcode-io-context">
+  return `<div class="alex-testcode-io-context" id="testcode-io-context"
+    data-raw-missing="${rawMissingCount}"
+    data-filtered-missing="${filteredMissingCount}"
+    data-has-testf="${hasTestF}"
+    data-missing-panel-hidden="${esc(missingPanelHiddenReason)}">
     ${missingPanel}${staleWarning}${partialNote}${editingLabel}
     <label class="alex-testcode-io-block">Before (expected input)
       <textarea id="testcode-io-input" class="${taClass}" rows="${inputRows}" ${readonly} spellcheck="false" style="${taStyle}">${esc(row.expected_input || "")}</textarea>
@@ -9648,18 +9971,48 @@ function renderTestCodePageBody(rows, activeRow, draft, samples) {
           const selDraft = (state.testCode.workspace?.drafts || {})[cid] || {};
           const isFallback = selDraft.is_fallback_scaffold;
           const codeStatus = selDraft.code_status || "";
+          const apiClass = selDraft.api_diag?.api_result_class || "";
+          const isUnresolved = apiClass === "UNRESOLVED";
           if (!cid) return "";
           if (isFallback) {
             const reason = esc(selDraft.fallback_reason || "API timeout/failure");
             const detail = selDraft.fallback_error_detail ? `<details style="margin-top:0.25rem"><summary class="detail" style="cursor:pointer">Show API error detail</summary><pre style="white-space:pre-wrap;font-size:0.75em;max-height:8em;overflow:auto">${esc(selDraft.fallback_error_detail)}</pre></details>` : "";
             return `<div id="testcode-fallback-banner"><p class="tag warning detail">⚠ Fallback scaffold — API failure. Retry or edit before approval. Reason: ${reason}</p>${detail}</div>`;
           }
+          if (isUnresolved) {
+            const msg = esc(selDraft.unresolved_message || "Copilot API returned UNRESOLVED — no code generated.");
+            const copilotReason = selDraft.unresolved_copilot_reason ? `<br><span style="color:#666">Copilot reason: ${esc(selDraft.unresolved_copilot_reason)}</span>` : "";
+            const retryDiag = selDraft.api_diag || {};
+            const retryUsed = retryDiag.retry_used;
+            const retryClass = retryDiag.retry_result_class || "";
+            const retryLine = retryUsed ? `<br><span style="color:#666">Direct-code retry: ${esc(retryClass)} (${retryDiag.retry_prompt_chars || 0} chars)</span>` : "";
+            const smokeLine = retryUsed && retryDiag.smoke_mode ? `<br><span style="color:#666">Smoke: ${retryDiag.smoke_ok ? "OK (" + esc(retryDiag.smoke_mode) + " mode)" : "FAILED all variants"}</span>` : "";
+            const smokeSummary = selDraft.smoke_summary ? `<br><span style="color:#888;font-size:0.85em">${esc(selDraft.smoke_summary)}</span>` : "";
+            const retryRaw = retryUsed && retryDiag.retry_response_preview ? `<details style="margin-top:0.25rem"><summary class="detail" style="cursor:pointer;color:#666">Show direct-code retry response</summary><pre style="white-space:pre-wrap;font-size:0.75em;max-height:8em;overflow:auto">${esc(retryDiag.retry_response_preview)}</pre></details>` : "";
+            const promptPreview = selDraft.api_prompt_preview ? `<details style="margin-top:0.25rem"><summary class="detail" style="cursor:pointer;color:#666">Show API prompt preview (first 500 chars)</summary><pre style="white-space:pre-wrap;font-size:0.75em;max-height:8em;overflow:auto">${esc(selDraft.api_prompt_preview)}</pre></details>` : "";
+            const rawPreview = selDraft.api_raw_response_preview ? `<details style="margin-top:0.25rem"><summary class="detail" style="cursor:pointer;color:#666">Show raw API response preview</summary><pre style="white-space:pre-wrap;font-size:0.75em;max-height:8em;overflow:auto">${esc(selDraft.api_raw_response_preview)}</pre></details>` : "";
+            return `<div id="testcode-fallback-banner"><p class="tag warning detail">⚠ ${msg}${copilotReason}${retryLine}${smokeLine}${smokeSummary}</p>${retryRaw}${promptPreview}${rawPreview}</div>`;
+          }
           if (codeStatus === "NEEDS_REVIEW") return `<p class="tag warning detail" id="testcode-fallback-banner">Needs review — check quality warnings before approval.</p>`;
           if (!codeStatus || codeStatus === "NO_CODE") return `<p class="detail" id="testcode-fallback-banner">No code generated yet. Select testcase and click Generate.</p>`;
           return "";
         })()}
+        ${(() => {
+          const sd = (state.testCode.workspace?.drafts || {})[cid] || {};
+          const src = sd.generation_source || "";
+          const cs2 = sd.code_status || "";
+          const ir = sd.issue_reason || "";
+          const ac = sd.api_diag?.api_result_class || "";
+          if (!src && !cs2 && !ir && !ac) return "";
+          const parts = [];
+          if (src) parts.push(`Source: ${esc(src)}`);
+          if (cs2) parts.push(`Status: ${esc(cs2)}`);
+          if (ir) parts.push(`Issue: ${esc(ir)}`);
+          if (ac && ac !== cs2) parts.push(`API: ${esc(ac)}`);
+          return `<p class="detail" style="margin:0 0 0.2rem;color:#666;font-size:0.8em">${parts.join(" · ")}</p>`;
+        })()}
         <textarea id="testcode-code-editor" class="gtest-editor gtest-editor--main gtest-editor--tall" readonly spellcheck="false" placeholder="// Click a testcase to view its generated code here.">${esc(draft?.full_snippet || draft?.code_body || "")}</textarea>
-        <div id="testcode-clarification-label" style="display:${(state.testCode.showClarification || (state.testCode.workspace?.drafts || {})[cid]?.is_fallback_scaffold) ? "block" : "none"}">
+        <div id="testcode-clarification-label" style="display:${(state.testCode.showClarification || (state.testCode.workspace?.drafts || {})[cid]?.is_fallback_scaffold || (state.testCode.workspace?.drafts || {})[cid]?.api_diag?.api_result_class === "UNRESOLVED") ? "block" : "none"}">
           <label class="detail">Additional input for regenerate (optional)
             <textarea id="testcode-clarification-note" class="gtest-input gtest-note" rows="2" placeholder="e.g. use fixture X, assertion should check Y, mock RTE_Read_Z">${esc(state.testCode.clarificationNote || "")}</textarea>
           </label>
@@ -9822,7 +10175,7 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
   appendTestCodeStreamLine(`Generate selected started: ${ids.length} testcase(s).`);
   try {
     const projectInstruction = getTestCodeProjectInstruction();
-    appendTestCodeStreamLine(`Sending ${ids.length} selected testcase(s) to Copilot API with slim one-testcase prompts.`);
+    appendTestCodeStreamLine(`Sending ${ids.length} selected testcase(s) to Copilot API (full-context prompt with rules, fixture, matched code blocks).`);
     setTestCodeApiStatus("running");
     const started = await startM365Task({
       kind: "code_copilot_batch",
@@ -9878,10 +10231,14 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
       ids.forEach((cid) => {
         const r = byId[cid] || {};
         const st = String(r.workflow_status || r.code_status || "").toUpperCase();
-        tc.generateStatus[cid] = st === "ERROR" ? "failed" : "done";
+        tc.generateStatus[cid] = st === "ERROR" ? "failed" : st === "NEEDS_REVIEW" ? "fallback" : "done";
       });
       const firstDoneId = ids.find((cid) => byId[cid]) || ids[0] || "";
-      if (firstDoneId) forceOpenTestCodeCandidateInEditor(firstDoneId, rows, byId[firstDoneId]?.full_snippet || "");
+      if (firstDoneId) {
+        const snippet = byId[firstDoneId]?.full_snippet || "";
+        if (!snippet && tc.stashedEdits?.[firstDoneId] === "") delete tc.stashedEdits[firstDoneId];
+        forceOpenTestCodeCandidateInEditor(firstDoneId, rows, snippet);
+      }
       appendTestCodeStreamLine(`Generate selected completed.`);
     } else {
       const err = done.error || done.result?.error || done.status || "failed";
@@ -9935,59 +10292,107 @@ async function runSequentialTestCodeGeneration(rows, statusEl) {
 
 async function confirmCurrentTestCode(rows, statusEl) {
   const tc = state.testCode;
-  const cid = tc.selectedCandidateId;
-  if (!cid) {
+  // Collect IDs to confirm: checked boxes take priority, then the active row.
+  const selectedIds = selectedTestCodeGenerateIds(rows);
+  const activeId = tc.selectedCandidateId;
+  const idsToConfirm = selectedIds.length > 0 ? selectedIds : (activeId ? [activeId] : []);
+  if (!idsToConfirm.length) {
     if (statusEl) statusEl.textContent = "Select a testcase first.";
     return;
   }
-  const full = $("#testcode-code-editor")?.value || tc.stashedEdits?.[cid] || "";
-  if (!String(full).trim()) {
-    if (statusEl) statusEl.textContent = "No generated code to confirm.";
-    return;
+  if (statusEl) statusEl.textContent = `Confirming ${idsToConfirm.length} testcase(s)...`;
+
+  // When confirming exactly the active row, save the current editor content first.
+  const isSingleActive = idsToConfirm.length === 1 && idsToConfirm[0] === activeId;
+  if (isSingleActive) {
+    const full = (String($("#testcode-code-editor")?.value || tc.stashedEdits?.[activeId] || "")).trim();
+    if (!full) {
+      if (statusEl) statusEl.textContent = "No generated code to confirm.";
+      return;
+    }
+    const bodyStart = full.search(/\bTEST(?:_F)?\s*\(/);
+    const specBlock = bodyStart > 0 ? full.slice(0, bodyStart).trim() : "";
+    const codeBody = bodyStart >= 0 ? full.slice(bodyStart).trim() : full;
+    const draftPath = `/api/review/gtest-draft?job_id=${encodeURIComponent(state.jobId)}`;
+    const draftBody = {
+      draft_key: activeId,
+      source_kind: "candidate",
+      test_name: tc.draft?.test_name || activeId,
+      spec_comment_block: specBlock,
+      code_body: codeBody,
+      full_snippet: full,
+      engineer_edited: false,
+      code_status: "SAVED",
+      generation_source: "API",
+    };
+    const doSave = async (body) => {
+      const hdrs = { "Content-Type": "application/json" };
+      if (state.bundleVersion != null) hdrs["If-Match"] = String(state.bundleVersion);
+      const r = await fetch(draftPath, { method: "PUT", headers: hdrs, credentials: "same-origin", body: JSON.stringify(body) });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        const err = new Error(j?.detail || `HTTP ${r.status}`);
+        err.status = r.status;
+        throw err;
+      }
+      const data = await r.json();
+      if (data?.bundle_version != null) noteBundleVersion(data.bundle_version);
+      return data;
+    };
+    try {
+      await doSave(draftBody);
+    } catch (e) {
+      if (e.status !== 409) { if (statusEl) statusEl.textContent = `Save failed: ${e.message}`; return; }
+      try { await fetchGtestWorkspace(true); } catch (_) {}
+      try { await doSave({ ...draftBody, force_merge: true }); } catch (e2) {
+        if (statusEl) statusEl.textContent = `Save failed on retry: ${e2.message}`;
+        return;
+      }
+    }
   }
-  const bodyStart = String(full).search(/\bTEST(?:_F)?\s*\(/);
-  const specBlock = bodyStart > 0 ? full.slice(0, bodyStart).trim() : "";
-  const codeBody = bodyStart >= 0 ? full.slice(bodyStart).trim() : full;
-  if (statusEl) statusEl.textContent = `Confirming ${cid}...`;
+
+  // Call permissive confirm endpoint — backend force-merges so stale If-Match never 409s.
+  const confirmPath = `/api/review/testcode-confirm-selected?job_id=${encodeURIComponent(state.jobId)}`;
+  let data;
   try {
-    await api(`/api/review/gtest-draft?job_id=${encodeURIComponent(state.jobId)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        draft_key: cid,
-        source_kind: "candidate",
-        test_name: tc.draft?.test_name || cid,
-        spec_comment_block: specBlock,
-        code_body: codeBody,
-        full_snippet: full,
-        engineer_edited: false,
-        code_status: "SAVED",
-        generation_source: "API",
-      }),
-    });
-    await api(`/api/review/testcode-approve?job_id=${encodeURIComponent(state.jobId)}`, {
+    data = await api(confirmPath, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidate_ids: [cid] }),
+      body: JSON.stringify({ candidate_ids: idsToConfirm }),
     });
-    clearTestCodeDirty(cid, full);
-    clearTestCodeWorkflowError(cid);
-    if (!tc.generateStatus) tc.generateStatus = {};
-    tc.generateStatus[cid] = "confirmed";
-    invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
-    tc.workspace = await fetchGtestWorkspace(true);
-    if (!tc.workspace.drafts) tc.workspace.drafts = {};
-    if (!tc.workspace.drafts[cid]) tc.workspace.drafts[cid] = {};
-    tc.workspace.drafts[cid].engineer_approved = true;
-    tc.workspace.drafts[cid].code_status = "SAVED";
-    hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
-    tc.draft = resolveDraftForCandidate(cid);
-    applyTestCodeDraftToUi(tc.draft, rows.find((r) => r.candidate_id === cid));
-    appendTestCodeStreamLine(`${cid} confirmed.`);
-    if (statusEl) statusEl.textContent = `${cid} confirmed.`;
   } catch (e) {
-    if (statusEl) statusEl.textContent = e.message;
+    if (statusEl) statusEl.textContent = `Confirm failed: ${e.message}`;
+    return;
   }
+
+  // Update local workspace so AVAILABLE badge appears without a full reload.
+  if (data.bundle_version != null) noteBundleVersion(data.bundle_version);
+  invalidateApiCache(`gtest-ws:${state.jobId}:${state.exportLanguage || "EN"}`);
+  const confirmed = data.confirmed || [];
+  if (confirmed.length) {
+    tc.workspace = await fetchGtestWorkspace(true).catch(() => tc.workspace);
+    if (!tc.workspace.drafts) tc.workspace.drafts = {};
+    for (const cid of confirmed) {
+      if (!tc.workspace.drafts[cid]) tc.workspace.drafts[cid] = {};
+      tc.workspace.drafts[cid].exportable = true;
+      tc.workspace.drafts[cid].engineer_approved = true;
+      if (!tc.generateStatus) tc.generateStatus = {};
+      tc.generateStatus[cid] = "confirmed";
+    }
+    if (isSingleActive && activeId) {
+      clearTestCodeDirty(activeId, "");
+      clearTestCodeWorkflowError(activeId);
+      tc.draft = resolveDraftForCandidate(activeId);
+      applyTestCodeDraftToUi(tc.draft, rows.find((r) => r.candidate_id === activeId));
+    }
+    hydrateTestCodeWorkflowFromWorkspace(tc.workspace, { fullReset: false });
+    patchTestCodeCaseStatusUi();
+  }
+  let msg = `Confirmed: ${data.confirmed_count}/${data.selected_count}`;
+  if (data.skipped_empty_code?.length) msg += `. No code: ${data.skipped_empty_code.length}`;
+  if (data.skipped_no_draft?.length) msg += `. No draft: ${data.skipped_no_draft.length}`;
+  if (statusEl) statusEl.textContent = msg;
+  if (confirmed.length) appendTestCodeStreamLine(`Confirmed: ${confirmed.join(", ")}.`);
 }
 
 async function copySelectedTestCodeWebPrompt(rows, statusEl) {
@@ -10920,6 +11325,10 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     pattern: "Pattern / API name",
     reason: "Reason",
     note: "Note",
+    group_name: "Group name",
+    fixture_class: "Fixture class",
+    namespace: "Namespace (optional)",
+    main_function: "Main function (optional)",
   };
 
   const QUICK_ADD_PLACEHOLDERS = {
@@ -10937,6 +11346,10 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     pattern: "e.g. WaitMs()",
     reason: "e.g. not present in sample code",
     note: "e.g. If API uncertain, use TODO_REVIEW at missing line",
+    group_name: "e.g. Power mode / state behavior",
+    fixture_class: "e.g. TrytoDo",
+    namespace: "e.g. PowerMode",
+    main_function: "e.g. igsw_Main_Run()",
   };
 
   const QUICK_ADD_FIELDS_BY_TYPE = {
@@ -10947,6 +11360,7 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     signal_mapping: ["signal", "rte_api", "direction"],
     forbidden_pattern: ["pattern", "reason"],
     reviewer_note: ["note"],
+    group_context: ["group_name", "fixture_class", "namespace", "main_function", "note"],
   };
 
   const QUICK_ADD_LABELS = {
@@ -10957,6 +11371,7 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     signal_mapping: "API / Signal Mapping Rule",
     forbidden_pattern: "Forbidden Pattern",
     reviewer_note: "Reviewer Note / Learned Fix",
+    group_context: "Test Group Context",
   };
 
   function renderQuickAddForm(ruleType) {
@@ -11008,11 +11423,20 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
     const ruleType = _qaCurrentRuleType;
     const fields = getQuickAddFields(ruleType);
     try {
-      const data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rule_type: ruleType, fields, source_tag: true, preview_only: true }),
-      });
+      let data;
+      if (ruleType === "group_context") {
+        data = await api(`/api/review/testcode-group-context?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...fields, preview_only: true }),
+        });
+      } else {
+        data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rule_type: ruleType, fields, source_tag: true, preview_only: true }),
+        });
+      }
       _qaLastPreviewBullet = data.bullet || "";
       _qaLastConflicts = data.conflicts || [];
 
@@ -11023,8 +11447,13 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       const confirmBtn = $("#qa-btn-confirm");
 
       if (previewArea) previewArea.style.display = "block";
-      if (previewText) previewText.textContent = `- ${_qaLastPreviewBullet}`;
-      if (sectionLabel) sectionLabel.textContent = `→ Section: ${data.section || ""}`;
+      if (previewText) previewText.textContent = ruleType === "group_context"
+        ? _qaLastPreviewBullet
+        : `- ${_qaLastPreviewBullet}`;
+      const statusHint = ruleType === "group_context"
+        ? (data.is_duplicate ? " (no change — same values)" : data.is_update ? " (will update existing)" : " (will add new)")
+        : "";
+      if (sectionLabel) sectionLabel.textContent = `→ Section: ${data.section || ""}${statusHint}`;
 
       if (data.is_duplicate) {
         if (conflictArea) {
@@ -11063,18 +11492,27 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       ? (_qaLastConflicts[0]?.existing || "")
       : "";
     try {
-      const data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rule_type: ruleType,
-          fields,
-          source_tag: true,
-          preview_only: false,
-          force: forceMode === "force" || forceMode === "add_alt",
-          replace_existing: replaceExisting,
-        }),
-      });
+      let data;
+      if (ruleType === "group_context") {
+        data = await api(`/api/review/testcode-group-context?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...fields, preview_only: false }),
+        });
+      } else {
+        data = await api(`/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rule_type: ruleType,
+            fields,
+            source_tag: true,
+            preview_only: false,
+            force: forceMode === "force" || forceMode === "add_alt",
+            replace_existing: replaceExisting,
+          }),
+        });
+      }
       if (!data.ok && data.error !== "already_exists") {
         if (statusEl) statusEl.textContent = data.error || "Quick add failed.";
         return;
@@ -11086,14 +11524,95 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       if (el) el.value = tc.testcodeMemoryDraft || "";
       const form = $("#testcode-quick-add-form");
       if (form) { form.style.display = "none"; form.innerHTML = ""; }
-      // Clear cached missing context so report refreshes
+      // Re-analyze missing context for selected TC — only clear resolved items
       const selCid = tc.selectedCandidateId;
-      if (selCid && tc.missingContextMap) delete tc.missingContextMap[selCid];
-      if (statusEl) statusEl.textContent = data.ok
-        ? `Added to ${data.section || "memory"}.${data.conflicts?.length ? " ⚠ Conflict noted." : ""} Click testcase to refresh Missing Info report.`
-        : "Rule already exists — not added again.";
+      if (selCid) {
+        try {
+          const mData = await api(`/api/review/testcode-missing-context?job_id=${encodeURIComponent(state.jobId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_ids: [selCid] }),
+          });
+          if (mData.memory_diagnostics) tc.memoryDiagnostics = mData.memory_diagnostics;
+          const freshRep = (mData.reports || []).find((r) => r.candidate_id === selCid);
+          if (!tc.missingContextMap) tc.missingContextMap = {};
+          if (freshRep?.has_issues) {
+            tc.missingContextMap[selCid] = freshRep.missing_items;
+          } else {
+            delete tc.missingContextMap[selCid];
+          }
+          if (tc.workspace?.drafts?.[selCid]) delete tc.workspace.drafts[selCid].missing_context;
+        } catch (_) {
+          if (tc.missingContextMap) delete tc.missingContextMap[selCid];
+        }
+      }
+      refreshTestCodeIoPanel(rows);
+      if (statusEl) {
+        if (ruleType === "group_context") {
+          const grpName = data.group_name || fields.group_name || "";
+          statusEl.textContent = data.duplicate_detected
+            ? `Group context for "${grpName}" unchanged — same values.`
+            : data.merged_rule_updated
+            ? `Group context for "${grpName}" updated.`
+            : `Group context for "${grpName}" added.`;
+        } else {
+          statusEl.textContent = data.ok
+            ? `Added to ${data.section || "memory"}.${data.warning === "added_as_alternative" ? " ⚠ Stored as alternative." : data.conflicts?.length ? " ⚠ Conflict noted." : " Missing Input Report updated."}`
+            : "Rule already exists — not added again.";
+        }
+      }
     } catch (e) {
-      if (statusEl) statusEl.textContent = e.message;
+      const isConflict = String(e.message || "").includes("Someone else saved") ||
+        String(e.message || "").includes("someone else saved") ||
+        String(e.message || "").includes("refresh the page");
+      if (isConflict) {
+        // 409 bundle-version conflict — retry once without If-Match header via fetch()
+        // The backend loads fresh memory content each call, so the rule merges correctly.
+        try {
+          const retryUrl = ruleType === "group_context"
+            ? `/api/review/testcode-group-context?job_id=${encodeURIComponent(state.jobId)}`
+            : `/api/review/testcode-memory/quick-add?job_id=${encodeURIComponent(state.jobId)}`;
+          const retryBody = ruleType === "group_context"
+            ? JSON.stringify({ ...fields, preview_only: false })
+            : JSON.stringify({
+                rule_type: ruleType,
+                fields,
+                source_tag: true,
+                preview_only: false,
+                force: forceMode === "force" || forceMode === "add_alt",
+                replace_existing: replaceExisting,
+              });
+          const retryResp = await fetch(retryUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: retryBody,
+          });
+          if (!retryResp.ok) {
+            if (statusEl) statusEl.textContent = "Config changed. Reloaded latest version; please confirm again.";
+            return;
+          }
+          const retryData = await retryResp.json();
+          if (retryData.bundle_version != null) noteBundleVersion(retryData.bundle_version);
+          if (retryData.ok) {
+            tc.testcodeMemory = retryData.content || tc.testcodeMemory;
+            tc.testcodeMemoryDraft = retryData.content || tc.testcodeMemoryDraft;
+            tc.testcodeMemorySource = "local";
+            const el = $("#testcode-memory-editor");
+            if (el) el.value = tc.testcodeMemoryDraft || "";
+            const form = $("#testcode-quick-add-form");
+            if (form) { form.style.display = "none"; form.innerHTML = ""; }
+            refreshTestCodeIoPanel(rows);
+            if (statusEl) statusEl.textContent = `Added to ${retryData.section || "memory"} (conflict resolved on retry).`;
+          } else {
+            if (statusEl) statusEl.textContent = "Config changed. Reloaded latest version; please confirm again.";
+          }
+        } catch (_) {
+          if (statusEl) statusEl.textContent = "Config changed. Reloaded latest version; please confirm again.";
+        }
+      } else {
+        if (statusEl) statusEl.textContent = e.message;
+      }
     }
   }
 
@@ -11108,6 +11627,13 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       if (!form) return;
       form.innerHTML = renderQuickAddForm(ruleType);
       form.style.display = "block";
+      // Auto-fill group_name from selected testcase's test_group
+      if (ruleType === "group_context") {
+        const selectedRow = (rows || tc.rows || []).find((r) => r.candidate_id === tc.selectedCandidateId);
+        const groupName = selectedRow ? (selectedRow.test_group || "") : "";
+        const gnEl = $("#qa-field-group_name");
+        if (gnEl && groupName) gnEl.value = groupName;
+      }
       // Focus first input
       form.querySelector("input")?.focus();
       // Bind form actions
@@ -12356,6 +12882,7 @@ function bindTestCodeHandlers(rows) {
   bindTestCodeConfigBundleHandlers(rows, statusEl);
   bindTestCodeMappingFixHandlers(rows, statusEl);
   bindTestCodeReviewActionHandlers(rows, statusEl);
+  bindGroupMappingHandlers();
 }
 
 function refreshTestCodeIoPanel(rows) {

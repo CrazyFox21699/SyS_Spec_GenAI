@@ -2011,3 +2011,46 @@ tr.source-row:hover td { background: var(--surface-hover); }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── Group Mapping panel — dark mode ── */
+:root[data-theme="dark"] #testcode-group-mapping-panel {
+  background: var(--surface-raised) !important;
+  border-color: var(--border-subtle) !important;
+}
+:root[data-theme="dark"] #testcode-group-mapping-header {
+  color: var(--text-primary);
+}
+:root[data-theme="dark"] #testcode-group-mapping-header span {
+  color: var(--text-secondary) !important;
+}
+:root[data-theme="dark"] #testcode-group-mapping-body table th {
+  color: var(--text-secondary) !important;
+  border-color: var(--border-subtle) !important;
+}
+:root[data-theme="dark"] #testcode-group-mapping-body table thead tr {
+  border-color: var(--border-subtle) !important;
+}
+:root[data-theme="dark"] #testcode-group-mapping-body table td {
+  color: var(--text-primary) !important;
+}
+:root[data-theme="dark"] #testcode-group-mapping-body table td code {
+  color: var(--accent) !important;
+}
+:root[data-theme="dark"] #group-mapping-save-status {
+  color: var(--text-secondary) !important;
+}
+
+/* ── Missing context panel — dark mode ── */
+:root[data-theme="dark"] #testcode-missing-context-panel {
+  background: var(--status-warn-bg) !important;
+  border-color: var(--status-warn) !important;
+}
+:root[data-theme="dark"] #testcode-missing-context-panel p {
+  color: var(--status-warn) !important;
+}
+:root[data-theme="dark"] #testcode-missing-context-panel th {
+  color: var(--text-muted) !important;
+}
+:root[data-theme="dark"] #testcode-missing-context-panel td {
+  color: var(--text-primary) !important;
+}

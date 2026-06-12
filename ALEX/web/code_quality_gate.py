@@ -115,8 +115,8 @@ def run_quality_gate(
         _check(
             checks,
             name="fallback_scaffold",
-            severity="WARNING",
-            message="Fallback scaffold — replace with project-specific code before approval",
+            severity="FAIL",
+            message="GTEST_SKIP fallback scaffold detected — this is auto-generated failure code, not real test code. Regenerate.",
             candidate_id=cid,
         )
         return _finalize(checks)

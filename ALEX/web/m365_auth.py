@@ -606,6 +606,12 @@ def _entitlement_note(sess: dict[str, Any]) -> str:
             "Work/school account detected, but no Microsoft 365 Copilot license is assigned. "
             "Ask IT to add the SKU `Microsoft_365_Copilot` (see README.md)."
         )
+    if sess.get("copilot_api_reachable") and sess.get("copilot_api_probe_ok") is False:
+        cat = str(sess.get("copilot_api_reachable_error_category") or "generation_failed")
+        return (
+            f"Copilot API reachable (last error: {cat}). "
+            "Click Test Copilot API to confirm entitlement."
+        )
     if sess.get("copilot_api_probe_ok") is False:
         err = str(sess.get("copilot_api_probe_error") or "").strip()
         return (
@@ -646,9 +652,16 @@ def is_copilot_chat_entitled(sess: dict[str, Any] | None = None) -> bool:
         return False
     if sess.get("copilot_license_checked") and not sess.get("has_copilot_license"):
         return False
-    if sess.get("copilot_api_probe_ok") is False:
+    if sess.get("copilot_api_probe_ok") is False and not sess.get("copilot_api_reachable"):
         return False
     return True
+
+
+# Error categories that prove the Graph Copilot API was reached even if the call failed.
+_REACHABLE_ERROR_CATEGORIES: frozenset[str] = frozenset({
+    "api_chat_500_conversation_object",
+    "m365_copilot_api",
+})
 
 
 def record_copilot_api_probe(
@@ -659,6 +672,7 @@ def record_copilot_api_probe(
     reason: str = "",
     graph_status: int = 0,
     user_id: str | None = None,
+    error_category: str = "",
 ) -> None:
     """Persist Graph Copilot conversation probe result into the M365 session."""
     sess = _read_session(user_id)
@@ -666,6 +680,12 @@ def record_copilot_api_probe(
     sess["copilot_api_probe_at"] = _now_iso()
     sess["copilot_api_probe_error"] = str(error or "")
     sess["copilot_api_probe_graph_status"] = int(graph_status or 0)
+    if ok:
+        sess["copilot_api_reachable"] = True
+        sess["copilot_api_reachable_error_category"] = ""
+    elif str(error_category) in _REACHABLE_ERROR_CATEGORIES:
+        sess["copilot_api_reachable"] = True
+        sess["copilot_api_reachable_error_category"] = str(error_category)
     if not ok:
         if reason == "msa":
             sess["is_msa"] = True
@@ -959,6 +979,7 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
     is_msa = bool(sess.get("is_msa"))
     license_checked = bool(sess.get("copilot_license_checked"))
     has_license = bool(sess.get("has_copilot_license"))
+    copilot_api_reachable = bool(sess.get("copilot_api_reachable"))
     copilot_chat_entitled = api_ready and is_copilot_chat_entitled(sess)
     not_entitled_reason = ""
     if api_ready and not copilot_chat_entitled:
@@ -966,6 +987,8 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
             not_entitled_reason = "msa"
         elif license_checked and not has_license:
             not_entitled_reason = "no_copilot_license"
+        elif copilot_api_reachable:
+            not_entitled_reason = "api_reachable_probe_failed"
         else:
             not_entitled_reason = "unknown"
     entitlement_note = _entitlement_note(sess) if api_ready else ""
@@ -1002,9 +1025,17 @@ def m365_status(cfg: dict[str, Any] | None = None, *, user_id: str | None = None
         "copilot_api_probe_ok": probe_ok,
         "copilot_api_probe_at": probe_at,
         "copilot_api_probe_error": probe_error,
+        "copilot_api_reachable": copilot_api_reachable,
+        "copilot_api_reachable_error_category": str(sess.get("copilot_api_reachable_error_category") or ""),
         "copilot_scopes_granted": copilot_scopes_granted,
         "not_entitled_reason": not_entitled_reason,
         "entitlement_note": entitlement_note,
+        "license_status": (
+            "msa" if is_msa
+            else "assigned" if (license_checked and has_license)
+            else "not_assigned" if (license_checked and not has_license)
+            else "unknown"
+        ),
         "client_id_preview": f"{resolved_cid[:8]}…" if len(resolved_cid) > 8 else "",
         "client_secret_configured": client_secret_configured(cfg) if cfg else False,
         "local_client_id": str(local.get("client_id") or ""),

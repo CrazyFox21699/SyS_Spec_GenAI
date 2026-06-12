@@ -130,7 +130,7 @@ def test_import_jp_testspec_fills_merged_group_columns(tmp_path: Path) -> None:
     assert len(imported["test_candidates"]) == 2
     second = imported["test_candidates"][1]
     assert second["test_function"] == "PowerModeON**"
-    assert second["event"] == "Auto P response within T7"
+    assert second["event"] == "Auto P response within T7"  # fill-down within same TF/TG block
     overlay = imported["candidate_overlays"][second["id"]]
     assert overlay["test_group"] == "ADM1_ON state → ADM1_OFF state transition"
     assert overlay["jp"]["use_case"] == "正常"
@@ -188,6 +188,60 @@ def test_bootstrap_from_bundle_dict_adds_synthetic_logic() -> None:
     )
     assert bundle["bootstrap_source"] == "imported_yaml"
     assert any(b.get("id") == "imported_KCC_signal" for b in bundle["logic_blocks"])
+
+
+def test_import_jp_testspec_event_backfill_from_middle_row(tmp_path: Path) -> None:
+    """Event in middle of a TF+TG block must backfill to rows before it (two-pass)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "EventBackfill"
+    ws.append(["No", "機能テスト", "テストグループ", "イベント", "ユーザケース", "手順",
+               "入力に対する期待値", "出力に対する期待値"])
+    # Row 1: TF/TG set, Event BLANK
+    ws.append([1, "FnA", "GroupX", "", "Normal", "op1", "Given: SIG=1", "Then: OUT=1"])
+    # Row 2: TF/TG blank (visual group), Event present
+    ws.append([2, "", "", "EventMid", "", "op2", "Given: SIG=2", "Then: OUT=2"])
+    # Row 3: TF/TG blank, Event blank — should get EventMid too
+    ws.append([3, "", "", "", "", "op3", "Given: SIG=3", "Then: OUT=3"])
+    # Row 4: different TF — new block, must NOT get EventMid
+    ws.append([4, "FnB", "GroupY", "OtherEvent", "Normal2", "op4", "Given: SIG=4", "Then: OUT=4"])
+    xlsx = tmp_path / "EventBackfill.xlsx"
+    wb.save(xlsx)
+    imported = import_customer_testspec_workbook(xlsx, language="JP")
+    cands = imported["test_candidates"]
+    assert len(cands) == 4
+    events = [c["event"] for c in cands]
+    # Row 1 (before EventMid in block) must be backfilled
+    assert events[0] == "EventMid", f"Row 1 should get backfilled Event, got: {events[0]!r}"
+    # Row 2 has EventMid directly
+    assert events[1] == "EventMid"
+    # Row 3 (after EventMid, same block) should carry forward
+    assert events[2] == "EventMid"
+    # Row 4 is a different TF+TG block — must keep its own Event
+    assert events[3] == "OtherEvent"
+
+
+def test_import_jp_testspec_event_fallback_to_test_group(tmp_path: Path) -> None:
+    """When no Event exists in any row of a TF+TG block, Event must be set to Test Group."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "EventFallback"
+    ws.append(["No", "機能テスト", "テストグループ", "イベント", "ユーザケース", "手順",
+               "入力に対する期待値", "出力に対する期待値"])
+    # Block A: no Event at all — must fall back to "Evaluate NOK"
+    ws.append([1, "FnA", "Evaluate NOK", "", "Normal", "op1", "Given: SIG=1", "Then: OUT=1"])
+    ws.append([2, "", "", "", "", "op2", "Given: SIG=2", "Then: OUT=2"])
+    # Block B: has an explicit Event — fallback must NOT override it
+    ws.append([3, "FnB", "GroupY", "ExplicitEvent", "Normal2", "op3", "Given: SIG=3", "Then: OUT=3"])
+    xlsx = tmp_path / "EventFallback.xlsx"
+    wb.save(xlsx)
+    imported = import_customer_testspec_workbook(xlsx, language="JP")
+    cands = imported["test_candidates"]
+    assert len(cands) == 3
+    events = [c["event"] for c in cands]
+    assert events[0] == "Evaluate NOK", f"Block A row 1 must get Test Group as fallback, got: {events[0]!r}"
+    assert events[1] == "Evaluate NOK", f"Block A row 2 must get Test Group as fallback, got: {events[1]!r}"
+    assert events[2] == "ExplicitEvent", f"Block B must keep its own Event, got: {events[2]!r}"
 
 
 def test_copilot_error_taxonomy_no_context() -> None:

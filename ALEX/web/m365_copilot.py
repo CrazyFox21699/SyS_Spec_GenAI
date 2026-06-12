@@ -40,6 +40,24 @@ _MISSING_SCOPE_HINTS = (
 )
 
 
+class M365Copilot500ConversationObjectError(RuntimeError):
+    """Raised when the Copilot chat endpoint returns HTTP 500 whose body is a copilotConversation
+    object instead of an assistant reply.
+
+    The client must retry with a fresh conversation — reusing the same conversation_id
+    repeats the failure.
+    """
+
+    def __init__(self, *, conversation_id: str, display_name: str, body_preview: str) -> None:
+        self.conversation_id = conversation_id
+        self.display_name = display_name
+        self.body_preview = body_preview
+        super().__init__(
+            f"M365 Copilot chat 500: API returned conversation object instead of reply "
+            f"(id={conversation_id!r}, displayName={display_name[:80]!r})"
+        )
+
+
 class M365CopilotMissingScopesError(RuntimeError):
     """Raised when the access token lacks delegated scopes required by Copilot Chat API."""
 
@@ -144,11 +162,19 @@ def _chat_timeout(cfg: dict[str, Any]) -> int:
     return 90   # was 35 — increased; 35 s is too short for code generation
 
 
-def _create_conversation(access_token: str) -> str:
+_CREATE_PAYLOAD: dict[str, Any] = {}  # Graph Copilot API does not accept displayName on creation
+
+
+def _create_conversation(access_token: str) -> tuple[str, int, str, list[str]]:
+    """Create a new Copilot conversation.
+
+    Returns (conversation_id, http_status_code, server_display_name, create_payload_keys).
+    Graph auto-assigns displayName — the client must not send it (400 badRequest).
+    """
     r = requests_post(
         f"{GRAPH}/copilot/conversations",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-        json={},
+        json=_CREATE_PAYLOAD,
         timeout=60,
     )
     if r.status_code not in (200, 201):
@@ -165,20 +191,146 @@ def _create_conversation(access_token: str) -> str:
     cid = str(data.get("id") or "")
     if not cid:
         raise RuntimeError("M365 conversation id missing in response.")
-    return cid
+    server_dn = str(data.get("displayName") or "")
+    return cid, r.status_code, server_dn, list(_CREATE_PAYLOAD.keys())
 
 
-def _extract_assistant_text(response_json: dict[str, Any]) -> str:
-    chunks: list[str] = []
-    for msg in response_json.get("messages") or []:
-        if not isinstance(msg, dict):
+def _msg_text(m: dict[str, Any]) -> str:
+    """Extract the best available text from a Graph message object.
+
+    Tries: text → body.content (HTML stripped) → content → message.text.
+    """
+    text = str(m.get("text") or "").strip()
+    if text and not text.startswith("{"):
+        return text
+    body = m.get("body")
+    if isinstance(body, dict):
+        content = str(body.get("content") or "").strip()
+        if content and not content.startswith("{"):
+            return re.sub(r"<[^>]+>", "", content).strip()
+    content = str(m.get("content") or "").strip()
+    if content and not content.startswith("{"):
+        return content
+    nested = m.get("message")
+    if isinstance(nested, dict):
+        t = str(nested.get("text") or "").strip()
+        if t and not t.startswith("{"):
+            return t
+    return ""
+
+
+def _msg_role(m: dict[str, Any]) -> str:
+    """Extract a normalized role string from a Graph message object."""
+    role = str(m.get("role") or "").strip().lower()
+    if role:
+        return role
+    frm = m.get("from")
+    if isinstance(frm, dict):
+        if any(k in frm for k in ("bot", "application", "copilot")):
+            return "assistant"
+        if "user" in frm:
+            return "user"
+        frm_role = str(frm.get("role") or "").strip().lower()
+        if frm_role:
+            return frm_role
+    sender = m.get("sender")
+    if isinstance(sender, dict):
+        s_role = str(sender.get("role") or "").strip().lower()
+        if s_role:
+            return s_role
+    return ""
+
+
+def _extract_assistant_text(
+    response_json: dict[str, Any],
+    prompt: str = "",
+) -> tuple[str, dict[str, Any]]:
+    """Extract the assistant reply from the Graph chat response.
+
+    Returns (reply_text, extraction_diagnostics).
+
+    Selection priority:
+      1. Messages whose @odata.type contains 'ResponseMessage'
+      2. Messages whose role/from indicates assistant/copilot/bot
+      3. All messages (fallback)
+
+    In all cases the last matching message is preferred over the first, and any
+    candidate whose text starts with the same prefix as the submitted prompt is
+    rejected to prevent returning the user message as the assistant reply.
+
+    Returns ("", diag) when all candidates are rejected (prompt echo).
+    """
+    prompt_prefix = prompt[:100].strip()
+    msgs = [m for m in (response_json.get("messages") or []) if isinstance(m, dict)]
+
+    # Debug snapshot of first 5 messages
+    messages_debug: list[dict[str, Any]] = []
+    message_type_list: list[str] = []
+    for i, m in enumerate(msgs):
+        otype = str(m.get("@odata.type") or "")
+        message_type_list.append(otype)
+        if i < 5:
+            body = m.get("body") or {}
+            messages_debug.append({
+                "index": i,
+                "@odata.type": otype,
+                "role": _msg_role(m),
+                "text_preview": _msg_text(m)[:120],
+                "body_content_preview": str(
+                    body.get("content") if isinstance(body, dict) else ""
+                )[:120],
+                "keys": list(m.keys())[:15],
+            })
+
+    indexed_msgs = list(enumerate(msgs))
+    response_indexed = [
+        (i, m) for i, m in indexed_msgs
+        if "ResponseMessage" in str(m.get("@odata.type") or "")
+    ]
+    assistant_indexed = [
+        (i, m) for i, m in indexed_msgs
+        if _msg_role(m) in ("assistant", "copilot", "bot")
+    ]
+
+    if response_indexed:
+        candidates_indexed = response_indexed
+        candidates_from = "ResponseMessage"
+    elif assistant_indexed:
+        candidates_indexed = assistant_indexed
+        candidates_from = "assistant_role"
+    else:
+        candidates_indexed = indexed_msgs
+        candidates_from = "fallback_all"
+
+    rejected_count = 0
+    chosen_idx: int | None = None
+    chosen_type = ""
+    chosen_text = ""
+
+    # Prefer last matching message — assistant replies tend to come after user messages
+    for orig_idx, m in reversed(candidates_indexed):
+        text = _msg_text(m)
+        if not text:
             continue
-        otype = str(msg.get("@odata.type") or "")
-        if "ResponseMessage" in otype or msg.get("text"):
-            text = str(msg.get("text") or "").strip()
-            if text and not text.startswith("{"):
-                chunks.append(text)
-    return "\n".join(chunks).strip()
+        if prompt_prefix and text.strip()[:len(prompt_prefix)] == prompt_prefix:
+            rejected_count += 1
+            continue
+        chosen_text = text
+        chosen_idx = orig_idx
+        chosen_type = str(m.get("@odata.type") or "")
+        break
+
+    extraction_diag: dict[str, Any] = {
+        "message_count": len(msgs),
+        "message_type_list": message_type_list,
+        "messages_debug": messages_debug,
+        "extracted_message_index": chosen_idx,
+        "extracted_message_type": chosen_type,
+        "extracted_text_startswith": chosen_text[:80] if chosen_text else "",
+        "rejected_prompt_echo_count": rejected_count,
+        "candidates_from": candidates_from,
+    }
+    return chosen_text.strip(), extraction_diag
 
 
 def _chat(
@@ -188,27 +340,66 @@ def _chat(
     *,
     timezone: str,
     timeout: int = 90,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
+    """Send one turn to the Copilot chat endpoint.
+
+    Returns (assistant_reply_text, diagnostics_dict).
+    Raises M365Copilot500ConversationObjectError when Graph returns HTTP 500
+    whose body is a copilotConversation object — the prompt must NOT be retried
+    on the same conversation_id.
+    """
+    payload = {
+        "message": {"text": prompt[:28000]},
+        "locationHint": {"timeZone": timezone},
+    }
     r = requests_post(
         f"{GRAPH}/copilot/conversations/{conversation_id}/chat",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-        json={
-            "message": {"text": prompt[:28000]},
-            "locationHint": {"timeZone": timezone},
-        },
+        json=payload,
         timeout=timeout,
     )
+    body_text = r.text or ""
+    chat_diag: dict[str, Any] = {
+        "chat_status": r.status_code,
+        "payload_keys": list(payload.keys()),
+        "response_body_preview": body_text[:300],
+    }
+
+    if r.status_code == 500:
+        # Detect the conversation-object 500: body is a copilotConversation dict
+        # (Graph stored the prompt as displayName and then failed internally).
+        try:
+            bj = json.loads(body_text)
+            if isinstance(bj, dict) and (
+                "displayName" in bj
+                or "copilotConversation" in str(bj.get("@odata.type") or "")
+                or bj.get("state") is not None
+            ):
+                raise M365Copilot500ConversationObjectError(
+                    conversation_id=str(bj.get("id") or conversation_id),
+                    display_name=str(bj.get("displayName") or ""),
+                    body_preview=body_text[:500],
+                )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
     if r.status_code != 200:
-        body = r.text or ""
-        if _classify_missing_scopes(r.status_code, body):
-            raise M365CopilotMissingScopesError(status_code=r.status_code, raw_body=body[:500])
-        reason = _classify_not_entitled(r.status_code, body)
+        if _classify_missing_scopes(r.status_code, body_text):
+            raise M365CopilotMissingScopesError(status_code=r.status_code, raw_body=body_text[:500])
+        reason = _classify_not_entitled(r.status_code, body_text)
         if reason:
             raise M365CopilotNotEntitledError(
-                status_code=r.status_code, raw_body=body[:500], reason=reason
+                status_code=r.status_code, raw_body=body_text[:500], reason=reason
             )
-        raise RuntimeError(f"M365 Copilot chat failed ({r.status_code}): {body[:500]}")
-    return _extract_assistant_text(r.json())
+        raise RuntimeError(f"M365 Copilot chat failed ({r.status_code}): {body_text[:500]}")
+
+    body_json = r.json()
+    chat_diag["response_body_keys"] = list(body_json.keys())[:10] if isinstance(body_json, dict) else []
+    reply, extraction_diag = _extract_assistant_text(body_json, prompt=prompt)
+    chat_diag.update(extraction_diag)
+    if not reply and extraction_diag.get("rejected_prompt_echo_count", 0) > 0:
+        chat_diag["api_result_class"] = "API_RESPONSE_EXTRACTION_FAILED"
+    return reply, chat_diag
 
 
 def _is_graph_unauthorized(exc: Exception) -> bool:
@@ -234,14 +425,17 @@ def _run_chat_once(
 ) -> dict[str, Any]:
     token = m365_auth.require_api_token(cfg, user_id=uid)
     conv_id = str(conversation_id or "").strip()
+    create_status: int | None = None
+    server_display_name = ""
+    create_payload_keys: list[str] = []
     if not conv_id and reuse_session_conversation:
         conv_id = m365_auth.get_copilot_conversation_id(user_id=uid)
     if conv_id:
         created = False
     else:
-        conv_id = _create_conversation(token)
+        conv_id, create_status, server_display_name, create_payload_keys = _create_conversation(token)
         created = True
-    reply = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg), timeout=_chat_timeout(cfg))
+    reply, chat_diag = _chat(token, conv_id, prompt[:28000], timezone=_timezone(cfg), timeout=_chat_timeout(cfg))
     if persist_conversation and conv_id:
         m365_auth.set_copilot_conversation_id(conv_id, user_id=uid)
     return {
@@ -250,6 +444,13 @@ def _run_chat_once(
         "conversation_id": conv_id,
         "conversation_created": created,
         "chat_ok": bool(reply.strip()),
+        # API call diagnostics
+        "create_status": create_status,
+        "create_payload_keys": create_payload_keys,
+        "server_displayName": server_display_name,
+        "reuse_session_conversation": reuse_session_conversation,
+        "persist_conversation": persist_conversation,
+        **chat_diag,
     }
 
 
@@ -298,6 +499,20 @@ def parse_knowledge_response(text: str) -> tuple[list[dict[str, Any]], list[dict
 
 
 def _copilot_error_payload(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, M365Copilot500ConversationObjectError):
+        return {
+            "ok": False,
+            "error": str(exc),
+            "error_category": "api_chat_500_conversation_object",
+            "conversation_id": exc.conversation_id,
+            "server_displayName": exc.display_name,
+            "raw_preview": exc.body_preview[:500],
+            "retried_with_fresh_conversation": False,
+            "user_action": (
+                "Copilot API returned a conversation object instead of a reply. "
+                "Retry generation. If it fails again, use Copy Copilot Web Prompt."
+            ),
+        }
     if isinstance(exc, M365CopilotMissingScopesError):
         return {
             "ok": False,
@@ -416,6 +631,27 @@ def run_copilot_chat_result(
                     reuse_session_conversation=reuse_session_conversation,
                     persist_conversation=persist_conversation,
                 )
+            except M365Copilot500ConversationObjectError as exc:
+                # Graph returned a conversation object instead of an assistant reply.
+                # The same conversation_id cannot be reused — retry once with fresh state.
+                try:
+                    result = _run_chat_once(
+                        cfg,
+                        prompt,
+                        uid=uid,
+                        conversation_id=None,
+                        reuse_session_conversation=False,
+                        persist_conversation=False,
+                    )
+                    result["retried_with_fresh_conversation"] = True
+                    result["original_500_conversation_id"] = exc.conversation_id
+                    result["original_500_display_name"] = exc.display_name
+                    return result
+                except Exception as retry_exc:  # noqa: BLE001
+                    last_exc = retry_exc
+                    if uid is not None:
+                        continue
+                    raise
             except PermissionError as exc:
                 last_exc = exc
                 if uid is not None:
@@ -469,6 +705,7 @@ def probe_copilot_api(cfg: dict[str, Any], *, user_id: str | None = None) -> dic
             error=str(result.get("error") or ""),
             reason=str(result.get("not_entitled_reason") or ""),
             graph_status=int(result.get("graph_status") or 0),
+            error_category=str(result.get("error_category") or ""),
             user_id=user_id,
         )
         return {

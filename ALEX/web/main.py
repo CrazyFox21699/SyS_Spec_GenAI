@@ -661,6 +661,7 @@ class GTestDraftSaveRequest(BaseModel):
     quality_results: Optional[list[dict[str, Any]]] = None
     quality_summary: Optional[str] = None
     review_reason: Optional[str] = None
+    force_merge: bool = False
 
 
 class ProjectCodeConfigSaveRequest(BaseModel):
@@ -1227,12 +1228,13 @@ def _rebuild_understanding(
     return rebuild_understanding(bundle, logic_ids=logic_ids, trigger=trigger)
 
 
-def _save_bundle_to_job(job_id: str, bundle: dict[str, Any], *, expected_version: int | None = None) -> int:
-    if expected_version is None:
-        expected_version = parse_if_match_version()
+def _save_bundle_to_job(job_id: str, bundle: dict[str, Any], *, expected_version: int | None = None, force: bool = False) -> int:
+    if not force:
+        if expected_version is None:
+            expected_version = parse_if_match_version()
     with _job_write_lock(job_id):
         current = _get_bundle_version(job_id)
-        if expected_version is not None and expected_version != current:
+        if not force and expected_version is not None and expected_version != current:
             raise HTTPException(
                 409,
                 "Someone else saved — refresh the page and try again.",
@@ -3656,6 +3658,10 @@ def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[
 
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
+    # Ensure project code config cache (incl. test code memory) is populated before
+    # the runner executes. Without this, raw_memory is empty and no relevant rules are
+    # injected into the prompt, causing Copilot to return MISSING_CONTEXT.
+    _sync_project_code_config_cache(job_id, gtest_state)
     cfg = _cfg()
     out_dir = _job_output_dir(job_id)
     bundle_version = _get_bundle_version(job_id)
@@ -3714,7 +3720,17 @@ def api_m365_copilot_task_status(job_id: str, task_id: str) -> dict[str, Any]:
     out_dir = _job_output_dir(job_id)
     task = get_task_status(job_id, task_id, out_dir)
     if not task:
-        raise HTTPException(404, f"Task not found: {task_id}")
+        known = list_tasks(job_id, out_dir)
+        return {
+            "ok": False,
+            "status": "MISSING",
+            "error_category": "task_not_found",
+            "task_id": task_id,
+            "job_id": job_id,
+            "message": "Task not found or expired.",
+            "known_task_count": len(known),
+            "reason": "expired_or_restarted",
+        }
     return {"job_id": job_id, "ok": True, **task}
 
 
@@ -3760,7 +3776,14 @@ def api_gtest_workspace(job_id: str, language: str = "EN") -> dict[str, Any]:
         language=language,
         job_id=job_id,
         bundle_version=bundle_version,
+        job_output_dir=_job_output_dir(job_id),
     )
+    if payload.get("group_mapping"):
+        try:
+            from web.testcase_group_mapping import save_group_mapping
+            save_group_mapping(_job_output_dir(job_id), payload["group_mapping"])
+        except Exception:
+            pass
     return {"job_id": job_id, **payload, "bundle_version": bundle_version}
 
 
@@ -3814,29 +3837,38 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
     quality_summary = body.quality_summary
     review_reason = body.review_reason
     if code_status == "SAVED" and body.full_snippet:
-        cfg_cache = gtest_state.get("project_code_config_cache") or {}
-        wb = _workbench_row_for_candidate(bundle, body.draft_key, language="EN") or {}
-        samples = load_code_style_samples(bundle)
-        sample_snippet = str((samples[0] or {}).get("snippet") or "") if samples else ""
-        qg = run_quality_gate(
-            body.full_snippet,
-            candidate_id=body.draft_key,
-            structured_io=structured,
-            code_rules_md=str(cfg_cache.get("code_rules.md") or ""),
-            api_catalog_yaml=str(cfg_cache.get("api_catalog.yaml") or ""),
-            sample_snippet=sample_snippet,
-            expected_input=str(wb.get("expected_input") or ""),
-            expected_output=str(wb.get("expected_output") or ""),
-        )
-        quality_results = qg.get("checks") or []
-        quality_summary = qg.get("summary")
-        gate_status = quality_to_code_status(quality_summary or "FAIL")
-        if gate_status != "SAVED":
-            code_status = gate_status
-            last_saved_at = None
-            review_reason = "; ".join(
-                c["message"] for c in quality_results if c.get("severity") in ("WARNING", "FAIL")
-            )[:500]
+        try:
+            from web.gtest_workspace import _workbench_row_for_candidate
+            cfg_cache = gtest_state.get("project_code_config_cache") or {}
+            wb = _workbench_row_for_candidate(bundle, body.draft_key, language="EN") or {}
+            samples = load_code_style_samples(bundle)
+            sample_snippet = str((samples[0] or {}).get("snippet") or "") if samples else ""
+            qg = run_quality_gate(
+                body.full_snippet,
+                candidate_id=body.draft_key,
+                structured_io=structured,
+                code_rules_md=str(cfg_cache.get("code_rules.md") or ""),
+                api_catalog_yaml=str(cfg_cache.get("api_catalog.yaml") or ""),
+                sample_snippet=sample_snippet,
+                expected_input=str(wb.get("expected_input") or ""),
+                expected_output=str(wb.get("expected_output") or ""),
+            )
+            quality_results = qg.get("checks") or []
+            quality_summary = qg.get("summary")
+            gate_status = quality_to_code_status(quality_summary or "FAIL")
+            if gate_status != "SAVED":
+                code_status = gate_status
+                last_saved_at = None
+                review_reason = "; ".join(
+                    c["message"] for c in quality_results if c.get("severity") in ("WARNING", "FAIL")
+                )[:500]
+        except Exception as _qg_exc:
+            return {
+                "ok": False,
+                "error": f"quality gate error: {_qg_exc}",
+                "draft_key": body.draft_key,
+                "code_status": "NEEDS_REVIEW",
+            }
     draft_payload: dict[str, Any] = {
         "source_kind": body.source_kind,
         "test_name": body.test_name,
@@ -3861,7 +3893,18 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
         draft=draft_payload,
         engineer_edited=body.engineer_edited,
     )
-    _persist_job_gtest_state(job_id, gtest_state)
+    _force_merge_used = False
+    if body.force_merge:
+        # Explicit Confirm action after a 409: reload the freshest bundle (picks up any
+        # concurrent saves on other TCs), merge only this draft, and bypass the If-Match
+        # version check so a stale bundleVersion on the client never blocks the user.
+        _fresh_bundle = _bundle_for_job(job_id)
+        sync_gtest_to_bundle(_fresh_bundle, gtest_state)
+        save_gtest_state(_job_output_dir(job_id), gtest_state)
+        _save_bundle_to_job(job_id, _fresh_bundle, force=True)
+        _force_merge_used = True
+    else:
+        _persist_job_gtest_state(job_id, gtest_state)
     saved = (gtest_state.get("drafts") or {}).get(body.draft_key) or {}
     return {
         "ok": True,
@@ -3874,6 +3917,11 @@ def api_gtest_draft_save(job_id: str, body: GTestDraftSaveRequest) -> dict[str, 
         "quality_summary": saved.get("quality_summary") or quality_summary,
         "review_reason": saved.get("review_reason") or review_reason,
         "quality_results": saved.get("quality_results") or quality_results,
+        "bundle_version": _get_bundle_version(job_id),
+        "force_merge_used": _force_merge_used,
+        "conflict_retry_used": body.force_merge,
+        "same_testcase_changed": False,
+        "save_success": True,
     }
 
 
@@ -3941,9 +3989,12 @@ def api_put_project_code_config(job_id: str, body: ProjectCodeConfigSaveRequest)
     result = save_project_code_config_file(_job_output_dir(job_id), body.filename, body.content)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "save failed")
+    # Use save_gtest_state (not _persist_job_gtest_state) to avoid the bundle version check.
+    # The frontend api() helper always sends If-Match:<version>, which _save_bundle_to_job
+    # would reject with 409 whenever the version is stale — config saves must never be blocked.
     gtest_state = _load_job_gtest_state(job_id)
     _sync_project_code_config_cache(job_id, gtest_state)
-    _persist_job_gtest_state(job_id, gtest_state)
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
     return {"job_id": job_id, **result}
 
 
@@ -3959,10 +4010,10 @@ def api_save_project_instruction_as_global(job_id: str, body: dict[str, Any] | N
     if not content:
         return {"job_id": job_id, "ok": False, "error": "No instruction content to save globally."}
     path = save_global_instruction(content)
-    # Sync cache so source label updates immediately
+    # Sync cache without bundle version bump — same reason as api_put_project_code_config.
     gtest_state = _load_job_gtest_state(job_id)
     _sync_project_code_config_cache(job_id, gtest_state)
-    _persist_job_gtest_state(job_id, gtest_state)
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
     return {"job_id": job_id, "ok": True, "path": str(path), "instruction_source": "global"}
 
 
@@ -3989,7 +4040,7 @@ def api_reload_global_instruction(job_id: str) -> dict[str, Any]:
         raise HTTPException(400, result.get("error") or "save failed")
     gtest_state = _load_job_gtest_state(job_id)
     _sync_project_code_config_cache(job_id, gtest_state)
-    _persist_job_gtest_state(job_id, gtest_state)
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
     _, source = effective_instruction_for_job(_job_output_dir(job_id))
     return {"job_id": job_id, "ok": True, "content": global_content, "instruction_source": source}
 
@@ -4240,7 +4291,7 @@ def api_put_testcode_memory(job_id: str, body: dict[str, Any]) -> dict[str, Any]
     save_memory_for_job(_job_output_dir(job_id), content)
     gtest_state = _load_job_gtest_state(job_id)
     gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = content
-    _persist_job_gtest_state(job_id, gtest_state)
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
     return {"job_id": job_id, "ok": True}
 
 
@@ -4387,10 +4438,13 @@ def api_quick_add_memory_rule(job_id: str, body: dict[str, Any]) -> dict[str, An
     else:
         updated = append_to_section(existing, section, bullet)
 
+    old_version = _get_bundle_version(job_id)
     save_memory_for_job(_job_output_dir(job_id), updated)
-    gtest_state = _load_job_gtest_state(job_id)
-    gtest_state.setdefault("project_code_config_cache", {})["project_testcode_memory.md"] = updated
-    _persist_job_gtest_state(job_id, gtest_state)
+    # Do NOT call _persist_job_gtest_state — it calls _save_bundle_to_job which checks If-Match
+    # and raises 409 on stale bundle version. Quick Add is a config-only write; the memory file
+    # is the authoritative store. Subsequent codegen requests reload it via _sync_project_code_config_cache.
+    # This matches the pattern used in api_put_project_code_config.
+    latest_version = _get_bundle_version(job_id)
     return {
         "job_id": job_id,
         "ok": True,
@@ -4398,6 +4452,11 @@ def api_quick_add_memory_rule(job_id: str, body: dict[str, Any]) -> dict[str, An
         "section": section,
         "conflicts": check["conflicts"],
         "content": updated,
+        "bundle_version": latest_version,
+        "old_version": old_version,
+        "latest_version": latest_version,
+        "retry_on_conflict": False,
+        "merged_rule_added": True,
     }
 
 
@@ -4405,6 +4464,228 @@ def api_quick_add_memory_rule(job_id: str, body: dict[str, Any]) -> dict[str, An
 def api_quick_add_schema() -> dict[str, Any]:
     from web.project_testcode_memory import QUICK_ADD_RULE_TYPES
     return {"ok": True, "rule_types": QUICK_ADD_RULE_TYPES}
+
+
+@app.post("/api/review/testcode-group-context")
+def api_testcode_group_context(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Upsert a group-level fixture/namespace context entry in ## Test Group Context.
+
+    Body: {group_name, fixture_class, namespace?, main_function?, note?, preview_only?}
+    Conflict-safe: does not call _persist_job_gtest_state, no bundle-version check.
+    """
+    from web.project_testcode_memory import load_memory_for_job, save_memory_for_job
+    from web.test_group_context import (
+        format_group_context_block,
+        normalize_group_key,
+        parse_group_context,
+        upsert_group_context,
+    )
+
+    group_name = str(body.get("group_name") or "").strip()
+    if not group_name:
+        return {"job_id": job_id, "ok": False, "error": "group_name is required"}
+
+    fixture_class = str(body.get("fixture_class") or "").strip()
+    namespace = str(body.get("namespace") or "").strip()
+    main_function = str(body.get("main_function") or "").strip()
+    note = str(body.get("note") or "").strip()
+    preview_only = bool(body.get("preview_only", False))
+
+    out_dir = _job_output_dir(job_id)
+    existing = load_memory_for_job(out_dir)
+    normalized_key = normalize_group_key(group_name)
+    existing_groups = parse_group_context(existing)
+    is_update = normalized_key in existing_groups
+    is_duplicate = False
+    if is_update:
+        ex = existing_groups[normalized_key]
+        is_duplicate = (
+            ex.get("fixture_class", "").strip() == fixture_class
+            and ex.get("namespace", "").strip() == namespace
+            and ex.get("main_function", "").strip() == main_function
+        )
+
+    block_preview = format_group_context_block(
+        group_name, fixture_class=fixture_class, namespace=namespace,
+        main_function=main_function, note=note
+    )
+
+    if preview_only:
+        return {
+            "job_id": job_id,
+            "ok": True,
+            "preview": True,
+            "bullet": block_preview,
+            "section": "Test Group Context",
+            "is_duplicate": is_duplicate,
+            "is_update": is_update,
+            "normalized_group_key": normalized_key,
+            "conflicts": [],
+        }
+
+    result = upsert_group_context(
+        existing,
+        group_name=group_name,
+        fixture_class=fixture_class,
+        namespace=namespace,
+        main_function=main_function,
+        note=note,
+    )
+    updated = result["content"]
+    old_version = _get_bundle_version(job_id)
+    save_memory_for_job(out_dir, updated)
+    # Do NOT call _persist_job_gtest_state — config-only write, no bundle-version check
+    latest_version = _get_bundle_version(job_id)
+    return {
+        "job_id": job_id,
+        "ok": True,
+        "section": "Test Group Context",
+        "group_name": group_name,
+        "normalized_group_key": result["normalized_group_key"],
+        "detected_fixture_class": fixture_class,
+        "detected_namespace": namespace,
+        "merged_rule_added": result["merged_rule_added"],
+        "merged_rule_updated": result["merged_rule_updated"],
+        "duplicate_detected": result["duplicate_detected"],
+        "content": updated,
+        "bundle_version": latest_version,
+        "old_version": old_version,
+        "latest_version": latest_version,
+        "retry_on_conflict": False,
+        "conflicts": [],
+    }
+
+
+@app.get("/api/review/testcode-group-mapping")
+def api_testcode_group_mapping_get(job_id: str) -> dict[str, Any]:
+    """Return the persisted group mapping for this job."""
+    from web.testcase_group_mapping import load_group_mapping
+    mapping = load_group_mapping(_job_output_dir(job_id))
+    return {"job_id": job_id, "ok": True, **mapping}
+
+
+@app.put("/api/review/testcode-group-mapping")
+def api_testcode_group_mapping_put(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Save user-edited group mapping fields (suggested_namespace, suggested_fixture_class, default_main_function).
+
+    Only updates editable fields; preserves tc_count, candidate_ids, group_name, etc.
+    Conflict-safe: no bundle-version check.
+    """
+    from web.testcase_group_mapping import load_group_mapping, save_group_mapping
+
+    groups_edit = dict(body.get("groups") or {})
+    out_dir = _job_output_dir(job_id)
+    existing = load_group_mapping(out_dir)
+    groups = dict(existing.get("groups") or {})
+
+    for gid, edits in groups_edit.items():
+        if gid not in groups:
+            continue
+        for field in ("suggested_namespace", "suggested_fixture_class", "default_main_function"):
+            if field in edits:
+                groups[gid][field] = str(edits[field] or "").strip()
+
+    updated = {**existing, "groups": groups}
+    save_group_mapping(out_dir, updated)
+
+    # Apply updated fixture to existing drafts and clear stale FIXTURE missing-context items.
+    # This replaces ALEX_FIXTURE_MISSING (or any other placeholder) with the real fixture
+    # for all groups that now have suggested_fixture_class set, so "Save Mapping" has the
+    # same effect as "Apply to Drafts" without requiring a separate click.
+    _apply_results: dict[str, Any] = {}
+    try:
+        from web.copilot_batch_codegen import apply_group_mapping_to_drafts
+
+        _gstate_put = _load_job_gtest_state(job_id)
+        _updated_mapping = {**existing, "groups": groups}
+        _state_dirty = False
+        for _gid_put, _edits_put in groups_edit.items():
+            if not str(_edits_put.get("suggested_fixture_class") or "").strip():
+                continue
+            # Replace placeholder / ALEX_FIXTURE_MISSING fixture in drafts for this group
+            _ar = apply_group_mapping_to_drafts(_gstate_put, _updated_mapping, group_id=_gid_put)
+            _apply_results[_gid_put] = _ar
+            if _ar.get("updated"):
+                _state_dirty = True
+            # Also clear stale FIXTURE missing-context items
+            _drafts_put = _gstate_put.get("drafts") or {}
+            for _cid_put in (groups.get(_gid_put, {}).get("candidate_ids") or []):
+                _draft_put = _drafts_put.get(_cid_put)
+                if not isinstance(_draft_put, dict):
+                    continue
+                _old_mc = _draft_put.get("missing_context") or []
+                _new_mc = [
+                    _m for _m in _old_mc
+                    if str(_m.get("missing_type") or "").upper() != "FIXTURE"
+                    and str(_m.get("type") or "").lower() != "missing_fixture"
+                ]
+                if len(_new_mc) != len(_old_mc):
+                    _draft_put["missing_context"] = _new_mc
+                    _state_dirty = True
+        if _state_dirty:
+            save_gtest_state(_job_output_dir(job_id), _gstate_put)
+    except Exception:
+        pass
+
+    return {
+        "job_id": job_id,
+        "ok": True,
+        "total_groups": len(groups),
+        "groups": groups,
+        "apply_to_drafts": _apply_results,
+    }
+
+
+@app.post("/api/review/testcode-group-mapping/build")
+def api_testcode_group_mapping_build(job_id: str, language: str = "EN") -> dict[str, Any]:
+    """Rebuild group mapping from current workbench rows and persist it.
+
+    Uses workbench rows from the current bundle. Conflict-safe: no bundle-version check.
+    """
+    from src.exporters.customer_testspec_exporter import build_customer_testspec_preview
+    from web.testcase_group_mapping import build_group_mapping, save_group_mapping
+
+    bundle = _bundle_for_job(job_id)
+    preview = build_customer_testspec_preview(bundle, language=language.upper())
+    rows = preview.get("rows") or []
+    mapping = build_group_mapping(rows)
+    save_group_mapping(_job_output_dir(job_id), mapping)
+    return {
+        "job_id": job_id,
+        "ok": True,
+        "total_groups": mapping["total_groups"],
+        "diagnostics": mapping["diagnostics"],
+        "sample_group_mapping": mapping["sample_group_mapping"],
+    }
+
+
+@app.post("/api/review/testcode-group-mapping/apply-to-drafts")
+def api_testcode_group_mapping_apply_to_drafts(
+    job_id: str, body: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Apply group mapping fixture classes to existing drafts without calling Copilot.
+
+    For each TC in each group (or the specified group_id), replaces
+    TEST_F(oldFixture, name) with TEST_F(newFixture, name) using suggested_fixture_class.
+    SAVED drafts become NEEDS_REVIEW.  Preserves test body.
+    """
+    from web.copilot_batch_codegen import apply_group_mapping_to_drafts
+    from web.testcase_group_mapping import load_group_mapping
+
+    body = body or {}
+    group_id = str(body.get("group_id") or "").strip() or None
+
+    group_mapping = load_group_mapping(_job_output_dir(job_id))
+    if not group_mapping or not group_mapping.get("groups"):
+        return {"job_id": job_id, "ok": False, "error": "No group mapping found for this job."}
+
+    gtest_state = _load_job_gtest_state(job_id)
+    result = apply_group_mapping_to_drafts(gtest_state, group_mapping, group_id=group_id)
+
+    if result.get("updated"):
+        _persist_job_gtest_state(job_id, gtest_state)
+
+    return {"job_id": job_id, **result}
 
 
 def _config_bundle_text_from_body(body: ConfigBundleTextRequest) -> tuple[str, list[str]]:
@@ -4912,15 +5193,26 @@ def api_testcode_missing_context(job_id: str, body: dict[str, Any] | None = None
 
     Returns per-TC missing item lists so the user can add Quick Add rules
     before or after generation.  HTTP 200 always.
+    Also returns memory_diagnostics for the UI to show source/stats.
     """
     from web.copilot_batch_codegen import analyze_missing_generation_context
     from web.gtest_workspace import _workbench_row_for_candidate
+    from web.project_testcode_memory import _job_memory_path, memory_diagnostics
 
     candidate_ids: list[str] = list((body or {}).get("candidate_ids") or [])
     language = str((body or {}).get("language") or "EN")
     bundle = _bundle_for_job(job_id)
     gtest_state = _load_job_gtest_state(job_id)
     _sync_project_code_config_cache(job_id, gtest_state)
+
+    # Memory diagnostics for client display
+    cache = gtest_state.get("project_code_config_cache") or {}
+    mem_content = str(cache.get("project_testcode_memory.md") or "")
+    job_mem_path = _job_memory_path(_job_output_dir(job_id))
+    mem_source = "job_override" if (job_mem_path.exists() and mem_content.strip()) else "global"
+    mem_diag = memory_diagnostics(mem_content)
+    mem_diag["source"] = mem_source
+    mem_diag["path"] = str(job_mem_path) if mem_source == "job_override" else "global"
 
     reports: list[dict[str, Any]] = []
     # If no IDs requested, use all TCs with NEEDS_REVIEW or ERROR draft
@@ -4931,23 +5223,76 @@ def api_testcode_missing_context(job_id: str, body: dict[str, Any] | None = None
             if isinstance(d, dict) and str(d.get("code_status") or "").upper() in {"NEEDS_REVIEW", "ERROR"}
         ]
 
+    try:
+        from web.testcase_group_mapping import _mapping_path as _gmap_path_fn, load_group_mapping as _load_gmap_mc
+        _job_out_mc = _job_output_dir(job_id)
+        _group_mapping_mc = _load_gmap_mc(_job_out_mc) or {}
+        _gmap_load_path_str = str(_gmap_path_fn(_job_out_mc))
+    except Exception:
+        _group_mapping_mc = {}
+        _gmap_load_path_str = ""
+
+    _gmap_groups_mc = _group_mapping_mc.get("groups") or {}
+    _gmap_total_mc = _group_mapping_mc.get("total_groups") or len(_gmap_groups_mc)
+
+    # Retrieve last prompt tc_diagnostics for cross-referencing prompt context
+    _batch_state_mc = gtest_state.get("copilot_batch") or {}
+    _last_prompt_diag_mc = _batch_state_mc.get("last_prompt_diag") or {}
+    _tc_diag_list_mc: list[dict[str, Any]] = _last_prompt_diag_mc.get("tc_diagnostics") or []
+
     for cid in candidate_ids[:50]:  # limit to 50 to avoid huge responses
         row = _workbench_row_for_candidate(bundle, cid, language=language) or {"candidate_id": cid}
-        missing = analyze_missing_generation_context(row, gtest_state)
-        # Also include any stored missing_context from previous generation
+        missing = analyze_missing_generation_context(row, gtest_state, group_mapping=_group_mapping_mc or None)
+        # Only include stored missing_context items that are still unresolved (not in fresh analysis)
+        fresh_keys = {(m.get("type"), m.get("signal")) for m in missing}
         draft = (gtest_state.get("drafts") or {}).get(cid) or {}
-        stored_missing = draft.get("missing_context") or []
-        # Merge, dedup by type+signal
+        stored_missing = [
+            m for m in (draft.get("missing_context") or [])
+            if (m.get("type"), m.get("signal")) not in fresh_keys
+            # Re-check: only keep stored items whose signal is still missing from memory
+            and (not m.get("signal") or m["signal"].upper() not in mem_content.upper())
+        ]
         all_missing = {(m.get("type"), m.get("signal")): m for m in missing + stored_missing}
+
+        # Build per-TC group mapping diagnostics
+        _gid_mc = str(row.get("group_id") or "")
+        _grp_mc = _gmap_groups_mc.get(_gid_mc) if _gid_mc else None
+        _gmap_fixture_mc = str((_grp_mc or {}).get("suggested_fixture_class") or "").strip()
+        _fresh_has_fixture_missing = any(m.get("type") == "missing_fixture" for m in missing)
+        _all_has_fixture_missing = any(
+            str(m.get("missing_type") or m.get("type") or "").upper() in ("FIXTURE", "MISSING_FIXTURE")
+            for m in list(all_missing.values())
+        )
+        _last_tc_diag_mc: dict[str, Any] = next(
+            (d for d in _tc_diag_list_mc if str(d.get("testcase_id") or "") == cid), {}
+        )
         reports.append({
             "candidate_id": cid,
             "missing_items": list(all_missing.values()),
             "has_issues": bool(all_missing),
             "issue_reason": draft.get("issue_reason") or "",
             "code_status": str(draft.get("code_status") or "NO_CODE"),
+            "diagnostics": {
+                "selected_testcase_id": cid,
+                "selected_row_group_id": _gid_mc,
+                "group_mapping_load_path": _gmap_load_path_str,
+                "group_mapping_loaded_total_groups": _gmap_total_mc,
+                "group_mapping_group_found": bool(_grp_mc),
+                "group_mapping_fixture_used": _gmap_fixture_mc,
+                "missing_fixture_suppressed_by_group_mapping": _fresh_has_fixture_missing and not _all_has_fixture_missing,
+                "prompt_contains_GROUP_CONTEXT": _last_tc_diag_mc.get("prompt_contains_GROUP_CONTEXT"),
+                "prompt_contains_group_fixture": bool(_last_tc_diag_mc.get("group_fixture_used")),
+                "prompt_contains_TryTo_xxx": _last_tc_diag_mc.get("prompt_contains_TryTo_xxx"),
+            },
         })
 
-    return {"ok": True, "job_id": job_id, "reports": reports, "total": len(reports)}
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "reports": reports,
+        "total": len(reports),
+        "memory_diagnostics": mem_diag,
+    }
 
 
 @app.post("/api/review/run-copilot-batch-api-single")
@@ -5256,6 +5601,40 @@ def api_gtest_merge_saved_preview(
     return {"job_id": job_id, **result}
 
 
+@app.post("/api/review/testcode-confirm-selected")
+def api_testcode_confirm_selected(job_id: str, body: TestCodeApprovalRequest) -> dict[str, Any]:
+    from web.test_code_approval import confirm_test_code_drafts
+
+    gtest_state = _load_job_gtest_state(job_id)
+    ids = [c for c in (body.candidate_ids or []) if c]
+    if not ids:
+        raise HTTPException(400, "candidate_ids required")
+    result = confirm_test_code_drafts(gtest_state, ids)
+    # Force-merge: reload the freshest bundle and bypass stale If-Match.
+    # Confirm only writes approval metadata — it never overwrites code bodies.
+    _fresh_bundle = _bundle_for_job(job_id)
+    sync_gtest_to_bundle(_fresh_bundle, gtest_state)
+    save_gtest_state(_job_output_dir(job_id), gtest_state)
+    _new_version = _save_bundle_to_job(job_id, _fresh_bundle, force=True)
+    all_drafts = (gtest_state.get("drafts") or {}).values()
+    exportable_count = sum(1 for d in all_drafts if isinstance(d, dict) and d.get("exportable"))
+    confirmed_count_after_confirm = sum(
+        1 for d in all_drafts
+        if isinstance(d, dict) and str(d.get("approval_status") or "").upper() in {"CONFIRMED", "APPROVED"}
+    )
+    return {
+        "job_id": job_id,
+        "bundle_version": _new_version,
+        "latest_bundle_version": _new_version,
+        "persisted_bundle_version": _new_version,
+        "force_merge_used": True,
+        "exportable_count": exportable_count,
+        "confirmed_ids": result.get("confirmed", []),
+        "confirmed_count_after_confirm": confirmed_count_after_confirm,
+        **result,
+    }
+
+
 @app.post("/api/review/testcode-approve")
 def api_testcode_approve(job_id: str, body: TestCodeApprovalRequest) -> dict[str, Any]:
     from web.test_code_approval import approve_test_code_drafts
@@ -5390,12 +5769,34 @@ def api_export_gtest_cc_final(job_id: str, language: str = "EN") -> Response:
         bundle,
         language=language or "EN",
         sync_map=sync_map,
-        require_engineer_approved=True,
+        require_engineer_approved=False,
         job_id=job_id,
     )
     filename = str(merged.get("export_filename") or "ALEX_GTest_export.cc")
+    content = str(merged.get("content") or "")
+    if merged.get("export_included_count", 0) == 0:
+        skip_reasons = merged.get("skipped_reason_by_testcase") or {}
+        approval_statuses = merged.get("approval_status_by_testcase") or {}
+        exportable_flags = merged.get("exportable_by_testcase") or {}
+        diag_lines = [
+            "/*",
+            " * ALEX EXPORT DIAGNOSTIC — No testcase code was included in this export.",
+            f" * total_drafts={merged.get('total_drafts', 0)}"
+            f"  confirmed={merged.get('confirmed_count', 0)}"
+            f"  exportable={merged.get('exportable_count', 0)}"
+            f"  non_empty_code={merged.get('non_empty_code_count', 0)}",
+            " *",
+        ]
+        for cid, reason in sorted(skip_reasons.items()):
+            diag_lines.append(
+                f" * {cid}: skip={reason}"
+                f" approval={approval_statuses.get(cid, '?')!r}"
+                f" exportable={exportable_flags.get(cid, '?')}"
+            )
+        diag_lines.append(" */")
+        content = content.rstrip() + "\n" + "\n".join(diag_lines) + "\n"
     return Response(
-        content=str(merged.get("content") or ""),
+        content=content,
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

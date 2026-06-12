@@ -370,17 +370,16 @@ def test_merge_skips_duplicate_bullets() -> None:
 # 12. Fallback scaffold does not include full JSON
 # ---------------------------------------------------------------------------
 
-def test_fallback_scaffold_strips_json() -> None:
-    from web.copilot_batch_codegen import _review_scaffold_code
+def test_sanitize_reason_strips_json() -> None:
+    from web.copilot_batch_codegen import _sanitize_reason
 
     json_reason = '{"error": "The response was...", "status": 429, "detail": {"long": "json content that goes on and on and includes lots of API specific error details"}}'
-    code = _review_scaffold_code({"candidate_id": "TC_A", "event": "test"}, json_reason)
-    assert "{" not in code or code.count("{") <= 2, "JSON error must be stripped from scaffold code"
-    assert "GTEST_SKIP" in code
-    assert "NEEDS_REVIEW" in code
+    sanitized = _sanitize_reason(json_reason)
+    assert "{" not in sanitized or sanitized.count("{") <= 1, "JSON error must be stripped from sanitized reason"
+    assert "GTEST_SKIP" not in sanitized
 
 
-def test_fallback_scaffold_stores_full_error_in_metadata() -> None:
+def test_api_failure_stores_full_error_in_metadata_not_code() -> None:
     from pathlib import Path
     from unittest.mock import patch
     from web.copilot_batch_codegen import run_copilot_batch_api
@@ -408,9 +407,10 @@ def test_fallback_scaffold_stores_full_error_in_metadata() -> None:
     snippet = draft.get("full_snippet") or ""
     # Full JSON must not appear in code editor content
     assert long_json_error not in snippet, "Full JSON error must NOT appear in editor code"
-    # Full error should be stored in metadata
-    assert "fallback_error_detail" in draft or "fallback_reason" in draft, \
-        "Error detail must be stored in draft metadata"
+    assert "GTEST_SKIP" not in snippet, "No GTEST_SKIP in metadata-only failure draft"
+    # Error should be stored in api_error_message metadata field
+    assert "api_error_message" in draft, "Error detail must be stored in api_error_message"
+    assert draft.get("is_fallback_scaffold") is False, "Must not be marked as fallback scaffold"
 
 
 # ---------------------------------------------------------------------------

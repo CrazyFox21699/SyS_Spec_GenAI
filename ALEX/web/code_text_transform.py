@@ -9,6 +9,21 @@ from typing import Any
 from src.parsers.code_parser import import_blocks_to_draft_map, index_alex_blocks, wrap_alex_block
 
 _INCLUDE_RE = re.compile(r"^\s*#include\s+[<\"][^>\"]+[>\"]\s*$")
+_ALEX_MARKER_RE = re.compile(
+    r"^\s*//\s*@alex:(?:begin|end|spec_hash)\b[^\n]*\n?",
+    re.MULTILINE,
+)
+
+
+def _strip_alex_markers(text: str) -> tuple[str, int]:
+    """Strip // @alex:begin / @alex:spec_hash / @alex:end lines from exported code.
+
+    Returns (cleaned_text, count_stripped). Only removes internal tracker lines;
+    ALEX_REVIEW comments and user comments are preserved.
+    """
+    matches = _ALEX_MARKER_RE.findall(text)
+    cleaned = _ALEX_MARKER_RE.sub("", text)
+    return cleaned.strip(), len(matches)
 
 
 def apply_text_replace(text: str, *, src: str, dst: str) -> tuple[str, int]:
@@ -349,14 +364,20 @@ def _merge_skip_reason(
     code_status = str(draft.get("code_status") or "").upper()
     if code_status == "ERROR":
         return "ERROR"
-    if code_status != "SAVED":
-        if code_status == "MODIFIED_UNSAVED":
-            return "MODIFIED_UNSAVED"
-        if code_status == "NEEDS_REVIEW":
+    # Explicitly confirmed/exportable drafts bypass both code_status and sync staleness checks.
+    # User confirmation is explicit approval — staleness does not block export.
+    is_exportable = bool(draft.get("exportable"))
+    approval_status = str(draft.get("approval_status") or "").upper()
+    is_confirmed = approval_status in {"CONFIRMED", "APPROVED"}
+    if not is_exportable and not is_confirmed:
+        if code_status != "SAVED":
+            if code_status == "MODIFIED_UNSAVED":
+                return "MODIFIED_UNSAVED"
+            if code_status == "NEEDS_REVIEW":
+                return "NEEDS_REVIEW"
+            return "DRAFT_NOT_SAVED"
+        if sync_status in ("stale_comment", "stale_body", "orphan_code"):
             return "NEEDS_REVIEW"
-        return "DRAFT_NOT_SAVED"
-    if sync_status in ("stale_comment", "stale_body", "orphan_code"):
-        return "NEEDS_REVIEW"
     if require_engineer_approved and not draft.get("engineer_approved"):
         return "NOT_APPROVED"
     return "SAVED"
@@ -435,6 +456,7 @@ def merge_saved_code_preview(
     skipped: list[dict[str, str]] = []
     warnings: list[str] = []
     code_parts: list[str] = []
+    code_field_used: dict[str, str] = {}
 
     for cid in ordered_ids:
         draft = drafts.get(cid) or {}
@@ -444,6 +466,7 @@ def merge_saved_code_preview(
         )
         if reason != "SAVED":
             skipped.append({"candidate_id": cid, "reason": reason})
+            code_field_used[cid] = "full_snippet" if draft.get("full_snippet") else ("code_body" if draft.get("code_body") else "none")
             continue
         full = str(draft.get("full_snippet") or "").strip()
         if not full:
@@ -451,12 +474,18 @@ def merge_saved_code_preview(
             if body:
                 spec = str(draft.get("spec_comment_block") or "").strip()
                 full = _merge_snippet(spec, body)
+                code_field_used[cid] = "code_body"
+            else:
+                code_field_used[cid] = "none"
+        else:
+            code_field_used[cid] = "full_snippet"
         if not full:
             skipped.append({"candidate_id": cid, "reason": "NO_CODE"})
             continue
         if f"// @alex:begin {cid}" not in full:
             sh = str(draft.get("spec_hash") or "")
             full = wrap_alex_block(cid, full, spec_hash=sh)
+        full, _ = _strip_alex_markers(full)
         code_parts.append(full)
         included.append(cid)
 
@@ -483,12 +512,46 @@ def merge_saved_code_preview(
     if not included:
         warnings.append("No saved testcase code available to merge.")
 
+    confirmed_but_not_saved = [
+        cid for cid in ordered_ids
+        if str((drafts.get(cid) or {}).get("approval_status") or "").upper() in {"CONFIRMED", "APPROVED"}
+        and str((drafts.get(cid) or {}).get("code_status") or "").upper() != "SAVED"
+    ]
+    exportable_cids = [
+        cid for cid, d in drafts.items()
+        if isinstance(d, dict) and d.get("exportable")
+    ]
+    confirmed_cids = [
+        cid for cid, d in drafts.items()
+        if isinstance(d, dict)
+        and str(d.get("approval_status") or "").upper() in {"CONFIRMED", "APPROVED"}
+    ]
+    skipped_empty_code_cids = [s["candidate_id"] for s in skipped if s["reason"] == "NO_CODE"]
+    skipped_not_confirmed_cids = [s["candidate_id"] for s in skipped if s["reason"] != "NO_CODE"]
+    non_empty_code_count = sum(
+        1 for d in drafts.values()
+        if isinstance(d, dict) and str(d.get("full_snippet") or d.get("code_body") or "").strip()
+    )
+    approval_status_by_testcase = {
+        cid: str((drafts.get(cid) or {}).get("approval_status") or "")
+        for cid in ordered_ids
+    }
+    exportable_by_testcase = {
+        cid: bool((drafts.get(cid) or {}).get("exportable"))
+        for cid in ordered_ids
+    }
+
+    # Count total @alex markers stripped across all included code parts
+    stripped_alex_marker_count = sum(
+        len(_ALEX_MARKER_RE.findall(p)) for p in code_parts
+    )
+
     ts = timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     header = (
         "/*\n"
         " * generated by ALEX\n"
         f" * timestamp: {ts}\n"
-        f" * saved testcase count: {len(included)}\n"
+        f" * confirmed testcase count: {len(included)}\n"
         f" * skipped testcase count: {len(skipped)}\n"
         " */\n"
     )
@@ -501,12 +564,26 @@ def merge_saved_code_preview(
         "skipped": skipped,
         "warnings": warnings,
         "total_count": len(ordered_ids),
+        "total_drafts": len(drafts),
+        "non_empty_code_count": non_empty_code_count,
         "saved_count": len(included),
         "skipped_count": len(skipped),
         "warning_count": len(warnings),
         "timestamp": ts,
         "export_filename": export_name,
         "require_engineer_approved": require_engineer_approved,
+        "export_included_count": len(included),
+        "exportable_count": len(exportable_cids),
+        "confirmed_count": len(confirmed_cids),
+        "included_testcases": included,
+        "skipped_empty_code": skipped_empty_code_cids,
+        "skipped_not_confirmed": skipped_not_confirmed_cids,
+        "stripped_alex_marker_count": stripped_alex_marker_count,
+        "skipped_reason_by_testcase": {s["candidate_id"]: s["reason"] for s in skipped},
+        "code_field_used_by_testcase": code_field_used,
+        "approval_status_by_testcase": approval_status_by_testcase,
+        "exportable_by_testcase": exportable_by_testcase,
+        "confirmed_but_not_saved_count": len(confirmed_but_not_saved),
         "merge_readiness": {
             "saved_quality_pass": saved_quality_pass,
             "saved_quality_warning": saved_quality_warning,
