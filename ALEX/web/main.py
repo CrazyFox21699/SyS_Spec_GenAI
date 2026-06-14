@@ -236,6 +236,13 @@ def _startup() -> None:
     if team_auth_enabled(cfg):
         init_user_db(WEB_DATA)
     _repair_library_state()
+    # Mark any RUNNING generation run from before this server start as PAUSED
+    # so the UI can offer Resume remaining after a restart.
+    try:
+        from web.generation_runs import scan_and_mark_stale
+        scan_and_mark_stale(WEB_DATA / "jobs")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _prod_cfg = load_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else {}
@@ -583,6 +590,15 @@ class PromotePreconditionRequest(BaseModel):
     logic_id: str = ""
     label: str
     expected_input: str
+
+
+class LogicGenerateRowsRequest(BaseModel):
+    logic_id: str
+    language: str = "EN"
+    ai_branches: list[dict[str, Any]] | None = None
+    ai_test_function: str | None = None
+    ai_test_group: str | None = None
+    clean_obsolete: bool = True
 
 
 class TestCandidateCreateRequest(BaseModel):
@@ -2267,6 +2283,339 @@ def api_path_tc_propose(job_id: str, logic_id: str) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id, **proposal}
 
 
+@app.get("/api/review/logic-coverage")
+def api_logic_coverage(job_id: str, logic_id: str = "") -> dict[str, Any]:
+    from src.engine.logic_coverage import build_logic_coverage_item, build_logic_coverage_list
+
+    bundle = _bundle_for_job(job_id)
+    items = bundle.get("logic_review_items") or []
+
+    dedup_diag: dict[str, Any] = {}
+    if logic_id:
+        item = next(
+            (i for i in items if str(i.get("logic_id") or "") == logic_id), None
+        )
+        if not item:
+            raise HTTPException(404, f"Logic group not found: {logic_id}")
+        coverage = [build_logic_coverage_item(item)]
+    else:
+        coverage = build_logic_coverage_list(bundle, dedup_diag)
+
+    default_id = str(items[0].get("logic_id") or "") if items else ""
+    total_branches = sum(c["branch_count"] for c in coverage)
+    auto_gen = sum(
+        sum(1 for b in c["branches"] if b.get("auto_generatable"))
+        for c in coverage
+    )
+    unresolved_groups = sum(1 for c in coverage if c["unresolved_count"] > 0)
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "logic_coverage": coverage,
+        "selected_logic_id": logic_id or default_id,
+        "diagnostics": {
+            "group_count": len(coverage),
+            "total_branches": total_branches,
+            "auto_generatable_branches": auto_gen,
+            "groups_with_unresolved": unresolved_groups,
+            **dedup_diag,
+        },
+    }
+
+
+_AUTO_SOURCE_VALUES = frozenset(
+    {"logic_branch_generator", "ai_branch_generator", "auto", "generated", "logic_coverage"}
+)
+_OBSOLETE_ID_RE = re.compile(r"^TC_(BRANCH|PM)_\d+$", re.IGNORECASE)
+_GENERATED_ID_RE = re.compile(r"^TC_[A-Z0-9_]+_[NAB]\d{2,3}$", re.IGNORECASE)
+
+
+def _is_safe_to_archive(cand: dict[str, Any], overlays: dict[str, Any]) -> bool:
+    """Return True only if this candidate is safe to remove as obsolete generated row.
+
+    Safety rules (all must hold):
+    - status is not approved/confirmed
+    - no user notes / manual edits
+    - no exported flag
+    - source is an auto-generator or candidate_id matches old generated patterns
+    - not linked to Test Code
+    """
+    status = str(cand.get("status") or "")
+    if status in ("approved", "confirmed", "removed"):
+        return False
+    # Do not remove manually confirmed review status
+    review_status = str(cand.get("review_status") or "")
+    if review_status in ("approved", "confirmed", "blocked"):
+        return False
+    # Do not remove if user has added notes
+    if cand.get("user_notes") or cand.get("notes"):
+        return False
+    # Do not remove if exported
+    if cand.get("exported_at") or cand.get("exported"):
+        return False
+    # Do not remove if linked to Test Code
+    if cand.get("test_code_ref") or cand.get("gtest_ref"):
+        return False
+    # Do not remove if marked as manually edited
+    if cand.get("manually_edited") or cand.get("last_edited_by"):
+        return False
+    cid = str(cand.get("id") or "")
+    source = str(cand.get("source") or "")
+    overlay = overlays.get(cid) or {}
+    ov_source = str(overlay.get("provider") or "")
+    is_auto_source = source in _AUTO_SOURCE_VALUES or ov_source in _AUTO_SOURCE_VALUES
+    is_old_id = bool(_OBSOLETE_ID_RE.match(cid)) or bool(_GENERATED_ID_RE.match(cid))
+    return is_auto_source or is_old_id
+
+
+def _find_existing_logic_row(
+    bundle: dict[str, Any],
+    logic_id: str,
+    branch_id: str,
+    candidate_id: str,
+    event: str,
+) -> dict[str, Any] | None:
+    """Return an existing non-removed candidate that matches this branch, or None."""
+    overlays = (bundle.get("ai_assists") or {}).get("candidate_overlays") or {}
+    event_lower = event.lower()
+    branch_lower = branch_id.lower()
+    for cand in bundle.get("test_candidates") or []:
+        if str(cand.get("status") or "") == "removed":
+            continue
+        cid = str(cand.get("id") or "")
+        overlay = overlays.get(cid) or {}
+        trace = cand.get("traceability") or {}
+        ov_logic = str(overlay.get("logic_id") or trace.get("logic_id") or "")
+        if ov_logic != logic_id:
+            continue
+        if candidate_id and cid == candidate_id:
+            return cand
+        cand_event = str(cand.get("event") or "").lower()
+        if branch_lower and branch_lower in cand_event:
+            return cand
+        if event_lower and cand_event == event_lower:
+            return cand
+    return None
+
+
+@app.post("/api/review/logic-coverage/generate-rows")
+def api_logic_generate_rows(body: LogicGenerateRowsRequest, job_id: str) -> dict[str, Any]:
+    bundle = _bundle_for_job(job_id)
+    items = bundle.get("logic_review_items") or []
+    logic_id = str(body.logic_id or "").strip()
+    if not logic_id:
+        raise HTTPException(400, "logic_id is required")
+
+    item = next((i for i in items if str(i.get("logic_id") or "") == logic_id), None)
+    if not item:
+        raise HTTPException(404, f"Logic group not found: {logic_id!r}")
+
+    control_name = str(item.get("control_name") or logic_id)
+    ctrl_slug = re.sub(r"[^A-Z0-9]", "_", control_name.upper())[:15].strip("_")
+
+    overlays = bundle.setdefault("ai_assists", {}).setdefault("candidate_overlays", {})
+    candidates: list[dict[str, Any]] = bundle.setdefault("test_candidates", [])
+
+    # ── Part E: clean obsolete generated rows for this logic group ───────────
+    removed_obsolete = 0
+    kept_manual = 0
+    kept_confirmed = 0
+    kept_unknown_source = 0
+
+    if body.clean_obsolete:
+        linked_ids: set[str] = set()
+        for cand in candidates:
+            cid = str(cand.get("id") or "")
+            ov = overlays.get(cid) or {}
+            trace = cand.get("traceability") or {}
+            ov_logic = str(ov.get("logic_id") or trace.get("logic_id") or "")
+            if ov_logic == logic_id:
+                linked_ids.add(cid)
+
+        new_candidates: list[dict[str, Any]] = []
+        for cand in candidates:
+            cid = str(cand.get("id") or "")
+            if cid not in linked_ids:
+                new_candidates.append(cand)
+                continue
+            if _is_safe_to_archive(cand, overlays):
+                # Mark as removed rather than hard-delete
+                cand_copy = dict(cand)
+                cand_copy["status"] = "removed"
+                cand_copy["archive_reason"] = "obsolete_generated"
+                new_candidates.append(cand_copy)
+                overlays.pop(cid, None)
+                removed_obsolete += 1
+            else:
+                new_candidates.append(cand)
+                st = str(cand.get("status") or "")
+                rs = str(cand.get("review_status") or "")
+                if rs in ("approved", "confirmed") or st in ("approved", "confirmed"):
+                    kept_confirmed += 1
+                elif cand.get("manually_edited") or cand.get("last_edited_by") or cand.get("user_notes"):
+                    kept_manual += 1
+                else:
+                    kept_unknown_source += 1
+
+        bundle["test_candidates"] = new_candidates
+        candidates = new_candidates
+
+    existing_ids = {str(c.get("id") or "") for c in candidates if str(c.get("status") or "") != "removed"}
+
+    generated = 0
+    skipped_existing = 0
+    skipped_unresolved = 0
+    skipped_no_suggestion = 0
+
+    if body.ai_branches is not None:
+        # ── AI branch path ──────────────────────────────────────────────────
+        test_fn = str(body.ai_test_function or control_name)
+        test_grp = str(body.ai_test_group or control_name)
+
+        for branch in body.ai_branches:
+            auto_gen = bool(branch.get("auto_generatable", True))
+            unresolved = branch.get("unresolved_terms") or []
+            if not auto_gen or unresolved:
+                skipped_unresolved += 1
+                continue
+
+            branch_id = str(branch.get("branch_id") or "")
+            event_raw = str(branch.get("event") or "")
+            event = f"{branch_id} - {event_raw}" if branch_id and event_raw else (event_raw or branch_id)
+            expected_input = str(branch.get("expected_input") or "")
+            expected_output = str(branch.get("expected_output") or "")
+            path_summary = str(branch.get("path_summary") or "")
+
+            if _find_existing_logic_row(bundle, logic_id, branch_id, "", event):
+                skipped_existing += 1
+                continue
+
+            n = 1
+            while f"TC_{ctrl_slug}_B{n:02d}" in existing_ids:
+                n += 1
+            cid = f"TC_{ctrl_slug}_B{n:02d}"
+
+            candidates.append({
+                "id": cid,
+                "status": "candidate",
+                "source": "ai_branch_generator",
+                "test_function": test_fn,
+                "event": event,
+                "use_case_description": "Branch coverage",
+                "precondition": [],
+                "operation": {"given": [], "when": []},
+                "expectation": [],
+                "traceability": {
+                    "logic_id": logic_id,
+                    "control_name": control_name,
+                    "logic_branch": branch_id,
+                },
+                "why_recommended": [f"AI: {path_summary[:120]}"] if path_summary else [f"Generated from AI branch {branch_id}"],
+                "confidence": "medium",
+                "review_required": True,
+                "review_status": "pending",
+                "engineer_confirmation_required": "no",
+            })
+            overlays[cid] = {
+                "provider": "ai_branch_generator",
+                "logic_id": logic_id,
+                "control_name": control_name,
+                "en": {
+                    "use_case": "Branch coverage",
+                    "operation": "",
+                    "expected_input": expected_input,
+                    "expected_output": expected_output,
+                },
+                "changed_fields": ["UseCase", "ExpectedInput", "ExpectedOutput"],
+                "review_status_override": "pending",
+                "test_group": test_grp,
+            }
+            existing_ids.add(cid)
+            generated += 1
+    else:
+        # ── Deterministic branch path ────────────────────────────────────────
+        from src.engine.logic_coverage import build_logic_coverage_item
+
+        coverage = build_logic_coverage_item(item)
+        control_name = coverage["control_name"]
+        branches = coverage.get("branches") or []
+
+        for branch in branches:
+            if not branch.get("auto_generatable"):
+                skipped_unresolved += 1
+                continue
+            tc = branch.get("suggested_testcase")
+            if not tc:
+                skipped_no_suggestion += 1
+                continue
+
+            branch_id = str(branch.get("branch_id") or "")
+            cid = str(tc.get("candidate_id") or "").strip()
+            event = str(tc.get("event") or "")
+
+            if _find_existing_logic_row(bundle, logic_id, branch_id, cid, event) or (cid and cid in existing_ids):
+                skipped_existing += 1
+                continue
+
+            if not cid or not re.match(r"^[A-Za-z0-9_.-]+$", cid) or cid in existing_ids:
+                n = 1
+                while f"TC_{ctrl_slug}_B{n:02d}" in existing_ids:
+                    n += 1
+                cid = f"TC_{ctrl_slug}_B{n:02d}"
+
+            candidates.append({
+                "id": cid,
+                "status": "candidate",
+                "source": "logic_branch_generator",
+                "test_function": str(tc.get("test_function") or control_name),
+                "event": event,
+                "use_case_description": str(tc.get("use_case") or "Branch coverage"),
+                "precondition": [],
+                "operation": {"given": [], "when": []},
+                "expectation": [],
+                "traceability": {
+                    "logic_id": logic_id,
+                    "control_name": control_name,
+                    "logic_branch": branch_id,
+                },
+                "why_recommended": [f"Generated from branch {branch_id}"],
+                "confidence": "medium",
+                "review_required": True,
+                "review_status": "pending",
+            })
+            overlays[cid] = {
+                "provider": "logic_branch_generator",
+                "logic_id": logic_id,
+                "control_name": control_name,
+                "en": {
+                    "use_case": str(tc.get("use_case") or "Branch coverage"),
+                    "operation": "",
+                    "expected_input": str(tc.get("expected_input") or ""),
+                    "expected_output": str(tc.get("expected_output") or ""),
+                },
+                "changed_fields": ["UseCase", "ExpectedInput", "ExpectedOutput"],
+                "review_status_override": "pending",
+            }
+            existing_ids.add(cid)
+            generated += 1
+
+    if generated:
+        _save_bundle_to_job(job_id, bundle)
+
+    return {
+        "ok": True,
+        "generated": generated,
+        "skipped_existing": skipped_existing,
+        "skipped_unresolved": skipped_unresolved,
+        "skipped_no_suggestion": skipped_no_suggestion,
+        "removed_obsolete_generated": removed_obsolete,
+        "kept_manual": kept_manual,
+        "kept_confirmed": kept_confirmed,
+        "kept_unknown_source": kept_unknown_source,
+    }
+
+
 @app.get("/api/review/overview")
 def api_review_overview(job_id: str) -> dict[str, Any]:
     b = _bundle_for_job(job_id)
@@ -3689,6 +4038,7 @@ def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[
             library_code_samples=_library_code_samples(_library_root()),
             save_bundle=save_bundle,
             persist_gtest=persist_gtest,
+            job_output=out_dir,
         )
 
     try:
@@ -3705,6 +4055,24 @@ def _start_m365_copilot_task(job_id: str, body: M365CopilotTaskRequest) -> dict[
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+    # For batch generation: create a persistent generation run record so the UI
+    # can reattach after browser reload or server restart.
+    if body.kind == "code_copilot_batch":
+        from web.generation_runs import create_run as _create_gen_run
+        gen_run = _create_gen_run(
+            job_id, out_dir,
+            candidate_ids=[c for c in (payload.get("candidate_ids") or []) if c],
+            task_id=task["task_id"],
+            language=str(payload.get("language") or "EN"),
+            engineer_note=str(payload.get("engineer_note") or ""),
+            batch_size=int(payload.get("batch_size") or 10),
+            scope=str(payload.get("scope") or "filter"),
+            group_key=str(payload.get("group_key") or ""),
+            group_field=str(payload.get("group_field") or "test_group"),
+        )
+        return {"job_id": job_id, "ok": True, **task, "generation_run_id": gen_run["run_id"]}
+
     return {"job_id": job_id, "ok": True, **task}
 
 
@@ -3751,6 +4119,148 @@ def api_m365_copilot_task_cancel(job_id: str, task_id: str) -> dict[str, Any]:
     if not task:
         raise HTTPException(404, f"Task not found: {task_id}")
     return {"job_id": job_id, "ok": True, **task}
+
+
+# ---------------------------------------------------------------------------
+# Generation run endpoints — resilient batch generation tracking
+# ---------------------------------------------------------------------------
+
+@app.get("/api/review/generation-run")
+def api_generation_run_status(job_id: str) -> dict[str, Any]:
+    """Return the active generation run for this job with live diagnostics.
+
+    Returns 200 with active_run=null when no run exists.
+    Resolves stale RUNNING runs (server restarted) as PAUSED automatically.
+    """
+    from web.generation_runs import compute_run_diagnostics, get_active_run
+    from web.m365_copilot_tasks import list_tasks
+
+    out_dir = _job_output_dir(job_id)
+    tasks = list_tasks(job_id, out_dir)
+    task_status_by_id = {str(t.get("task_id") or ""): str(t.get("status") or "") for t in tasks}
+    run = get_active_run(out_dir, task_status_by_id=task_status_by_id)
+    if not run:
+        return {"job_id": job_id, "ok": True, "active_run": None, "has_active_run": False}
+    gtest_state = _load_job_gtest_state(job_id)
+    task_status = task_status_by_id.get(str(run.get("task_id") or ""), "")
+    diag = compute_run_diagnostics(run, gtest_state, task_status=task_status)
+    return {"job_id": job_id, "ok": True, "active_run": run, "has_active_run": True, **diag}
+
+
+@app.post("/api/review/generation-run/resume")
+def api_generation_run_resume(job_id: str) -> dict[str, Any]:
+    """Resume a PAUSED generation run, skipping already confirmed/saved testcases."""
+    from web.generation_runs import create_run as _create_gen_run
+    from web.generation_runs import get_active_run
+    from web.m365_copilot_task_runners import run_task_kind
+    from web.m365_copilot_tasks import list_tasks, start_task
+
+    out_dir = _job_output_dir(job_id)
+    tasks = list_tasks(job_id, out_dir)
+    task_status_by_id = {str(t.get("task_id") or ""): str(t.get("status") or "") for t in tasks}
+    run = get_active_run(out_dir, task_status_by_id=task_status_by_id)
+    if not run:
+        raise HTTPException(404, "No active generation run for this job")
+    if run["status"] not in ("PAUSED", "FAILED"):
+        return {"job_id": job_id, "ok": False, "error": "run_not_paused",
+                "status": run["status"], "run_id": run.get("run_id")}
+
+    m365_st = _m365_copilot_gate()
+    if not m365_st.get("api_ready"):
+        return {"job_id": job_id, **classify_copilot_error(m365_ready=False)}
+
+    # Collect candidate IDs that still need generation
+    gtest_state = _load_job_gtest_state(job_id)
+    drafts = gtest_state.get("drafts") or {}
+    remaining_ids: list[str] = []
+    for cid in run.get("candidate_ids") or []:
+        d = drafts.get(cid) or {}
+        cs = str(d.get("code_status") or "").upper()
+        is_done = (
+            bool(d.get("exportable"))
+            or str(d.get("approval_status") or "").upper() in ("CONFIRMED", "APPROVED")
+            or cs == "SAVED"
+        )
+        if not is_done:
+            remaining_ids.append(cid)
+
+    if not remaining_ids:
+        return {"job_id": job_id, "ok": True, "resumed": False,
+                "message": "all_completed", "remaining_count": 0}
+
+    _sync_project_code_config_cache(job_id, gtest_state)
+    cfg = _cfg()
+    bundle = _bundle_for_job(job_id)
+    payload: dict[str, Any] = {
+        "candidate_ids": remaining_ids,
+        "language": str(run.get("language") or "EN"),
+        "engineer_note": str(run.get("engineer_note") or ""),
+        "batch_size": int(run.get("batch_size") or 10),
+        "scope": "selected",
+        "group_key": str(run.get("group_key") or ""),
+        "group_field": str(run.get("group_field") or "test_group"),
+        "skip_saved": True,
+        "allow_missing_sample": True,
+        "slim_prompt": True,
+        "m365_user_id": _m365_effective_user_id(cfg),
+    }
+
+    def _save_bundle(b: dict[str, Any]) -> None:
+        _save_bundle_to_job(job_id, b)
+
+    def _persist(s: dict[str, Any]) -> None:
+        _persist_job_gtest_state(job_id, s)
+
+    def runner(task: dict[str, Any], progress: Any) -> dict[str, Any]:
+        return run_task_kind(
+            "code_copilot_batch",
+            job_id=job_id, payload=payload, task=task, progress=progress,
+            bundle=bundle, gtest_state=gtest_state, cfg=cfg,
+            library_root=_library_root(), library_code_samples=_library_code_samples(_library_root()),
+            save_bundle=_save_bundle, persist_gtest=_persist,
+            job_output=out_dir,
+        )
+
+    task = start_task(job_id, out_dir, kind="code_copilot_batch", payload=payload,
+                      label=f"Resume ({len(remaining_ids)} remaining)", runner=runner)
+    new_run = _create_gen_run(
+        job_id, out_dir,
+        candidate_ids=remaining_ids, task_id=task["task_id"],
+        language=payload["language"], engineer_note=payload["engineer_note"],
+        batch_size=int(payload["batch_size"]), scope="selected",
+    )
+    return {
+        "job_id": job_id, "ok": True, "resumed": True,
+        "generation_run_id": new_run["run_id"],
+        "task_id": task["task_id"],
+        "remaining_count": len(remaining_ids),
+        **task,
+    }
+
+
+@app.post("/api/review/generation-run/cancel")
+def api_generation_run_cancel(job_id: str) -> dict[str, Any]:
+    """Cancel the active generation run. Completed drafts are preserved."""
+    from web.generation_runs import get_active_run, update_run
+    from web.m365_copilot_tasks import cancel_task, list_tasks
+
+    out_dir = _job_output_dir(job_id)
+    tasks = list_tasks(job_id, out_dir)
+    task_status_by_id = {str(t.get("task_id") or ""): str(t.get("status") or "") for t in tasks}
+    run = get_active_run(out_dir, task_status_by_id=task_status_by_id)
+    if not run:
+        return {"job_id": job_id, "ok": False, "error": "no_active_run"}
+    task_id = str(run.get("task_id") or "")
+    if task_id:
+        cancel_task(job_id, task_id, out_dir)
+    update_run(out_dir, run["run_id"], status="CANCELLED")
+    return {"job_id": job_id, "ok": True, "cancelled_run_id": run["run_id"], "task_id": task_id}
+
+
+@app.get("/api/review/generation-runs")
+def api_generation_run_list(job_id: str) -> dict[str, Any]:
+    from web.generation_runs import list_runs
+    return {"job_id": job_id, "ok": True, "runs": list_runs(_job_output_dir(job_id))}
 
 
 @app.get("/api/review/gtest-workspace")

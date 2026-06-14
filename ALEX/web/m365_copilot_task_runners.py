@@ -35,6 +35,7 @@ def run_task_kind(
     library_code_samples: list[dict[str, Any]] | None,
     save_bundle: Callable[[dict[str, Any]], None],
     persist_gtest: Callable[[dict[str, Any]], None],
+    job_output: Path | None = None,
 ) -> dict[str, Any]:
     if kind == "code_generate":
         return _run_code_generate(
@@ -61,6 +62,7 @@ def run_task_kind(
             gtest_state,
             cfg,
             persist_gtest,
+            job_output=job_output,
         )
     if kind == "code_exemplar_batch":
         return _run_code_exemplar_batch(
@@ -177,6 +179,7 @@ def _run_code_copilot_batch(
     gtest_state: dict[str, Any],
     cfg: dict[str, Any],
     persist_gtest: Callable[[dict[str, Any]], None],
+    job_output: Path | None = None,
 ) -> dict[str, Any]:
     from web.copilot_batch_codegen import run_copilot_batch_api
 
@@ -184,7 +187,7 @@ def _run_code_copilot_batch(
     result = run_copilot_batch_api(
         bundle,
         gtest_state,
-        None,
+        job_output,
         cfg=cfg,
         candidate_ids=[c for c in (payload.get("candidate_ids") or []) if c],
         language=str(payload.get("language") or "EN"),

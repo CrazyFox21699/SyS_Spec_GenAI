@@ -732,10 +732,12 @@ def _strip_md_escapes(text: str) -> str:
 def parse_condition_code_entries(section_body: str) -> list[dict[str, str]]:
     """Parse condition/code YAML entries from a memory section body.
 
-    Handles entries like:
-        * condition: SIGNAL = VALUE
+    Handles both multiline YAML block format and inline pipe format:
+        * condition: SIGNAL = VALUE        (multiline, code on next lines)
           code: |
             EXPECT_CALL(...)
+
+        - condition: SIGNAL = VALUE code: | EXPECT_CALL(...); notes:  (inline)
 
     Also handles markdown-escaped underscores (WMODE\\_CMD → WMODE_CMD).
     Returns list of {condition, signal, value, code} dicts.
@@ -754,7 +756,9 @@ def parse_condition_code_entries(section_body: str) -> list[dict[str, str]]:
         block_lines = lines[start:end]
         block_text = "\n".join(block_lines)
 
-        cond_m = re.search(r"condition:\s*(.+)", block_text, re.I)
+        # Stop condition capture at the first inline key (code:/notes:) on the same line;
+        # for multiline format (.+?) stops at \n naturally.
+        cond_m = re.search(r"condition:\s*(.+?)(?=\s+(?:code|notes|value)\s*:|\n|$)", block_text, re.I)
         if not cond_m:
             continue
 
@@ -765,12 +769,20 @@ def parse_condition_code_entries(section_body: str) -> list[dict[str, str]]:
         signal = sig_m.group(1).strip().upper() if sig_m else (condition.split()[0].upper() if condition.split() else "")
         value = _strip_md_escapes(sig_m.group(2).strip()) if sig_m else ""
 
-        # Extract code: collect all lines after "code: |" until next bullet marker or section
+        # Extract code: collect all lines after "code: |" until next bullet marker or section.
+        # Inline format: code: | VALUE [notes: ...] — all on one line.
         code_lines: list[str] = []
         in_code = False
         code_ref_indent = 0
         for line in block_lines:
             if re.search(r"\bcode:\s*\|", line, re.I):
+                # Check for inline code after the pipe (inline format)
+                after_pipe = re.sub(r".*\bcode:\s*\|\s*", "", line, count=1, flags=re.I)
+                inline_code = re.sub(r"\s+(?:notes|value)\s*:.*$", "", after_pipe, flags=re.I).strip()
+                if inline_code:
+                    code_lines.append(inline_code)
+                    break
+                # No inline content → multiline block follows on subsequent lines
                 in_code = True
                 code_ref_indent = len(line) - len(line.lstrip())
                 continue
@@ -794,6 +806,54 @@ def parse_condition_code_entries(section_body: str) -> list[dict[str, str]]:
             entries.append({"condition": condition_raw, "signal": signal, "value": value, "code": code})
 
     return entries
+
+
+def get_mapped_output_signals(memory_content: str, expected_output: str) -> frozenset[str]:
+    """Return the set of ALL_CAPS signal names from expected_output that have condition/code entries
+    in the Output Assertion Pattern memory section.
+
+    Used by sanitize_generated_cpp_body to preserve memory-mapped EXPECT_THAT calls rather than
+    replacing them with ALEX_REVIEW. Normalises spaces and numeric suffixes (1u == 1).
+    """
+    raw = str(memory_content or "").strip()
+    if not raw:
+        return frozenset()
+    text = filter_confirmed_rules(_strip_md_escapes(raw))
+    out_body = _section_body(text, "Output Assertion Pattern")
+    if not out_body:
+        return frozenset()
+    entries = parse_condition_code_entries(out_body)
+    if not entries:
+        return frozenset()
+
+    eo = str(expected_output or "")
+    # Parse signal=value pairs from Then: clauses; strip trailing numeric suffix for normalisation
+    output_sv: list[tuple[str, str]] = [
+        (m.group(1).upper(), re.sub(r"[u'\" ]+$", "", m.group(2).strip()))
+        for m in re.finditer(r"then\s*:\s*(\w+)\s*=\s*(\S+)", eo, re.I)
+    ]
+    output_signals: set[str] = {sig for sig, _ in output_sv}
+    if not output_signals:
+        return frozenset()
+
+    # Build lookup: (SIGNAL, normalised_value) → True; also (SIGNAL, val_without_suffix) → True
+    sv_has_code: dict[tuple[str, str], bool] = {}
+    sig_has_code: dict[str, bool] = {}
+    for e in entries:
+        if not e.get("code"):
+            continue
+        sig = e["signal"]  # already uppercased by the parser
+        raw_val = re.sub(r"[u'\" ]+$", "", e["value"].strip())
+        sv_has_code[(sig, raw_val)] = True
+        sv_has_code[(sig, raw_val.rstrip("uU"))] = True
+        if sig not in sig_has_code:
+            sig_has_code[sig] = True
+
+    mapped: set[str] = set()
+    for sig, val in output_sv:
+        if sv_has_code.get((sig, val)) or sv_has_code.get((sig, val.rstrip("uU"))) or sig_has_code.get(sig):
+            mapped.add(sig)
+    return frozenset(mapped)
 
 
 def _signals_in_condition_entries(section_body: str) -> set[str]:

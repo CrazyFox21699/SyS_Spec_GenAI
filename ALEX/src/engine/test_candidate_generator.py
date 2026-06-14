@@ -21,6 +21,24 @@ def _flatten_signals_from_tree(tree: dict[str, Any]) -> list[str]:
     return [x for x in out if x]
 
 
+_GENERIC_CTRL_NAMES = frozenset({"logic", "power mode", "control", "unknown"})
+
+
+def _sanitize_tc_ctrl(ctrl: str) -> str:
+    c = re.sub(r"[^A-Z0-9]", "_", str(ctrl or "").upper().strip())
+    c = re.sub(r"_+", "_", c).strip("_")
+    return c[:20]
+
+
+def _make_tc_id(ctrl: str, branch_idx: int) -> str:
+    """Return a testcase ID based on control name + branch index, never using 'PM'."""
+    ctrl_clean = str(ctrl or "").strip().lower()
+    if not ctrl_clean or ctrl_clean in _GENERIC_CTRL_NAMES:
+        return f"TC_BRANCH_{branch_idx:03d}"
+    slug = _sanitize_tc_ctrl(ctrl)
+    return f"TC_{slug}_B{branch_idx:02d}"
+
+
 def generate_candidates(
     transitions: list[dict[str, Any]],
     signals: list[dict[str, Any]],
@@ -48,7 +66,7 @@ def generate_candidates(
         to_st = t.get("to_state")
 
         n += 1
-        cid = f"TC_PM_{n:03d}"
+        cid = f"TC_BRANCH_{n:03d}"
         candidates.append(
             {
                 "id": cid,
@@ -106,7 +124,7 @@ def generate_candidates(
             tn0 = timing_notes[0]
             ms = tn0.get("value_ms")
             n += 1
-            cid2 = f"TC_PM_{n:03d}"
+            cid2 = f"TC_BRANCH_{n:03d}"
             candidates.append(
                 {
                     "id": cid2,
@@ -141,7 +159,7 @@ def generate_candidates(
                     alt = rv
                     break
             n += 1
-            cid3 = f"TC_PM_{n:03d}"
+            cid3 = f"TC_BRANCH_{n:03d}"
             candidates.append(
                 {
                     "id": cid3,
@@ -175,6 +193,7 @@ def generate_negative_candidates_from_ast(
     candidates: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
     n = start_index
+    _ctrl_idx: dict[str, int] = {}
 
     def walk_not(node: dict[str, Any], block: dict[str, Any]) -> None:
         nonlocal n
@@ -182,7 +201,9 @@ def generate_negative_candidates_from_ast(
             ch = (node.get("children") or [{}])[0]
             nm = ch.get("name", "?")
             n += 1
-            cid = f"TC_PM_{n:03d}"
+            _ctrl = str(block.get("name") or "")
+            _ctrl_idx[_ctrl] = _ctrl_idx.get(_ctrl, 0) + 1
+            cid = _make_tc_id(_ctrl, _ctrl_idx[_ctrl])
             candidates.append(
                 {
                     "id": cid,
@@ -237,6 +258,7 @@ def generate_candidates_from_resolved_blocks(
     candidates: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
     n = start_index
+    ctrl_branch_counter: dict[str, int] = {}
 
     for rb in resolved_blocks:
         ctrl = str(rb.get("name") or "logic")
@@ -249,7 +271,8 @@ def generate_candidates_from_resolved_blocks(
         )
         if meta.get("aborted"):
             n += 1
-            cid = f"TC_PM_{n:03d}"
+            ctrl_branch_counter[ctrl] = ctrl_branch_counter.get(ctrl, 0) + 1
+            cid = _make_tc_id(ctrl, ctrl_branch_counter[ctrl])
             candidates.append(
                 {
                     "id": cid,
@@ -273,7 +296,8 @@ def generate_candidates_from_resolved_blocks(
 
         for ps in path_specs:
             n += 1
-            cid = f"TC_PM_{n:03d}"
+            ctrl_branch_counter[ctrl] = ctrl_branch_counter.get(ctrl, 0) + 1
+            cid = _make_tc_id(ctrl, ctrl_branch_counter[ctrl])
             given = _given_from_path_spec(ps, control_name=ctrl)
             label = ps.get("label", "path")
             candidates.append(
@@ -360,6 +384,7 @@ def generate_candidates_from_logic_blocks(
     candidates: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
     n = start_index
+    ctrl_branch_counter: dict[str, int] = {}
     def_map = _definition_map(condition_definitions or [])
     fn_rules = _footnote_rules_index(footnote_definitions or [])
     for lb in logic_blocks:
@@ -396,7 +421,8 @@ def generate_candidates_from_logic_blocks(
 
         for spec in branch_specs:
             n += 1
-            cid = f"TC_PM_{n:03d}"
+            ctrl_branch_counter[ctrl] = ctrl_branch_counter.get(ctrl, 0) + 1
+            cid = _make_tc_id(ctrl, ctrl_branch_counter[ctrl])
             label = spec.get("label", "default")
             given = spec.get("given") or []
             candidates.append(
@@ -451,7 +477,8 @@ def generate_candidates_from_logic_blocks(
             if not rule or rule.get("otherwise_value") is None:
                 continue
             n += 1
-            cid = f"TC_PM_{n:03d}"
+            ctrl_branch_counter[ctrl] = ctrl_branch_counter.get(ctrl, 0) + 1
+            cid = _make_tc_id(ctrl, ctrl_branch_counter[ctrl])
             given_other = [
                 {"note": line, "footnote_ref": ref}
                 for line in given_lines_for_footnote_rule(rule, branch="otherwise")
@@ -548,7 +575,7 @@ def generate_candidates_from_test_references(
         if not rid:
             continue
         n += 1
-        cid = rid if rid.upper().startswith("TC") else f"TC_PM_{n:03d}"
+        cid = rid if rid.upper().startswith("TC") else f"TC_BRANCH_{n:03d}"
         given = str(row.get("given") or "")
         when = str(row.get("when") or "")
         expected = str(row.get("expected") or "")

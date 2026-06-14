@@ -1880,6 +1880,8 @@ def apply_copilot_batch_import(
                 missing_context_items=_mc_items_all,
             )
             if _review_draft:
+                _review_draft = normalize_testf_snippet(_review_draft, _mc_row, memory_content=_raw_memory_for_recovery)
+            if _review_draft:
                 _only_fixture_missing = not mc_items and bool(_mc_items_all)
                 _issue = "fixture_needs_review" if _only_fixture_missing else "missing_generation_context"
                 _mc_summary = "; ".join(
@@ -1990,6 +1992,8 @@ def apply_copilot_batch_import(
                 cid, row_data, _raw_memory_for_recovery, _unres_fixture,
                 missing_context_items=missing if isinstance(missing, list) else None,
             )
+            if _unres_draft_code:
+                _unres_draft_code = normalize_testf_snippet(_unres_draft_code, row_data, memory_content=_raw_memory_for_recovery)
             _unres_gen_src = "LOCAL_REVIEW_DRAFT" if _unres_draft_code else generation_source
             _unres_gm_diag = {
                 "candidate_id": cid,
@@ -2124,7 +2128,7 @@ def apply_copilot_batch_import(
             (r for r in (gtest_state.get("_batch_target_rows") or []) if str(r.get("candidate_id") or "") == cid),
             None,
         )
-        full = normalize_testf_snippet(full, _row_meta)
+        full = normalize_testf_snippet(full, _row_meta, memory_content=_raw_memory_for_recovery)
 
         # --- Fixture replacement ---
         # If generated TEST_F uses a TryTo placeholder that doesn't match the group fixture,

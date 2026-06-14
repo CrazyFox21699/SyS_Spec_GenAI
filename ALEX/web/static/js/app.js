@@ -395,6 +395,7 @@ let state = {
   },
   _suppressTestCodeEditorInput: false,
   copilotRowDraft: {},
+  aiBranchPlan: {},   // keyed by logic_id; stores accepted AI branch plan per session
   guideOpenSection: null,
   m365Tasks: {
     byId: {},
@@ -516,10 +517,13 @@ function api(path, opts = {}) {
         err.apiBody = body?.ok === false ? body : body?.detail || body;
         throw err;
       }
-      if (!window.location.pathname.startsWith("/login")) {
+      // opts.noRedirectOn401: caller handles 401 without navigating away (e.g. poll loops)
+      if (!opts.noRedirectOn401 && !window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
-      throw new Error("Not authenticated");
+      const authErr = new Error("Not authenticated");
+      authErr.status = 401;
+      throw authErr;
     }
     if (r.status === 409) {
       let detail = "Someone else saved — refresh the page and try again.";
@@ -1818,7 +1822,8 @@ function pollM365Tasks() {
     for (const id of ids) {
       try {
         const st = await api(
-          `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`
+          `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`,
+          { noRedirectOn401: true }
         );
         const prev = state.m365Tasks.byId[id] || {};
         state.m365Tasks.byId[id] = { ...prev, ...st, kind: prev.kind || st.kind, payload: prev.payload || st.payload };
@@ -1916,7 +1921,13 @@ function pollM365Tasks() {
             applyBatchWorkflowResults(st.result || {});
           }
         }
-      } catch (_) {
+      } catch (err) {
+        if (err && err.status === 401) {
+          // Session expired — generation is still running in backend; show message, keep polling.
+          state.m365Tasks.sessionExpired = true;
+          const progressPanel = document.getElementById("testcode-progress-panel");
+          if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
+        }
         /* keep polling */
       }
     }
@@ -1927,27 +1938,99 @@ function pollM365Tasks() {
 async function resumeM365Tasks() {
   if (!state.jobId) return;
   const ids = readM365TaskIds(state.jobId);
-  if (!ids.length) return;
+  if (!ids.length) {
+    // No active task IDs in session — check backend for a paused generation run
+    await checkForPausedGenerationRun();
+    return;
+  }
   state.m365Tasks.activeIds = [...ids];
   for (const id of ids) {
     try {
       const st = await api(
-        `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`
+        `/api/review/copilot/m365-tasks/${encodeURIComponent(id)}?job_id=${encodeURIComponent(state.jobId)}`,
+        { noRedirectOn401: true }
       );
       if (st.status === "MISSING") {
-        /* Task gone (backend restarted or expired) — prune from active list, don't resume polling */
+        /* Task gone (backend restarted) — prune from active list and check for paused run */
         state.m365Tasks.activeIds = (state.m365Tasks.activeIds || []).filter((x) => x !== id);
         persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+        await checkForPausedGenerationRun();
       } else {
         state.m365Tasks.byId[id] = st;
         if (st.status === "completed") await handleM365TaskComplete(st);
       }
-    } catch (_) {
+    } catch (err) {
+      if (err && err.status === 401) {
+        state.m365Tasks.sessionExpired = true;
+      }
       /* network error — leave in activeIds so pollM365Tasks can retry */
     }
   }
   refreshM365TaskBanner();
   pollM365Tasks();
+}
+
+async function checkForPausedGenerationRun() {
+  if (!state.jobId) return;
+  try {
+    const data = await api(
+      `/api/review/generation-run?job_id=${encodeURIComponent(state.jobId)}`,
+      { noRedirectOn401: true }
+    );
+    if (data.has_active_run && data.active_run) {
+      state.testCode.activeGenerationRun = data;
+      const progressPanel = document.getElementById("testcode-progress-panel");
+      if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
+    }
+  } catch (_) {
+    /* ignore — generation run check is optional */
+  }
+}
+
+async function resumeGenerationRun() {
+  if (!state.jobId) return;
+  const statusEl = document.getElementById("testcode-batch-status") || document.getElementById("testcode-api-status");
+  if (statusEl) statusEl.textContent = "Resuming generation…";
+  try {
+    const data = await api(
+      `/api/review/generation-run/resume?job_id=${encodeURIComponent(state.jobId)}`,
+      { method: "POST", noRedirectOn401: true }
+    );
+    if (data.ok && data.resumed) {
+      state.testCode.activeGenerationRun = null;
+      state.m365Tasks.sessionExpired = false;
+      // Register the new task for polling
+      if (data.task_id) {
+        state.m365Tasks.byId[data.task_id] = { ...data, kind: "code_copilot_batch", status: "running" };
+        state.m365Tasks.activeIds = [...new Set([...(state.m365Tasks.activeIds || []), data.task_id])];
+        persistM365TaskIds(state.jobId, state.m365Tasks.activeIds);
+        refreshM365TaskBanner();
+        pollM365Tasks();
+      }
+      if (statusEl) statusEl.textContent = `Resumed: ${data.remaining_count} testcases queued.`;
+    } else {
+      if (statusEl) statusEl.textContent = data.message === "all_completed"
+        ? "All testcases already generated — nothing to resume."
+        : (data.error || "Could not resume generation.");
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Resume failed: ${err.message || "unknown error"}`;
+  }
+}
+
+async function cancelGenerationRun() {
+  if (!state.jobId) return;
+  try {
+    const data = await api(
+      `/api/review/generation-run/cancel?job_id=${encodeURIComponent(state.jobId)}`,
+      { method: "POST", noRedirectOn401: true }
+    );
+    if (data.ok) {
+      state.testCode.activeGenerationRun = null;
+      const progressPanel = document.getElementById("testcode-progress-panel");
+      if (progressPanel) progressPanel.outerHTML = renderTestCodeProgressPanel(state.testCode.rows || []);
+    }
+  } catch (_) { /* ignore */ }
 }
 
 function updateSelectedCount() {
@@ -4815,6 +4898,13 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
   const opCls = fieldHighlightClass(row, "Operation");
   const inCls = fieldHighlightClass(row, "ExpectedInput");
   const outCls = fieldHighlightClass(row, "ExpectedOutput");
+  const ioSection = scope === "logic"
+    ? `<div class="focus-span-2" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;align-items:start">
+        <label>Expected input ${renderFieldSourceBadge(row, "ExpectedInput")}<textarea id="${scope}-focus-expected_input" class="focus-text focus-text--io ${inCls}" rows="14" style="width:100%;box-sizing:border-box">${esc(row.expected_input || "")}</textarea></label>
+        <label>Expected output ${renderFieldSourceBadge(row, "ExpectedOutput")}<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out ${outCls}" rows="14" style="width:100%;box-sizing:border-box">${esc(row.expected_output || "")}</textarea></label>
+      </div>`
+    : `<label class="focus-span-2">Expected input ${renderFieldSourceBadge(row, "ExpectedInput")}<textarea id="${scope}-focus-expected_input" class="focus-text focus-text focus-text--io ${inCls}" rows="14">${esc(row.expected_input || "")}</textarea></label>
+      <label class="focus-span-2">Expected output ${renderFieldSourceBadge(row, "ExpectedOutput")}<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out ${outCls}" rows="6">${esc(row.expected_output || "")}</textarea></label>`;
   return `<div class="card workbook-focus-card" id="${scope}-workbook-anchor">
     <div class="focus-head">
       <div>
@@ -4830,8 +4920,7 @@ function renderWorkbookFocusEditor(rows, { language = "EN", scope = "export", ti
     <div class="focus-grid focus-grid--workbook">
       <label class="focus-span-2">UseCase ${renderFieldSourceBadge(row, "UseCase")}<textarea id="${scope}-focus-use_case" class="focus-text focus-text--wide ${ucCls}">${esc(row.use_case || "")}</textarea></label>
       <label class="focus-span-2">Operation ${renderFieldSourceBadge(row, "Operation")}<textarea id="${scope}-focus-operation" class="focus-text focus-text--wide ${opCls}">${esc(row.operation || "")}</textarea></label>
-      <label class="focus-span-2">Expected input ${renderFieldSourceBadge(row, "ExpectedInput")}<textarea id="${scope}-focus-expected_input" class="focus-text focus-text focus-text--io ${inCls}" rows="14">${esc(row.expected_input || "")}</textarea></label>
-      <label class="focus-span-2">Expected output ${renderFieldSourceBadge(row, "ExpectedOutput")}<textarea id="${scope}-focus-expected_output" class="focus-text focus-text--io focus-text--io-out ${outCls}" rows="6">${esc(row.expected_output || "")}</textarea></label>
+      ${ioSection}
     </div>
     <label class="detail"><input type="checkbox" id="${scope}-focus-remember-io" /> Remember I/O → code variable map on save</label>
     <div class="focus-meta">
@@ -6419,38 +6508,34 @@ async function renderLogicReview(opts = {}) {
     return;
   }
   if (opts.skipShell && document.querySelector(".alex-layout-logic")) {
-    refreshM365TaskBanner();
     return;
   }
   const loading = !document.querySelector(".alex-layout-logic");
   if (loading) {
-    content().innerHTML = `<p class="detail">Loading logic review…</p>`;
+    content().innerHTML = `<p class="detail">Loading logic coverage…</p>`;
   }
   try {
-    if (opts.force) invalidateApiCache(`logic-review:${state.jobId}`);
+    if (opts.force) invalidateApiCache(`logic-coverage:${state.jobId}`);
     const summaryPromise = opts.skipSummary
       ? Promise.resolve(null)
       : refreshJobSummary(opts.force).catch(() => null);
-    const [data] = await Promise.all([
+    const [coverageData, workbench] = await Promise.all([
       cachedApi(
-        `logic-review:${state.jobId}`,
-        () => api(`/api/review/logic-review?job_id=${state.jobId}`),
+        `logic-coverage:${state.jobId}`,
+        () => api(`/api/review/logic-coverage?job_id=${encodeURIComponent(state.jobId)}`),
         API_CACHE_TTL.logicReview
       ),
+      fetchWorkbench(state.exportLanguage),
       summaryPromise,
     ]);
-    state.bundle = {
-      ...(state.bundle || {}),
-      term_roles: data.term_roles || state.bundle?.term_roles || {},
-    };
-    const items = data.logic_review_items || [];
-    if (!items.length) {
+    const groups = coverageData.logic_coverage || [];
+    if (!groups.length) {
       const src = jobBootstrapSource(state._summaryCache?.summary);
       const hint =
         src.startsWith("imported")
           ? "Imported job has synthetic logic groups — open Export or Test Code to edit test cases. Run diagnostic for parser details."
           : "No logic blocks detected. Try Import TestSpec or run Review specification. Parser may not match your docx table headers.";
-      content().innerHTML = `<h2>Logic Review</h2><p class="detail">${esc(hint)}</p>
+      content().innerHTML = `<h2>Logic Coverage</h2><p class="detail">${esc(hint)}</p>
         <button class="btn secondary" id="btn-logic-diagnostic" type="button">Run job diagnostic</button>
         <pre id="logic-diagnostic-out" class="detail" style="white-space:pre-wrap;margin-top:0.75rem"></pre>`;
       $("#btn-logic-diagnostic").onclick = async () => {
@@ -6463,198 +6548,391 @@ async function renderLogicReview(opts = {}) {
       };
       return;
     }
-    const sel = state.selectedLogicId || items[0].logic_id;
-    const item = items.find((x) => x.logic_id === sel) || items[0];
-    const assistStatus =
-      state.assistStatus ||
-      {
-        providers_available: {
-          m365: m365KnowledgeReady(),
-          copilot: false,
-        },
-      };
-    const [inbox, workbench, knowledgeApply, reasoningRes, overviewRes, footnoteMat, pathMatrix, copilotSessionRes, verifyMatrixRes] =
-      await Promise.all([
-      cachedApi(
-        `inbox:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/definition-inbox?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ),
-      fetchWorkbench(state.exportLanguage),
-      cachedApi(
-        `knowledge:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/knowledge-apply?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ).catch(() => ({ status: "none", diffs: [] })),
-      cachedApi(
-        `reasoning:${state.jobId}:${item.logic_id}`,
-        () => api(`/api/reasoning/${encodeURIComponent(item.logic_id)}?job_id=${encodeURIComponent(state.jobId)}`),
-        8000
-      ).catch(() => null),
-      cachedApi(`overview:${state.jobId}`, () => api(`/api/review/overview?job_id=${encodeURIComponent(state.jobId)}`), 15000).catch(
-        () => null
-      ),
-      cachedApi(
-        `footnote:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/footnote-materializations?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ).catch(() => null),
-      cachedApi(
-        `path-matrix:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/path-tc-matrix?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ).catch(() => null),
-      cachedApi(
-        `copilot-session:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/copilot/session?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ).catch(() => ({ session: {} })),
-      cachedApi(
-        `verify-matrix:${state.jobId}:${item.logic_id}`,
-        () =>
-          api(
-            `/api/review/verification-matrix?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`
-          ),
-        8000
-      ).catch(() => null),
-    ]);
-    const copilotSession = copilotSessionRes?.session || {};
-    if (!state.copilotStep) state.copilotStep = {};
-    state.assistStatus = assistStatus;
-    const queueByLogic = Object.fromEntries(((data.ai_queue?.logic_groups) || []).map((row) => [row.logic_id, row]));
-    const queueItem = queueByLogic[item.logic_id] || {};
-    const engineerNote = (data.ai_assists?.engineer_notes || {})[item.logic_id] || "";
-    const attachments = (data.ai_assists?.logic_attachments || {})[item.logic_id] || [];
-    const relatedCandidateIds = new Set((item.candidates || []).map((row) => row.id));
-    const logicRows = (workbench.rows || []).filter(
-      (row) => row.logic_id === item.logic_id || relatedCandidateIds.has(row.candidate_id)
-    );
-    const simResult = state.pathSimResult?.[item.logic_id] || null;
-    const highlightTerms = state.logicTreeFocus?.highlightTerms || [];
-    const highlightRowNos = state.logicTreeFocus?.highlightRowNos || [];
-    const treeHtml = renderInteractiveLogicTree(item, simResult?.active_node_ids || []);
-    const pathSimHtml = renderPathSimulatorPanel(item, simResult);
-    const overviewHtml = renderSpecOverviewPanel(overviewRes?.overview);
-    const formalSpecHtml = renderFormalSpecContextPanel(data, item);
-    const semanticsBadges = renderLogicSemanticsBadges(item);
-    const footnoteAttachHtml = renderFootnoteAttachmentsPanel(footnoteMat);
-    const pathMatrixHtml = renderPathTcMatrixPanel(pathMatrix?.matrix, state.pathRegenProposal?.[item.logic_id]);
-    const verifyMatrixHtml = renderVerificationMatrixPanel(verifyMatrixRes || {}, item.logic_id);
-    const listHtml = items
+    const selId = state.selectedLogicId || coverageData.selected_logic_id || groups[0].logic_id;
+    state.selectedLogicId = selId;
+    const selGroup = groups.find((g) => g.logic_id === selId) || groups[0];
+    const logicRows = (workbench.rows || []).filter((row) => row.logic_id === selId);
+    const listHtml = groups
       .map(
-        (it) =>
-          `<option value="${esc(it.logic_id)}" ${it.logic_id === item.logic_id ? "selected" : ""}>${esc(
-            it.control_name
-          )}</option>`
+        (g) =>
+          `<option value="${esc(g.logic_id)}" ${g.logic_id === selId ? "selected" : ""}>${esc(g.control_name)}</option>`
       )
       .join("");
-    const tableRows = (item.table_rows || []).map((r) => [
-      r.row_no,
-      esc(r.raw_condition),
-      r.depth,
-      esc(r.detected_type),
-      esc(r.parser_reason || ""),
-    ]);
-    const parserNotes = (item.parser_notes || []).map((n) =>
-      esc(n.parser_reason || n.message || n.type || "parser note")
-    );
-    const sourceEvidenceHtml = item.source_evidence
-      ? typeof item.source_evidence === "object"
-        ? renderEvidenceNotes(
-            [
-              {
-                kind: "source",
-                label: compactSourceLabel(item.source_evidence) || basename(item.source_evidence.file || "source"),
-                detail: formatSourceReadable(item.source_evidence),
-              },
-            ],
-            { label: "Source file" }
-          )
-        : renderEvidenceNotes(parseLegacyEvidenceString(item.source_evidence), { label: "Source file" })
-      : "";
+    const tableRowsHtml = groups
+      .map(
+        (g) =>
+          `<tr class="workbook-row${g.logic_id === selId ? " is-focused" : ""}" data-logic-group-row="${esc(g.logic_id)}" style="cursor:pointer">
+          <td>${esc(g.control_name)}</td>
+          <td><span class="tag ${g.status === "ok" ? "high" : (g.status === "needs_review" || g.status === "unresolved") ? "warning" : "error"}">${esc(g.status)}</span></td>
+          <td>${g.branch_count}</td>
+          <td>${g.unresolved_count || "—"}</td>
+        </tr>`
+      )
+      .join("");
+    const treeLines = selGroup.tree_lines || [];
+    const detBranches = selGroup.branches || [];
+    if (!state.aiBranchPlan) state.aiBranchPlan = {};
+    const aiPlan = state.aiBranchPlan[selId] || null;
+    const branches = aiPlan?.branches || detBranches;
+    const isAiBranches = !!aiPlan?.branches;
+    // ── tree renderer (client-side, no backend change) ──────────────────────
+    const _treeClassify = (text) => {
+      const u = text.toUpperCase();
+      return u === "AND" ? "and" : u === "OR" ? "or" : u.startsWith("NOT ") ? "not" : "leaf";
+    };
+    const _ftHtml = (text) =>
+      esc(text).replace(/\(\*\d+\)/g, (m) =>
+        `<span style="color:var(--text-muted,#bbb);font-size:0.82em">${m}</span>`
+      );
+    const _gateChip = (gate) => {
+      const isOr = gate.toUpperCase() === "OR";
+      return `<span style="display:inline-block;padding:0.05em 0.45em;border-radius:4px;font-size:0.68rem;font-weight:700;font-family:monospace;letter-spacing:0.04em;vertical-align:middle;background:${
+        isOr ? "rgba(59,130,246,0.18)" : "rgba(22,163,74,0.18)"
+      };color:${isOr ? "var(--blue,#60a5fa)" : "var(--green,#4ade80)"};border:1px solid ${isOr ? "rgba(59,130,246,0.35)" : "rgba(22,163,74,0.35)"}">${esc(gate.toUpperCase())}</span>`;
+    };
+    const _notChip = () =>
+      `<span style="display:inline-block;padding:0.05em 0.45em;border-radius:4px;font-size:0.68rem;font-weight:700;font-family:monospace;letter-spacing:0.04em;vertical-align:middle;background:rgba(234,88,12,0.18);color:var(--orange,#fb923c);border:1px solid rgba(234,88,12,0.35)">NOT</span>`;
+    const _nodeRow = (pfx, text, isTitle) => {
+      const kind = _treeClassify(text);
+      let body;
+      if (isTitle) {
+        body = `<strong style="font-size:0.9rem">${esc(text)}</strong>`;
+      } else if (kind === "and" || kind === "or") {
+        body = _gateChip(text);
+      } else if (kind === "not") {
+        body = `${_notChip()}&thinsp;<span style="font-size:0.85rem">${_ftHtml(text.slice(4))}</span>`;
+      } else {
+        body = `<span style="font-size:0.85rem">${_ftHtml(text)}</span>`;
+      }
+      return `<div style="display:flex;align-items:center;min-height:1.6rem">`
+        + `<span style="font-family:monospace;color:var(--text-muted,#bbb);white-space:pre;flex-shrink:0;font-size:0.78rem;line-height:1.6">${esc(pfx)}</span>${body}</div>`;
+    };
+    const _renderTreeHtml = (lines) => {
+      if (!lines || !lines.length) return "";
+      // Detect pre-built connector format (from backend render_tree_lines: ├──, └──, │)
+      const hasConnectors = lines.some((l) => /[└├│]/.test(l));
+      if (hasConnectors) {
+        return lines.map((ln, i) => {
+          const m = ln.match(/^([\s└├│─]*)(.*)/);
+          const pfx = m ? m[1] : "";
+          const text = (m ? m[2] : ln).trim();
+          if (!text) return "";
+          return _nodeRow(pfx, text, i === 0 && !pfx.trim());
+        }).filter(Boolean).join("");
+      }
+      // 2-space indented format (from visual_source fallback — generate connectors client-side)
+      const nodes = lines.map((ln) => ({
+        depth: Math.floor((ln.match(/^(\s*)/)[1].length) / 2),
+        text: ln.trim(),
+      }));
+      const isLast = nodes.map((n, i) => {
+        for (let j = i + 1; j < nodes.length; j++) {
+          if (nodes[j].depth <= n.depth) return nodes[j].depth < n.depth;
+        }
+        return true;
+      });
+      const cont = new Array(20).fill(false);
+      return nodes.map((node, i) => {
+        const { depth, text } = node;
+        const last = isLast[i];
+        const isTitle = i === 0 && depth === 0;
+        let pfx = "";
+        if (!isTitle) {
+          for (let d = 0; d < depth; d++) pfx += cont[d] ? "│  " : "   ";
+          pfx += last ? "└─ " : "├─ ";
+        }
+        cont[depth] = !last;
+        for (let d = depth + 1; d < 20; d++) cont[d] = false;
+        return _nodeRow(pfx, text, isTitle);
+      }).join("");
+    };
+    const treeHtml = _renderTreeHtml(treeLines);
+    // ── end tree renderer ────────────────────────────────────────────────────
+    const matchBranchToRow = (branch, row) => {
+      const tc = branch.suggested_testcase;
+      if (tc?.candidate_id && tc.candidate_id === row.candidate_id) return true;
+      const rowText = `${row.event || ""} ${row.use_case || ""} ${row.expected_input || ""}`.toLowerCase();
+      const branchIdL = (branch.branch_id || "").toLowerCase();
+      if (branchIdL && rowText.includes(branchIdL)) return true;
+      // AI branch: match by expected_input normalization
+      if (branch.expected_input && row.expected_input) {
+        const norm = (s) => s.toLowerCase().replace(/[;\s]+/g, " ").trim();
+        if (norm(branch.expected_input) === norm(row.expected_input)) return true;
+      }
+      for (const cond of branch.required_conditions || []) {
+        const term = cond.replace(/^NOT\s+/i, "").split(/[\s=<>!]+/)[0];
+        if (term && term.length > 3 && rowText.includes(term.toLowerCase())) return true;
+      }
+      return false;
+    };
+    const _isObsoleteRow = (r) => {
+      const src = (r.source || r.provider || "").toLowerCase();
+      const cid = r.candidate_id || "";
+      return !r.manually_edited && !r.user_notes && !r.exported_at
+        && (/^tc_(branch|pm)_\d+$/i.test(cid) || /^tc_[a-z0-9_]+_[nab]\d{2,3}$/i.test(cid)
+          || ["logic_branch_generator", "ai_branch_generator", "auto", "generated"].includes(src));
+    };
+    const testcasePreviewHtml = logicRows.length
+      ? `<div class="grid-wrap"><table class="data-grid alex-table">
+          <thead><tr><th>ID</th><th>Branch</th><th>Type</th><th>Event</th><th>Input</th><th>Output</th><th>Status</th></tr></thead>
+          <tbody>${logicRows.map((r) => {
+            const mb = detBranches.find((b) => matchBranchToRow(b, r));
+            const bType = mb?.branch_type || "";
+            const unmatched = !mb && _isObsoleteRow(r);
+            const typeBadge = bType === "normal"
+              ? `<span class="tag high" style="font-size:0.7rem">NORMAL</span>`
+              : bType === "abnormal"
+                ? `<span style="font-size:0.7rem;padding:0.1em 0.5em;border-radius:4px;background:rgba(234,88,12,0.15);color:var(--orange,#fb923c);font-weight:600">ABNORMAL</span>`
+                : "";
+            const statusExtra = unmatched
+              ? ` <span class="detail" style="font-size:0.72rem;color:var(--text-muted)">(unmatched generated)</span>`
+              : "";
+            return `<tr style="${unmatched ? "opacity:0.6" : ""}">
+              <td>${esc(r.candidate_id || "—")}</td>
+              <td>${mb ? `<span class="tag" style="font-size:0.72rem">${esc(mb.branch_id)}</span>` : `<span class="detail" style="color:var(--text-muted)">—</span>`}</td>
+              <td>${typeBadge}</td>
+              <td>${esc((r.event || "").slice(0, 55))}${(r.event || "").length > 55 ? "…" : ""}${statusExtra}</td>
+              <td class="detail">${esc((r.expected_input || "").slice(0, 55))}${(r.expected_input || "").length > 55 ? "…" : ""}</td>
+              <td class="detail">${esc((r.expected_output || "").slice(0, 55))}${(r.expected_output || "").length > 55 ? "…" : ""}</td>
+              <td><span class="tag ${r.review_status === "approved" ? "high" : r.review_status === "blocked" ? "error" : ""}">${esc(r.review_status || "pending")}</span></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>`
+      : `<p class="detail">No testcase rows linked yet.</p>`;
+    const branchItemsHtml = branches
+      .map((b) => {
+        const coveredRow = logicRows.find((r) => matchBranchToRow(b, r));
+        const bType = b.branch_type || (b.required_conditions?.length ? "normal" : "ai");
+        const isNormal = bType === "normal";
+        const isAbnormal = bType === "abnormal";
+        const isAiBranch = !isNormal && !isAbnormal;
+
+        let condHtml;
+        if (isNormal && b.required_conditions?.length) {
+          // Normal: show required_conditions as chips with AND separators
+          condHtml = (b.required_conditions || []).map((c, ci) => {
+            const isNot = c.toUpperCase().startsWith("NOT ");
+            const condBody = isNot
+              ? `${_notChip()}&thinsp;<span class="detail">${_ftHtml(c.slice(4))}</span>`
+              : `<span class="detail">${_ftHtml(c)}</span>`;
+            const sep = ci > 0
+              ? `<span style="color:var(--text-muted,#aaa);font-size:0.68rem;font-weight:600;font-family:monospace;padding:0 0.3rem">AND</span>`
+              : "";
+            return sep + condBody;
+          }).join("");
+          if (b.expected_result) {
+            condHtml += `<div style="margin-top:0.3rem;font-size:0.77rem;color:var(--text-muted)">Expected: ${esc(selGroup.control_name)} = ${esc(b.expected_result)}</div>`;
+          }
+        } else if (isAbnormal) {
+          // Abnormal: show false_condition and expected_result
+          const tc = b.suggested_testcase;
+          const falseInput = tc?.expected_input || b.path_summary || b.false_condition || "";
+          condHtml = `<div style="font-family:monospace;font-size:0.82rem">${_ftHtml(falseInput)}</div>`
+            + `<div style="margin-top:0.3rem;font-size:0.77rem;color:var(--text-muted)">Expected: ${esc(selGroup.control_name)} = ${esc(b.expected_result || "FALSE")}</div>`;
+        } else {
+          // AI branch — show event + expected_input
+          const inputLines = (b.expected_input || "").split(/;\s*|\n/).map((l) => l.trim()).filter(Boolean);
+          condHtml = `<div style="font-size:0.83rem">${esc(b.event || b.path_summary || "")}</div>`
+            + (inputLines.length
+              ? `<div style="font-family:monospace;font-size:0.77rem;color:var(--text-muted);margin-top:0.2rem">${inputLines.map((l) => esc(l)).join(" · ")}</div>`
+              : "")
+            + (b.expected_output
+              ? `<div style="font-size:0.77rem;color:var(--text-muted);margin-top:0.1rem">→ ${esc(b.expected_output)}</div>`
+              : "");
+        }
+
+        const typeBadge = isNormal
+          ? `<span style="font-size:0.7rem;font-weight:700;font-family:monospace;padding:0.05em 0.4em;border-radius:4px;background:rgba(22,163,74,0.15);color:var(--green,#4ade80);border:1px solid rgba(22,163,74,0.3)">NORMAL</span>`
+          : isAbnormal
+            ? `<span style="font-size:0.7rem;font-weight:700;font-family:monospace;padding:0.05em 0.4em;border-radius:4px;background:rgba(234,88,12,0.15);color:var(--orange,#fb923c);border:1px solid rgba(234,88,12,0.3)">ABNORMAL</span>`
+            : "";
+        const coverBadge = coveredRow
+          ? `<span class="tag high" style="font-size:0.72rem">✓ ${esc(coveredRow.candidate_id || "covered")}</span>`
+          : logicRows.length === 0
+            ? `<span class="detail" style="color:var(--text-muted);font-size:0.78rem">no testcase yet</span>`
+            : `<span style="font-size:0.78rem;color:var(--orange,#f5a623)">⚠ missing testcase</span>`;
+        const readyFlag = b.auto_generatable && !(b.unresolved_terms?.length);
+        return `<div style="border:1px solid var(--border,rgba(128,128,128,0.25));border-radius:6px;padding:0.6rem 0.8rem;margin-bottom:0.5rem">
+          <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;margin-bottom:0.35rem">
+            <span style="font-family:monospace;font-size:0.8rem;font-weight:700">${esc(b.branch_id)}</span>
+            ${typeBadge}
+            <span class="tag ${readyFlag ? "high" : "warning"}" style="font-size:0.7rem">${readyFlag ? "Ready" : "Edit needed"}</span>
+            ${coverBadge}
+          </div>
+          <div style="display:flex;align-items:${isNormal ? "center" : "flex-start"};flex-direction:${isNormal ? "row" : "column"};flex-wrap:wrap;gap:0;row-gap:0.25rem">${condHtml}</div>
+          ${b.unresolved_terms?.length ? `<p class="detail" style="color:var(--red);margin:0.35rem 0 0;font-size:0.78rem">Unresolved: ${esc(b.unresolved_terms.join(", "))}</p>` : ""}
+        </div>`;
+      })
+      .join("");
+    // ── Copilot Web AI helpers ───────────────────────────────────────────────
+    const buildAiPrompt = () => {
+      const treeText = treeLines.join("\n") || selGroup.expression || "(no source structure)";
+      const branchLines = detBranches.map((b) => {
+        const conds = (b.required_conditions || []).join(" AND ") || b.path_summary || "";
+        const unres = b.unresolved_terms?.length ? ` [UNRESOLVED: ${b.unresolved_terms.join(", ")}]` : "";
+        return `  ${b.branch_id}: ${conds}${unres}`;
+      });
+      const unresolvedTerms = [...new Set(detBranches.flatMap((b) => b.unresolved_terms || []))];
+      const existingRowLines = logicRows.slice(0, 10).map((r, i) =>
+        `  ${r.candidate_id || `row${i + 1}`}: event="${(r.event || "").slice(0, 60)}" input="${(r.expected_input || "").slice(0, 80)}" output="${(r.expected_output || "").slice(0, 60)}"`
+      );
+      return [
+        `You are a test case designer for automotive/embedded software.`,
+        ``,
+        `Control: ${selGroup.control_name}`,
+        ``,
+        `Source structure:`,
+        treeText,
+        ``,
+        `Deterministic branches (${detBranches.length}):`,
+        ...branchLines,
+        ``,
+        `Unresolved terms: ${unresolvedTerms.length ? unresolvedTerms.join(", ") : "none"}`,
+        ``,
+        `Existing test rows (${logicRows.length}):`,
+        ...(existingRowLines.length ? existingRowLines : ["  (none)"]),
+        ``,
+        `Rules:`,
+        `- Return JSON ONLY — no explanation, no markdown code blocks, no surrounding text`,
+        `- Do NOT invent definitions for unresolved terms; list them in unresolved_terms`,
+        `- NOT means negation — preserve it in conditions`,
+        `- AND = same branch; OR = separate branch`,
+        `- Generate one branch per distinct execution path`,
+        `- Concrete expected_input (signal = value format, semicolon-separated)`,
+        ``,
+        `Return ONLY this JSON (no other text):`,
+        `{`,
+        `  "logic_id": "${selId}",`,
+        `  "test_function": "${selGroup.control_name}",`,
+        `  "test_group": "${selGroup.control_name}",`,
+        `  "branches": [`,
+        `    {`,
+        `      "branch_id": "B1",`,
+        `      "event": "short description of this path",`,
+        `      "path_summary": "full condition text",`,
+        `      "expected_input": "SIGNAL_A = value; SIGNAL_B = value",`,
+        `      "expected_output": "${selGroup.control_name} = expected_value",`,
+        `      "auto_generatable": true,`,
+        `      "unresolved_terms": []`,
+        `    }`,
+        `  ]`,
+        `}`,
+      ].join("\n");
+    };
+    const buildAiPreviewHtml = (parsed) => {
+      const aiBranches = parsed.branches || [];
+      const detIds = new Set(detBranches.map((b) => b.branch_id));
+      const aiIds = new Set(aiBranches.map((b) => b.branch_id));
+      const added = aiBranches.filter((b) => !detIds.has(b.branch_id));
+      const removed = detBranches.filter((b) => !aiIds.has(b.branch_id));
+      let html = `<div style="border-top:1px solid var(--border,rgba(128,128,128,0.2));padding-top:0.6rem;margin-top:0.6rem">`;
+      html += `<p class="detail" style="margin:0 0 0.5rem"><strong>${aiBranches.length}</strong> branch(es) from AI`;
+      if (added.length) html += ` · <span style="color:var(--green,#4ade80)">+${added.length} new</span>`;
+      if (removed.length) html += ` · <span style="color:var(--text-muted)">−${removed.length} removed vs deterministic</span>`;
+      html += `</p>`;
+      for (const b of aiBranches) {
+        const ready = b.auto_generatable && !(b.unresolved_terms?.length);
+        const badge = ready
+          ? `<span class="tag high" style="font-size:0.7rem">Ready</span>`
+          : `<span class="tag warning" style="font-size:0.7rem">Edit needed</span>`;
+        const unresolved = b.unresolved_terms?.length
+          ? `<span class="detail" style="color:var(--red);font-size:0.75rem"> Unresolved: ${esc(b.unresolved_terms.join(", "))}</span>`
+          : "";
+        html += `<div style="border:1px solid var(--border,rgba(128,128,128,0.2));border-radius:5px;padding:0.45rem 0.65rem;margin-bottom:0.35rem">
+          <div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap;margin-bottom:0.2rem">
+            <span style="font-family:monospace;font-size:0.77rem;font-weight:600">${esc(b.branch_id)}</span>${badge}${unresolved}
+          </div>
+          <p class="detail" style="margin:0;font-size:0.8rem">${esc(b.event || b.path_summary || "")}</p>
+          ${b.expected_input ? `<p style="margin:0.15rem 0 0;font-family:monospace;font-size:0.75rem;color:var(--text-muted)">${esc(b.expected_input)}</p>` : ""}
+          ${b.expected_output ? `<p class="detail" style="margin:0.1rem 0 0;font-size:0.75rem;color:var(--text-muted)">→ ${esc(b.expected_output)}</p>` : ""}
+        </div>`;
+      }
+      html += `</div>`;
+      return html;
+    };
+    // ── end AI helpers ───────────────────────────────────────────────────────
     content().innerHTML = `<div class="alex-layout-logic">
-      ${overviewHtml}
-      ${formalSpecHtml}
       <div class="logic-pick-bar logic-pick-bar--compact">
-        <label class="detail logic-picker-label">Logic group (${items.length})
+        <label class="detail logic-picker-label">Logic group (${groups.length})
           <select id="logic-group-select" class="clarify-box logic-group-select">${listHtml}</select>
         </label>
       </div>
-      <header class="alex-hero">
-        <div>
-          <h2 class="alex-hero__title">${esc(item.outcome_label || item.control_name)}</h2>
-          <p class="alex-hero__sub">${item.outcome_label ? esc(item.control_name) + " · " : ""}Read the logic tree first, then trace terms and fix definitions.</p>
-          ${semanticsBadges}
+      <section class="card" style="margin-top:1rem">
+        <h3 style="margin-top:0">Logic Tables</h3>
+        <div class="grid-wrap">
+          <table class="data-grid alex-table">
+            <thead><tr><th>Control</th><th>Status</th><th>Branches</th><th>Unresolved</th></tr></thead>
+            <tbody>${tableRowsHtml}</tbody>
+          </table>
         </div>
-        <span class="tag ${item.parse_status === "ok" ? "high" : item.parse_status === "partial" ? "warning" : "error"}">${esc(item.parse_status || "unknown")}</span>
-      </header>
-      ${sourceEvidenceHtml}
-      ${item.unresolved_refs?.length ? `<p class="detail" style="margin-bottom:1rem"><b>Missing definitions:</b> ${esc(item.unresolved_refs.join(", "))}</p>` : ""}
-      <section class="alex-primary-panel">
-        <h3 class="alex-primary-panel__label">Logic structure</h3>
-        <p class="detail" style="margin-top:0">Source table is the reference — click a tree node to highlight the matching row.</p>
-        <div class="logic-compare-grid logic-evidence-workspace">
-          <div class="logic-compare-panel">
-            <h4 class="logic-compare__label">Tree logic</h4>
-            <div class="logic-compare-panel__body">
-              <div class="gate-diagram logic-tree-interactive-host">${treeHtml}</div>
-              ${pathSimHtml}
-            </div>
-          </div>
-          <div class="logic-compare-panel">
-            <h4 class="logic-compare__label">Source table (linked)</h4>
-            <div class="logic-compare-panel__body">
-              ${renderVisualSourcePreview(item.visual_source, tableRows, highlightTerms, highlightRowNos)}
-            </div>
-          </div>
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <h3 style="margin-top:0">${esc(selGroup.control_name)}</h3>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem">
+          <span class="tag ${selGroup.status === "ok" ? "high" : (selGroup.status === "needs_review" || selGroup.status === "unresolved") ? "warning" : "error"}">${esc(selGroup.status)}</span>
+          <span class="detail">${selGroup.branch_count} branch(es)</span>
+          ${selGroup.unresolved_count ? `<span class="detail" style="color:var(--red)">${selGroup.unresolved_count} unresolved</span>` : `<span class="detail">all resolved</span>`}
+          <span class="detail">${logicRows.length} testcase row(s) linked</span>
         </div>
-        <details class="alex-ref-panel" style="margin-top:0.75rem">
-          <summary>Parser notes (${parserNotes.length})</summary>
-          <div class="alex-ref-body">
-            ${parserNotes.length ? `<ul class="detail">${parserNotes.map((n) => `<li>${n}</li>`).join("")}</ul>` : `<p class="detail">No parser notes.</p>`}
+        ${selGroup.expression ? `<p class="detail" style="margin-bottom:0.5rem;font-style:italic">${esc(selGroup.expression)}</p>` : ""}
+        ${treeHtml
+          ? `<details open><summary class="detail" style="cursor:pointer;user-select:none">Source structure</summary>
+             ${selGroup.source_structure_note ? `<p class="detail" style="margin:0.35rem 0 0;color:var(--text-muted);font-style:italic;font-size:0.78rem">${esc(selGroup.source_structure_note)}</p>` : ""}
+             <div style="margin:0.5rem 0 0;padding:0.6rem 0.8rem;background:var(--surface-1,rgba(0,0,0,0.12));border-radius:6px;border:1px solid var(--border,rgba(128,128,128,0.2))">${treeHtml}</div></details>`
+          : `<p class="detail" style="margin:0;color:var(--text-muted)">Source structure unavailable — ALEX could not reconstruct this logic table.</p>`
+        }
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <h4 style="margin-top:0">Testcases for this logic (${logicRows.length})</h4>
+        ${testcasePreviewHtml}
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <h3 style="margin-top:0">Branches To Write (${isAiBranches ? "AI: " : ""}${branches.length})</h3>
+        ${branches.length
+          ? `<div>${branchItemsHtml}</div>`
+          : `<p class="detail" style="color:var(--text-muted)">No branches — no condition rows found.</p>`
+        }
+        ${(() => {
+          const readyCount = branches.filter((b) => b.auto_generatable && !(b.unresolved_terms?.length)).length;
+          const label = `Generate rows (${readyCount})${isAiBranches ? " — AI plan" : ""}`;
+          return readyCount
+            ? `<div style="margin-top:0.75rem;display:flex;flex-direction:column;gap:0.4rem">
+                <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;cursor:pointer">
+                  <input type="checkbox" id="chk-clean-obsolete" checked style="cursor:pointer">
+                  Clean obsolete generated rows for this logic
+                </label>
+                <div><button type="button" class="btn secondary" id="btn-logic-generate-rows" style="font-size:0.85rem">${label}</button></div>
+               </div>`
+            : `<button type="button" class="btn secondary" disabled style="margin-top:0.75rem">Generate rows</button>
+               <p class="detail" style="margin-top:0.25rem;color:var(--text-muted)">No ready branch to generate.</p>`;
+        })()}
+        <p id="logic-generate-status" class="detail" style="margin-top:0.5rem"></p>
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <details ${aiPlan ? "open" : ""}>
+          <summary style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:0.5rem;list-style:none;-webkit-appearance:none">
+            <span style="font-weight:600;font-size:0.9rem">AI Branch Plan</span>
+            ${aiPlan
+              ? `<span class="tag high" style="font-size:0.7rem">Active · ${(aiPlan.branches || []).length} branch(es)</span>`
+              : `<span class="detail" style="font-size:0.75rem;color:var(--text-muted)">Copilot Web · optional</span>`
+            }
+          </summary>
+          <div style="margin-top:0.75rem">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.6rem">
+              <button type="button" class="btn secondary" id="btn-copy-ai-prompt" style="font-size:0.82rem">Copy Copilot Web prompt</button>
+              ${aiPlan ? `<button type="button" class="btn secondary" id="btn-clear-ai-plan" style="font-size:0.82rem">Clear AI plan</button>` : ""}
+              <span id="ai-copy-status" class="detail" style="font-size:0.78rem;color:var(--text-muted)"></span>
+            </div>
+            <textarea id="ai-json-input" rows="7" placeholder="Paste AI JSON response here…" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.79rem;resize:vertical;padding:0.5rem;border-radius:4px;border:1px solid var(--border,rgba(128,128,128,0.3));background:var(--surface-1,transparent);color:inherit"></textarea>
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.45rem;flex-wrap:wrap">
+              <button type="button" class="btn secondary" id="btn-preview-ai-json" style="font-size:0.82rem">Preview JSON</button>
+              <button type="button" class="btn primary" id="btn-accept-ai-json" disabled style="font-size:0.82rem">Accept AI update</button>
+              <span id="ai-validate-status" class="detail" style="font-size:0.78rem"></span>
+            </div>
+            <div id="ai-preview-out"></div>
           </div>
         </details>
       </section>
-      ${footnoteAttachHtml}
-      ${pathMatrixHtml}
-      ${verifyMatrixHtml}
-      <details class="alex-ref-panel alex-evidence-panel" style="margin-top:1rem">
-        <summary>Evidence &amp; dependency trace</summary>
-        <div class="alex-ref-body">
-          <details class="alex-ref-panel" style="margin-bottom:1rem">
-            <summary>Excel source rows (${tableRows.length})</summary>
-            <div class="alex-ref-body grid-wrap">
-              <table class="data-grid alex-table"><thead><tr>
-                <th>Row</th><th>Condition</th><th>Depth</th><th>Type</th>
-              </tr></thead><tbody>${tableRows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("")}</tbody></table>
-            </div>
-          </details>
-          <h4>Dependency trace</h4>
-          ${renderTraceRows(item.trace_rows || [])}
-          ${(item.issues || []).length ? `<div style="margin-top:1rem"><h4>Linked issues</h4>${renderIssueList(item.issues || [])}</div>` : ""}
-        </div>
-      </details>
-      <section class="alex-definitions-section">
-        <h3 class="alex-section-title">Definitions</h3>
-        ${renderDefinitionInbox(inbox, { engineerNote, attachments, assistStatus, logicId: item.logic_id, copilotSession })}
-      </section>
-      ${renderKnowledgeReconciliationPanel(knowledgeApply)}
-      ${renderHypothesisReviewPanel(reasoningRes?.session)}
       <section class="workbook-workspace workbook-workspace--logic" style="margin-top:1rem">
         <h4>Final workbook rows (this logic group)</h4>
         ${renderWorkbookTestcaseBar(logicRows, "logic")}
@@ -6662,12 +6940,6 @@ async function renderLogicReview(opts = {}) {
         <p id="logic-row-save-status" class="detail"></p>
       </section>
     </div>`;
-    document.querySelectorAll("[data-definition-term]").forEach((btn) => {
-      btn.onclick = () => {
-        state.inboxFocus[item.logic_id] = btn.getAttribute("data-definition-term") || "";
-        renderLogicReview({ skipSummary: true });
-      };
-    });
     const logicSelect = $("#logic-group-select");
     if (logicSelect) {
       logicSelect.onchange = () => {
@@ -6676,514 +6948,146 @@ async function renderLogicReview(opts = {}) {
         renderLogicReview({ skipSummary: true });
       };
     }
-    bindLogicTreeSourceNavigation(item);
-    const simBtn = $("#btn-logic-sim-run");
-    if (simBtn) {
-      simBtn.onclick = async () => {
-        const assignments = {};
-        content().querySelectorAll(".logic-sim-input").forEach((inp) => {
-          assignments[inp.dataset.simSignal] = inp.value;
-        });
-        state.pathSimAssignments[item.logic_id] = assignments;
-        try {
-          const res = await api(`/api/review/logic-simulate?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, assignments }),
-          });
-          state.pathSimResult[item.logic_id] = res;
-          const host = document.querySelector(".logic-tree-interactive-host");
-          if (host) {
-            host.innerHTML = renderInteractiveLogicTree(item, res.active_node_ids || []);
-            bindLogicTreeSourceNavigation(item);
-            const statusEl = $("#logic-sim-status");
-            if (statusEl) {
-              const st = res.status || "unknown";
-              statusEl.textContent =
-                st === "active" ? "Logic path ACTIVE" : st === "inactive" ? "Logic path INACTIVE" : "Partial / unknown";
-              statusEl.className = `tag ${st === "active" ? "high" : st === "inactive" ? "error" : "warning"}`;
-            }
-          } else {
-            await renderLogicReview({ skipSummary: true });
-          }
-        } catch (e) {
-          alert(e.message);
-        }
-      };
-    }
-    const refUpload = $("#reference-file-upload");
-    if (refUpload) {
-      refUpload.onchange = async () => {
-        if (!refUpload.files.length) return;
-        const statusEl = $("#reference-file-status");
-        if (statusEl) statusEl.textContent = "Merging reference file…";
-        const fd = new FormData();
-        for (const f of refUpload.files) fd.append("files", f);
-        try {
-          const res = await fetch(
-            `/api/review/attach-reference-file?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`,
-            { method: "POST", body: fd }
-          );
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-          if (statusEl) {
-            statusEl.textContent =
-              `Merged ${(data.saved || []).length} file(s).` + formatUnderstandingLoopStatus(data.understanding_loop);
-          }
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        }
-        refUpload.value = "";
-      };
-    }
-    const pathProposeBtn = $("#btn-path-tc-propose");
-    if (pathProposeBtn) {
-      pathProposeBtn.onclick = async () => {
-        const statusEl = $("#path-tc-propose-status");
-        if (statusEl) statusEl.textContent = "Building proposals…";
-        pathProposeBtn.disabled = true;
-        try {
-          const res = await api(
-            `/api/review/path-tc-propose?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`,
-            { method: "POST" }
-          );
-          state.pathRegenProposal[item.logic_id] = res;
-          if (statusEl) {
-            statusEl.textContent = `Proposed ${res.proposed_count || 0} TC(s) for missing paths — review in Knowledge reconciliation when applied.`;
-          }
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          pathProposeBtn.disabled = false;
-        }
-      };
-    }
-    const applyKnowledge = async (statusMessage = "Saving knowledge…", { localOnly = false } = {}) => {
-      const note = $("#definition-workbench-note")?.value || "";
-      const current = inboxFocusTerm(inbox);
-      const statusEl = document.querySelector("[data-definition-query-status]");
-      if (statusEl) statusEl.textContent = statusMessage;
-      return api(`/api/review/logic-clarification?job_id=${encodeURIComponent(state.jobId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          logic_id: item.logic_id,
-          note,
-          term: current?.term || "",
-          provider: "m365",
-          local_only: localOnly,
-        }),
-      });
-    };
-    bindOnChange("#logic-attachment-upload", async () => {
-      const inp = $("#logic-attachment-upload");
-      if (!inp.files.length) return;
-      const fd = new FormData();
-      for (const f of inp.files) fd.append("files", f);
-      const attachStatus = document.querySelector("[data-definition-query-status]");
-      if (attachStatus) attachStatus.textContent = "Uploading attachment(s)…";
-      try {
-        const res = await fetch(`/api/review/logic-attachments?job_id=${encodeURIComponent(state.jobId)}&logic_id=${encodeURIComponent(item.logic_id)}`, {
-          method: "POST",
-          body: fd,
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        if (attachStatus) {
-          attachStatus.textContent =
-            "Attachment(s) saved." + formatUnderstandingLoopStatus(data.understanding_loop);
-        }
+    content().querySelectorAll("[data-logic-group-row]").forEach((row) => {
+      row.onclick = () => {
+        state.selectedLogicId = row.dataset.logicGroupRow;
+        state.logicTreeFocus = { nodeId: null, highlightTerms: [], highlightRowNos: [] };
         renderLogicReview({ skipSummary: true });
-      } catch (e) {
-        if (attachStatus) attachStatus.textContent = e.message;
-      }
-      inp.value = "";
+      };
     });
-    const localApplyBtn = $("#btn-definition-local-apply");
-    if (localApplyBtn) {
-      localApplyBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        if (!note.trim()) {
-          if (statusEl) statusEl.textContent = "Enter a basic constraint first (e.g. HUY >= 1, < 5).";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Applying locally…";
-        localApplyBtn.disabled = true;
-        try {
-          const res = await applyKnowledge("Applying locally…", { localOnly: true });
-          clearDefinitionDraft(item.logic_id);
-          if (statusEl) statusEl.textContent = formatLocalApplyStatus(res);
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          localApplyBtn.disabled = false;
-        }
-      };
-    }
-    const understandSpecBtn = $("#btn-copilot-understand-spec");
-    if (understandSpecBtn) {
-      understandSpecBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        const term = inboxFocusTerm(inbox)?.term || "";
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        if (!m365KnowledgeReady()) {
-          if (statusEl) statusEl.textContent = "Authorize Copilot API trước (Review → Test Copilot API).";
-          return;
-        }
-        understandSpecBtn.disabled = true;
-        try {
-          await startM365Task({
-            kind: "copilot_context_plan",
-            label: `Hiểu spec ${item.logic_id}`,
-            logicId: item.logic_id,
-            targetPage: "logic-review",
-            payload: { logic_id: item.logic_id, note, term },
-          });
-          if (statusEl) statusEl.textContent = "Copilot chạy nền (context + plan) — xem banner trên cùng.";
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          understandSpecBtn.disabled = !m365KnowledgeReady();
-        }
-      };
-    }
-    const buildContextBtn = $("#btn-copilot-build-context");
-    if (buildContextBtn) {
-      buildContextBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        const term = inboxFocusTerm(inbox)?.term || "";
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        if (statusEl) statusEl.textContent = "Building context pack…";
-        buildContextBtn.disabled = true;
-        try {
-          const q = new URLSearchParams({
-            job_id: state.jobId,
-            logic_id: item.logic_id,
-            note,
-            term,
-          });
-          const res = await api(`/api/review/copilot/context?${q}`);
-          if (res.ok === false) {
-            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Build context failed"}`;
-            return;
-          }
-          state.copilotStep[item.logic_id] = "context";
-          invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
-          if (statusEl) statusEl.textContent = "Context ready — review summary, then Generate plan.";
-          await renderLogicReview({ skipSummary: true });
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          buildContextBtn.disabled = false;
-        }
-      };
-    }
-    const generatePlanBtn = $("#btn-copilot-generate-plan");
-    if (generatePlanBtn) {
-      generatePlanBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        const term = inboxFocusTerm(inbox)?.term || "";
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        if (!m365KnowledgeReady()) {
-          if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
-          return;
-        }
-        generatePlanBtn.disabled = true;
-        try {
-          await startM365Task({
-            kind: "copilot_plan",
-            label: `Plan ${item.logic_id}`,
-            logicId: item.logic_id,
-            targetPage: "logic-review",
-            payload: { logic_id: item.logic_id, note, term },
-          });
-          if (statusEl) statusEl.textContent = "Copilot plan chạy nền — xem banner trên cùng.";
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          generatePlanBtn.disabled = !m365KnowledgeReady();
-        }
-      };
-    }
-    const savePlanBtn = $("#btn-copilot-save-plan");
-    if (savePlanBtn) {
-      savePlanBtn.onclick = async () => {
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        const plan = collectCopilotPlanFromDom();
-        if (!plan.plan_items.length) {
-          if (statusEl) statusEl.textContent = "No plan rows to save.";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Saving plan…";
-        savePlanBtn.disabled = true;
-        try {
-          const session = copilotSession || {};
-          const merged = { ...(session.plan || {}), ...plan };
-          await api(`/api/review/copilot/plan?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, plan: merged }),
-          });
-          invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
-          if (statusEl) statusEl.textContent = "Plan saved — you can Write test cases.";
-          await renderLogicReview({ skipSummary: true });
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          savePlanBtn.disabled = false;
-        }
-      };
-    }
-    const writeDraftsBtn = $("#btn-copilot-write-drafts");
-    if (writeDraftsBtn) {
-      writeDraftsBtn.onclick = async () => {
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        if (!m365KnowledgeReady()) {
-          if (statusEl) statusEl.textContent = "Sign in to M365 Copilot first.";
-          return;
-        }
-        writeDraftsBtn.disabled = true;
-        try {
-          await startM365Task({
-            kind: "copilot_write",
-            label: `Viết testcase ${item.logic_id}`,
-            logicId: item.logic_id,
-            targetPage: "logic-review",
-            payload: { logic_id: item.logic_id },
-          });
-          if (statusEl) statusEl.textContent = "Copilot viết testcase chạy nền — xem banner trên cùng.";
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          writeDraftsBtn.disabled = !m365KnowledgeReady();
-        }
-      };
-    }
-    const followUpBtn = $("#btn-copilot-followup");
-    if (followUpBtn) {
-      followUpBtn.onclick = async () => {
-        const msg = $("#copilot-followup-message")?.value?.trim() || "";
-        const statusEl = $("#copilot-followup-status") || document.querySelector("[data-definition-query-status]");
-        if (!msg) {
-          if (statusEl) statusEl.textContent = "Enter a follow-up message.";
-          return;
-        }
-        if (!m365KnowledgeReady()) {
-          if (statusEl) statusEl.textContent = "Authorize Copilot API first.";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Sending follow-up to Copilot…";
-        followUpBtn.disabled = true;
-        try {
-          const res = await api(`/api/review/copilot/follow-up?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, message: msg, reuse_conversation: true }),
-          });
-          if (!res.ok) {
-            const action = res.user_action ? ` — ${res.user_action}` : "";
-            if (statusEl) statusEl.textContent = `[${res.error_category || "error"}] ${res.error || "Follow-up failed"}${action}`;
-            return;
-          }
-          const preview = res.reply || res.reply_preview || res.message || "";
-          if (statusEl) {
-            statusEl.textContent = preview
-              ? `Copilot: ${preview.slice(0, 280)}${preview.length > 280 ? "…" : ""}`
-              : "Follow-up sent — Copilot replied (see conversation).";
-          }
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          followUpBtn.disabled = !m365KnowledgeReady();
-        }
-      };
-    }
-    const copyBriefBtn = $("#btn-copilot-copy-brief");
-    if (copyBriefBtn) {
-      copyBriefBtn.onclick = async () => {
-        const note = $("#definition-workbench-note")?.value || "";
-        const brief = buildCopilotM365Brief({ engineerNote: note, copilotSession, logicId: item.logic_id });
-        const statusEl = $("#copilot-followup-status");
-        try {
-          await navigator.clipboard.writeText(brief);
-          if (statusEl) statusEl.textContent = "M365 brief copied to clipboard.";
-        } catch (_) {
-          if (statusEl) statusEl.textContent = "Copy failed — select text manually.";
-        }
-      };
-    }
-    const applyCopilotBtn = $("#btn-copilot-apply-selected");
-    if (applyCopilotBtn) {
-      applyCopilotBtn.onclick = async () => {
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        const indices = [...document.querySelectorAll(".copilot-draft-check:checked")].map((el) =>
-          Number(el.dataset.draftIndex)
-        );
-        if (!indices.length) {
-          if (statusEl) statusEl.textContent = "Select at least one draft (non no-op).";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Applying selected drafts…";
-        applyCopilotBtn.disabled = true;
-        try {
-          const res = await api(`/api/review/copilot/confirm?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, draft_indices: indices }),
-          });
-          if (!res.ok) throw new Error((res.errors || []).join("; ") || "Apply failed");
-          if (statusEl) {
-            statusEl.textContent =
-              `Applied ${res.applied_count || indices.length} draft(s); updated ${res.candidates_updated || 0}, added ${res.candidates_added || 0}.` +
-              formatUnderstandingLoopStatus(res.understanding_loop);
-          }
-          invalidateApiCache(`copilot-session:${state.jobId}:${item.logic_id}`);
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          applyCopilotBtn.disabled = false;
-        }
-      };
-    }
-    const styleSampleUpload = $("#style-sample-upload");
-    if (styleSampleUpload) {
-      styleSampleUpload.onchange = async () => {
-        if (!styleSampleUpload.files.length) return;
-        const statusEl = document.querySelector("[data-definition-query-status]");
-        try {
-          const text = await styleSampleUpload.files[0].text();
-          let samples = [];
-          try {
-            const parsed = JSON.parse(text);
-            samples = Array.isArray(parsed) ? parsed : parsed.samples || [parsed];
-          } catch {
-            samples = [{ label: "upload", expected_input: text.slice(0, 2000) }];
-          }
-          await api(`/api/review/style-samples?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ samples }),
-          });
-          if (statusEl) statusEl.textContent = `Saved ${samples.length} style sample(s). Rebuild context before Write.`;
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        }
-        styleSampleUpload.value = "";
-      };
-    }
-    const applySelectedBtn = $("#btn-knowledge-apply-selected");
-    if (applySelectedBtn) {
-      applySelectedBtn.onclick = async () => {
-        const statusEl = $("#knowledge-reconcile-status");
-        const indices = [...document.querySelectorAll(".knowledge-patch-check:checked")].map((el) =>
-          Number(el.dataset.patchIndex)
-        );
-        if (!indices.length) {
-          if (statusEl) statusEl.textContent = "Select at least one patch.";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Applying selected patches…";
-        applySelectedBtn.disabled = true;
-        try {
-          const res = await api(
-            `/api/review/knowledge-apply/confirm?job_id=${encodeURIComponent(state.jobId)}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ logic_id: item.logic_id, patch_indices: indices }),
-            }
-          );
-          const firstCid = (knowledgeApply.diffs || []).find((d) => indices.includes(d.patch_index))?.candidate_id;
-          if (firstCid) state.workbookFocus.logic = firstCid;
-          if (statusEl) {
-            statusEl.textContent =
-              `Applied ${res.applied_patch_count || indices.length} patch(es); updated ${res.candidates_updated || 0} TC(s).` +
-              formatUnderstandingLoopStatus(res.understanding_loop);
-          }
-          await renderLogicReview();
-          document.querySelector(".workbook-row.is-focused")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        } finally {
-          applySelectedBtn.disabled = false;
-        }
-      };
-    }
-    const rejectAllBtn = $("#btn-knowledge-reject-all");
-    if (rejectAllBtn) {
-      rejectAllBtn.onclick = async () => {
-        const statusEl = $("#knowledge-reconcile-status");
-        if (statusEl) statusEl.textContent = "Rejecting pending patches…";
-        try {
-          await api(`/api/review/knowledge-apply/reject?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, patch_indices: [] }),
-          });
-          if (statusEl) statusEl.textContent = "Pending patches rejected.";
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        }
-      };
-    }
-    const acceptClaimsBtn = $("#btn-hypothesis-accept-claims");
-    if (acceptClaimsBtn) {
-      acceptClaimsBtn.onclick = async () => {
-        const statusEl = $("#hypothesis-review-status");
-        const indices = [...document.querySelectorAll(".hypothesis-claim-check:checked")].map((el) =>
-          Number(el.dataset.claimIndex)
-        );
-        if (!indices.length) {
-          if (statusEl) statusEl.textContent = "Select at least one claim.";
-          return;
-        }
-        if (statusEl) statusEl.textContent = "Applying accepted claims…";
-        try {
-          const res = await api(`/api/reasoning/accept-claims?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, claim_indices: indices }),
-          });
-          if (statusEl) {
-            statusEl.textContent =
-              `Applied ${(res.applied_terms || []).length} term(s); refreshed ${res.definitions_applied || 0} TC(s).` +
-              formatUnderstandingLoopStatus(res.understanding_loop);
-          }
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message;
-        }
-      };
-    }
-    const pasteHypothesisBtn = $("#btn-hypothesis-paste-json");
-    if (pasteHypothesisBtn) {
-      pasteHypothesisBtn.onclick = async () => {
-        const raw = window.prompt("Paste hypothesis JSON (claims, open_questions, testcase_patch_plan):");
-        if (!raw?.trim()) return;
-        const statusEl = $("#hypothesis-review-status");
-        try {
-          const hypothesis = JSON.parse(raw);
-          await api(`/api/reasoning/hypothesis?job_id=${encodeURIComponent(state.jobId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ logic_id: item.logic_id, hypothesis, provider: "manual" }),
-          });
-          if (statusEl) statusEl.textContent = "Hypothesis saved for review.";
-          await renderLogicReview();
-        } catch (e) {
-          if (statusEl) statusEl.textContent = e.message || "Invalid JSON.";
-        }
-      };
-    }
     bindWorkbookFocusEditor(logicRows, state.exportLanguage, "logic", renderLogicReview, "#logic-row-save-status");
-    bindVerificationMatrixPromote(item.logic_id);
-    bindDefinitionDraftAutosave(item.logic_id);
+    const btnGenRows = $("#btn-logic-generate-rows");
+    if (btnGenRows) {
+      btnGenRows.onclick = async () => {
+        btnGenRows.disabled = true;
+        const statusEl = $("#logic-generate-status");
+        if (statusEl) statusEl.textContent = "Generating…";
+        try {
+          const chkClean = $("#chk-clean-obsolete");
+          const cleanObsolete = chkClean ? chkClean.checked : true;
+          const payload = { logic_id: selId, clean_obsolete: cleanObsolete };
+          if (isAiBranches && aiPlan) {
+            payload.ai_branches = aiPlan.branches;
+            if (aiPlan.test_function) payload.ai_test_function = aiPlan.test_function;
+            if (aiPlan.test_group) payload.ai_test_group = aiPlan.test_group;
+          }
+          const res = await api(
+            `/api/review/logic-coverage/generate-rows?job_id=${encodeURIComponent(state.jobId)}`,
+            { method: "POST", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } }
+          );
+          if (statusEl) {
+            const parts = [
+              `Generated: ${res.generated ?? 0}`,
+              res.skipped_existing ? `Skipped existing: ${res.skipped_existing}` : null,
+              res.skipped_unresolved ? `Skipped unresolved: ${res.skipped_unresolved}` : null,
+              res.removed_obsolete_generated ? `Cleaned: ${res.removed_obsolete_generated}` : null,
+            ].filter(Boolean);
+            statusEl.textContent = parts.join(" · ");
+          }
+          invalidateApiCache(`logic-coverage:${state.jobId}`);
+          invalidateApiCache(`workbench:${state.jobId}`);
+          await renderLogicReview({ skipSummary: true });
+        } catch (e) {
+          if (statusEl) statusEl.textContent = `Error: ${e.message}`;
+          btnGenRows.disabled = false;
+        }
+      };
+    }
+    // ── AI panel bindings ────────────────────────────────────────────────────
+    let _aiPreviewParsed = null;
+    const btnCopyAi = $("#btn-copy-ai-prompt");
+    const btnPreviewAi = $("#btn-preview-ai-json");
+    const btnAcceptAi = $("#btn-accept-ai-json");
+    const btnClearAi = $("#btn-clear-ai-plan");
+    const aiJsonInput = $("#ai-json-input");
+    const aiCopyStatus = $("#ai-copy-status");
+    const aiValidateStatus = $("#ai-validate-status");
+    const aiPreviewOut = $("#ai-preview-out");
+    if (btnCopyAi) {
+      btnCopyAi.onclick = () => {
+        const prompt = buildAiPrompt();
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(prompt).then(() => {
+            if (aiCopyStatus) {
+              aiCopyStatus.textContent = "Copied!";
+              aiCopyStatus.style.color = "var(--green,#4ade80)";
+              setTimeout(() => { if (aiCopyStatus) { aiCopyStatus.textContent = ""; aiCopyStatus.style.color = ""; } }, 2000);
+            }
+          }).catch(() => {
+            if (aiCopyStatus) aiCopyStatus.textContent = "Copy failed — select text manually";
+          });
+        } else {
+          if (aiJsonInput) aiJsonInput.value = prompt;
+          if (aiCopyStatus) aiCopyStatus.textContent = "Prompt placed in textarea below";
+        }
+      };
+    }
+    if (btnPreviewAi) {
+      btnPreviewAi.onclick = () => {
+        if (aiValidateStatus) { aiValidateStatus.textContent = ""; aiValidateStatus.style.color = ""; }
+        if (aiPreviewOut) aiPreviewOut.innerHTML = "";
+        if (btnAcceptAi) btnAcceptAi.disabled = true;
+        _aiPreviewParsed = null;
+        let raw = (aiJsonInput?.value || "").trim();
+        if (!raw) {
+          if (aiValidateStatus) { aiValidateStatus.textContent = "Paste AI JSON first."; aiValidateStatus.style.color = "var(--red)"; }
+          return;
+        }
+        // Normalize: strip markdown fences (```json … ``` or ``` … ```)
+        raw = raw.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
+        // Unescape markdown escaped underscores (\_word\_ → _word_)
+        raw = raw.replace(/\\_/g, "_");
+        // Trim outer quotes if the whole JSON was pasted as a quoted string
+        if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+          try { const inner = JSON.parse(raw); if (typeof inner === "string") raw = inner.trim(); } catch (_) { /* keep as-is */ }
+        }
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch (e) {
+          if (aiValidateStatus) { aiValidateStatus.textContent = `JSON error: ${e.message}`; aiValidateStatus.style.color = "var(--red)"; }
+          return;
+        }
+        // Patch: if logic_id is missing but JSON looks like a single branch, wrap it
+        if (!parsed.branches && parsed.branch_id) {
+          parsed = { logic_id: selId, branches: [parsed] };
+        }
+        const idMatch = String(parsed.logic_id || "") === selId;
+        const ctrlUpper = (selGroup.control_name || "").toUpperCase();
+        const nameMatch = (String(parsed.test_group || "").toUpperCase() === ctrlUpper)
+          || (String(parsed.test_function || "").toUpperCase() === ctrlUpper);
+        let mismatchWarning = "";
+        if (!idMatch) {
+          if (!nameMatch) {
+            if (aiValidateStatus) { aiValidateStatus.textContent = `logic_id mismatch: got "${parsed.logic_id}", expected "${selId}" — no test_group/test_function match either`; aiValidateStatus.style.color = "var(--red)"; }
+            return;
+          }
+          // Patch logic_id to selected
+          parsed = { ...parsed, logic_id: selId };
+          mismatchWarning = ` (logic_id patched from "${String(parsed.logic_id || "")}" → "${selId}")`;
+        }
+        if (!Array.isArray(parsed.branches) || !parsed.branches.length) {
+          if (aiValidateStatus) { aiValidateStatus.textContent = "branches must be a non-empty array."; aiValidateStatus.style.color = "var(--red)"; }
+          return;
+        }
+        _aiPreviewParsed = parsed;
+        if (aiValidateStatus) { aiValidateStatus.textContent = `Valid ✓ (${parsed.branches.length} branch(es))${mismatchWarning}`; aiValidateStatus.style.color = mismatchWarning ? "var(--orange,#fb923c)" : "var(--green,#4ade80)"; }
+        if (aiPreviewOut) aiPreviewOut.innerHTML = buildAiPreviewHtml(parsed);
+        if (btnAcceptAi) btnAcceptAi.disabled = false;
+      };
+    }
+    if (btnAcceptAi) {
+      btnAcceptAi.onclick = () => {
+        if (!_aiPreviewParsed) return;
+        if (!state.aiBranchPlan) state.aiBranchPlan = {};
+        state.aiBranchPlan[selId] = _aiPreviewParsed;
+        renderLogicReview({ skipSummary: true });
+      };
+    }
+    if (btnClearAi) {
+      btnClearAi.onclick = () => {
+        if (state.aiBranchPlan) delete state.aiBranchPlan[selId];
+        renderLogicReview({ skipSummary: true });
+      };
+    }
     bindTabHelpLinks();
   } catch (e) {
     content().innerHTML = `<p class="detail" style="color:var(--red)">${esc(e.message)}</p>`;
@@ -7259,23 +7163,23 @@ async function renderExport() {
     ])}
     <div data-copilot-assist></div>
     <section class="workbook-workspace workbook-workspace--export">
-      ${renderWorkbookTestcaseBar(rows, "export")}
-      ${renderWorkbookFocusEditor(rows, { language: preview.language || state.exportLanguage, scope: "export" })}
-      <p id="export-row-save-status" class="detail"></p>
       <div class="workbook-review-panel">
         <div class="workbook-review-panel__head">
           <h4 class="workbook-review-panel__title">Review all rows (${rows.length})</h4>
-          <label class="workbook-review-panel__lang detail">View language
-            <select id="export-draft-language">
-              <option value="EN" ${state.exportLanguage === "EN" ? "selected" : ""}>English</option>
-              <option value="JP" ${state.exportLanguage === "JP" ? "selected" : ""}>Japanese</option>
-            </select>
-          </label>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <label class="workbook-review-panel__lang detail">View language
+              <select id="export-draft-language">
+                <option value="EN" ${state.exportLanguage === "EN" ? "selected" : ""}>English</option>
+                <option value="JP" ${state.exportLanguage === "JP" ? "selected" : ""}>Japanese</option>
+              </select>
+            </label>
+            <button type="button" class="btn secondary btn-inline" id="btn-go-to-logic">Edit in Logic &amp; Definition</button>
+          </div>
         </div>
-        <p class="detail workbook-review-panel__hint">Click a row to edit in the editor above. Hover cells for full text.</p>
+        <p class="detail workbook-review-panel__hint">Read-only view. Use Logic &amp; Definition to edit testcase rows.</p>
         ${renderWorkbookTable(rows, {
           language: preview.language || state.exportLanguage,
-          editable: true,
+          editable: false,
           tableId: "export-workbook",
           spreadsheet: true,
         })}
@@ -7343,10 +7247,9 @@ async function renderExport() {
       }
     };
   }
-  bindWorkbookEditors(rows, state.exportLanguage, "#export-row-save-status");
   bindWorkbookColumnResize("export-workbook");
-  bindWorkbookTableRowFocus(rows, "export", "export-workbook", renderExport);
-  bindWorkbookFocusEditor(rows, state.exportLanguage, "export", renderExport, "#export-row-save-status");
+  const btnGoLogic = $("#btn-go-to-logic");
+  if (btnGoLogic) btnGoLogic.onclick = () => showPage("logic-review");
   bindTabHelpLinks();
 }
 
@@ -8890,6 +8793,11 @@ function renderTestCodeProgressPanel(rows) {
   const chunkElapsed = run.last_response_s != null ? `${run.last_response_s}s` : "—";
   const failedChunks = run.failed_chunks || 0;
   const missingWarning = tc.batchMissingSampleWarning || "";
+  const sessionExpired = !!(state.m365Tasks?.sessionExpired);
+  const pausedRun = tc.activeGenerationRun;
+  const isPaused = pausedRun?.active_run?.status === "PAUSED";
+  const remainingCount = pausedRun?.remaining_count ?? 0;
+  const confirmedCount = pausedRun?.confirmed_count ?? 0;
 
   const hasNeedsReview = progress.review > 0;
   const retryNrCount = hasNeedsReview ? progress.review + progress.error : 0;
@@ -8899,9 +8807,13 @@ function renderTestCodeProgressPanel(rows) {
   return `<section class="card alex-testcode-progress-panel" id="testcode-progress-panel">
     <h3 class="alex-testcode-copilot-primary__title">Progress</h3>
     ${missingWarning ? `<p class="tag warning detail">${esc(missingWarning)}</p>` : ""}
+    ${batchRunning ? `<p class="detail" style="color:#2a7a2a;font-size:0.85em">&#10003; Safe to close this tab — generation continues in background.</p>` : ""}
+    ${sessionExpired ? `<p class="tag warning detail">Session expired. Generation may still be running in backend. <a href="/login">Log in again</a> to continue monitoring.</p>` : ""}
+    ${isPaused ? `<p class="tag warning detail">Generation paused (${remainingCount} testcase(s) remaining${confirmedCount ? `, ${confirmedCount} confirmed` : ""}). <button type="button" class="btn btn-inline" id="btn-testcode-resume-generation">Resume remaining</button> <button type="button" class="btn secondary btn-inline" id="btn-testcode-cancel-generation">Cancel</button></p>` : ""}
     <dl class="alex-testcode-context-dl alex-testcode-progress-grid">
       <dt>Total testcase count</dt><dd>${progress.total}</dd>
       <dt>SAVED / NEEDS_REVIEW / ERROR</dt><dd><b>${progress.saved}</b> / <span class="${progress.review > 0 ? "tag warning" : ""}">${progress.review}</span> / <span class="${progress.error > 0 ? "tag error" : ""}">${progress.error}</span></dd>
+      <dt>Confirmed / exportable</dt><dd>${confirmedCount > 0 ? `<b>${confirmedCount}</b>` : (progress.confirmed ?? "—")}</dd>
       <dt>API chunk</dt><dd>${batchRunning ? `${chunkIdx} / ${chunkTotal || "…"}${failedChunks ? ` · <span class="tag warning">${failedChunks} failed</span>` : ""}` : (run.completed_chunks != null ? `${run.completed_chunks} completed${failedChunks ? `, ${failedChunks} failed` : ""}` : "—")}</dd>
       ${batchRunning && currentChunkIds.length ? `<dt>Current chunk TCs</dt><dd><code>${esc(currentChunkIds.join(", "))}</code></dd>` : ""}
       <dt>Chunk elapsed</dt><dd>${chunkElapsed}</dd>
@@ -8917,6 +8829,7 @@ function renderTestCodeProgressPanel(rows) {
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-retry-failed" title="Retry testcases from failed API chunks">${failedChunks > 0 ? `Retry Failed Chunks (${failedChunks})` : "Retry Failed Chunk"}</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-copy-failed-chunk-prompt">Copy Failed Prompt</button>
       <button type="button" class="btn secondary btn-inline" id="btn-testcode-api-debug" title="Debug one testcase API call end-to-end and show full trace">Debug API Call</button>
+      ${batchRunning ? `<button type="button" class="btn secondary btn-inline" id="btn-testcode-cancel-generation">Cancel generation</button>` : ""}
     </div>
     <div id="testcode-api-debug-panel" style="display:none;margin-top:0.5rem;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:0.5rem;font-size:0.8em"></div>
   </section>`;
@@ -11914,6 +11827,20 @@ function bindTestCodeCopilotPrimaryHandlers(rows, statusEl, samples) {
       setTestCodeApiStatus("failed", e.message);
       if (statusEl) statusEl.textContent = e.message;
     }
+  });
+
+  // Resume / cancel generation run (shown when PAUSED or when batch is running)
+  bindClick("#btn-testcode-resume-generation", async () => {
+    await resumeGenerationRun();
+  });
+  bindClick("#btn-testcode-cancel-generation", async () => {
+    await cancelGenerationRun();
+    const running = Object.values(state.m365Tasks.byId || {}).find(
+      (t) => t.status === "running" && t.kind === "code_copilot_batch"
+    );
+    if (running?.task_id) await cancelM365Task(running.task_id);
+    setTestCodeApiStatus("idle");
+    if (statusEl) statusEl.textContent = "Generation cancelled.";
   });
 
   // Track clarification note changes

@@ -419,7 +419,11 @@ def code_write_batch_size(cfg: dict[str, Any] | None) -> int:
 
 _BC_RE = re.compile(r"/\*\*?[\s\S]*?\*/")
 
-_BC_FIELD_KEYS = ("testcase_id", "event", "test design", "given", "when", "then")
+_BC_FIELD_KEYS = ("testcase_id", "test group", "event", "test design", "given", "when", "then")
+
+# When text is "executable" only when it explicitly names igsw_Main_Run or a main-call trigger.
+# Passive conditions like "PWR_STATE = ON" or "evaluate X" are NOT executable.
+_EXECUTABLE_WHEN_RE = re.compile(r"\bigsw_Main_Run\b|\bmain\s+(?:call|function)\b", re.I)
 
 _PLACEHOLDER_FIXTURE_RE = re.compile(r"^TryTo[A-Za-z0-9_]+$")
 _TESTF_FIXTURE_RE = re.compile(r"\bTEST_F\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)")
@@ -485,6 +489,9 @@ def _parse_block_comment_fields(block: str) -> dict[str, str]:
             cur_parts = [val] if val else []
         elif cur_key:
             cur_parts.append(stripped)
+        elif not fields.get("testcase_id") and re.match(r"^[A-Za-z0-9][A-Za-z0-9_\-]*$", stripped):
+            # Bare testcase ID on first line in new comment format (no "testcase_id:" label).
+            fields["testcase_id"] = stripped
 
     _flush()
     return fields
@@ -517,6 +524,14 @@ def _extract_given_when(text: str) -> tuple[str, str]:
         elif re.match(r"^Given\s*:", s, re.I):
             mode = "given"
             val = re.sub(r"^Given\s*:\s*", "", s, flags=re.I).strip()
+            # Split inline ". When: <text>" embedded within the Given value.
+            # E.g. "WMODE_CMD = 1. When: PWR_STATE = ON" → given="WMODE_CMD = 1", when="PWR_STATE = ON"
+            _when_m = re.search(r"\.\s*When\s*:\s*(.+)$", val, re.I)
+            if _when_m:
+                _when_part = _when_m.group(1).strip()
+                val = val[: _when_m.start()].strip()
+                if _when_part:
+                    when.append(_when_part)
             if val:
                 given.append(val)
         elif mode == "given":
@@ -541,22 +556,191 @@ def _extract_then(text: str) -> str:
 
 
 def _compact_block_comment(fields: dict[str, str]) -> str:
-    """Build a compact ``/* … */`` block comment from a fields dict."""
-    _LABELS = [
-        ("testcase_id", "testcase_id"),
-        ("event", "event"),
-        ("test_design", "Test design"),
-        ("given", "Given"),
-        ("when", "When"),
-        ("then", "Then"),
-    ]
+    """Build a compact ``/* … */`` block comment from a fields dict.
+
+    Format:
+        /*
+         * TC_IMP_007
+         * Power will be reset to off
+         * Power is ON and the accident happened make it to reset
+         * Given: WMODE_CMD = 1
+         * When: PWR_STATE = ON
+         * Then: PWR_STATE = 1
+         */
+
+    Test Group and Event are emitted as plain values (no labels).
+    If Event is identical to Test Group or blank, the Event line is omitted.
+    No ``testcase_id:`` label, no ``Test design:`` line.
+    """
     lines = ["/*"]
-    for key, label in _LABELS:
+    cid = str(fields.get("testcase_id") or "").strip()
+    if cid:
+        lines.append(f" * {cid}")
+    tg = str(fields.get("test_group") or "").strip()
+    ev = str(fields.get("event") or "").strip()
+    if tg:
+        lines.append(f" * {tg}")
+    if ev and ev != tg:
+        lines.append(f" * {ev}")
+    for key in ("given", "when", "then"):
         val = str(fields.get(key) or "").strip()
         if val:
-            lines.append(f" * {label}: {val}")
+            lines.append(f" * {key.capitalize()}: {val}")
     lines.append(" */")
     return "\n".join(lines)
+
+
+def _check_cpp_statement_complete(
+    lines: list[str], start: int, *, max_lookahead: int = 12
+) -> tuple[bool, int]:
+    """Return (is_complete, end_idx) for a C++ statement starting at lines[start].
+
+    A statement is complete when all parentheses are balanced AND the combined
+    uncommented text ends with a semicolon.  end_idx is one past the last line
+    consumed (start+1 when incomplete, so only the initiating line is removed).
+    """
+    depth = 0
+    for j in range(start, min(start + max_lookahead, len(lines))):
+        uncommented = re.sub(r"//[^\n]*", "", lines[j].rstrip("\n"))
+        for ch in uncommented:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+        if depth == 0 and uncommented.rstrip().endswith(";"):
+            return True, j + 1
+    return False, start + 1
+
+
+def sanitize_generated_cpp_body(
+    body: str,
+    *,
+    has_explicit_when: bool = False,
+    mapped_output_signals: frozenset[str] | None = None,
+) -> str:
+    """Sanitize a TEST_F inner body for syntax and policy safety after generation.
+
+    Applied to ``body[head_end:]`` (everything after the opening ``{``).
+
+    ``mapped_output_signals`` — upper-case signal names that have explicit
+    condition/code entries in project memory.  Rule 5 is skipped for these
+    signals so a memory-mapped ``EXPECT_THAT(PWR_STATE, Eq(1u))`` is never
+    replaced with an ALEX_REVIEW comment.
+
+    Rules applied in order per line:
+
+    1. **Markdown bullets** — lines starting with ``- `` (not ``//``) are
+       converted to ``// comment``.  Bullets referencing ``igsw_Main_Run``
+       are removed entirely when ``has_explicit_when`` is False.
+    2. **Bare igsw_Main_Run() call** — removed when ``has_explicit_when``
+       is False.  The regex-based ``// When:`` replacement in
+       ``normalize_testf_snippet`` handles the common ``// When:\\nigsw_Main_Run()``
+       pattern; this rule catches any remaining standalone calls.
+    3. **Incomplete EXPECT_CALL / EXPECT_THAT** — blocks whose parentheses
+       are not balanced within 12 look-ahead lines are removed and replaced
+       with ``// ALEX_REVIEW: <mapping> (incomplete ... removed)``.
+    4. **Orphaned chained calls** (``.WillRepeatedly``, ``.WillOnce``, ``DoAll``)
+       that appear without a preceding complete EXPECT_CALL in the output
+       are removed (they are continuations of an already-removed incomplete block).
+    5. **Raw ALL_CAPS signal in EXPECT_THAT** — replaced with ALEX_REVIEW
+       *unless* the signal is listed in ``mapped_output_signals``.
+    """
+    _mapped = mapped_output_signals or frozenset()
+    lines = body.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        lstripped = raw.lstrip()
+        content = lstripped.rstrip("\n").rstrip()
+        indent = raw[: len(raw) - len(lstripped)]
+
+        # Rule 1: markdown bullet inside C++ body
+        if content.startswith("- ") and not content.startswith("//"):
+            bullet_text = content[2:].strip()
+            if not has_explicit_when and re.search(r"\bigsw_Main_Run\b", bullet_text):
+                i += 1
+                continue
+            out.append(f"{indent}// {bullet_text}\n")
+            i += 1
+            continue
+
+        # Rule 2: bare igsw_Main_Run() call without explicit When
+        if not has_explicit_when and not content.startswith("//"):
+            if re.match(r"igsw_Main_Run\s*\(", content):
+                i += 1
+                continue
+
+        # Rule 7: // When: igsw_Main_Run() comment without testspec executable authorization.
+        # Copilot may generate // When: igsw_Main_Run() from style examples or project memory.
+        # If testspec has no executable When, replace with the policy placeholder.
+        if not has_explicit_when and re.match(r"//\s*When\s*:\s*", content, re.I):
+            _when_val = re.sub(r"//\s*When\s*:\s*", "", content, flags=re.I).strip()
+            if _when_val and _EXECUTABLE_WHEN_RE.search(_when_val):
+                out.append(f"{indent}// When: no explicit action in testspec\n")
+                i += 1
+                continue
+
+        # Rule 3: incomplete EXPECT_CALL / EXPECT_THAT block
+        # Rule 5: syntactically complete EXPECT_THAT whose first argument is a raw ALL_CAPS
+        #         signal identifier — these are read directly without an RTE accessor, which
+        #         is invalid; replace with an ALEX_REVIEW so the engineer adds the accessor.
+        expect_m = re.match(r"(EXPECT_CALL|EXPECT_THAT)\s*\(", content)
+        if expect_m and not content.startswith("//"):
+            is_complete, end_i = _check_cpp_statement_complete(lines, i)
+            kind = expect_m.group(1)
+            if is_complete:
+                if kind == "EXPECT_THAT":
+                    raw_sig_m = re.match(r"EXPECT_THAT\s*\(\s*([A-Z][A-Z0-9_]+)\s*,", content)
+                    if raw_sig_m:
+                        signal = raw_sig_m.group(1)
+                        # Rule 5: skip replacement when signal has an explicit condition/code
+                        # entry in project memory — the EXPECT_THAT is memory-authorised.
+                        if signal in _mapped:
+                            out.extend(lines[i:end_i])
+                            i = end_i
+                            continue
+                        out.append(
+                            f"{indent}// ALEX_REVIEW: output mapping missing for {signal}"
+                            f" (raw signal in EXPECT_THAT — add RTE accessor to project memory)\n"
+                        )
+                        i = end_i
+                        continue
+                out.extend(lines[i:end_i])
+                i = end_i
+            else:
+                sig_m = re.search(
+                    r"EXPECT_CALL\s*\(\s*\w+\s*,\s*(\w+)|EXPECT_THAT\s*\(\s*(\w+)",
+                    content,
+                )
+                signal = "unknown"
+                if sig_m:
+                    signal = sig_m.group(1) or sig_m.group(2) or "unknown"
+                if kind == "EXPECT_CALL":
+                    msg = f"input mapping missing for {signal} (incomplete EXPECT_CALL removed)"
+                else:
+                    msg = f"output mapping incomplete for {signal} (incomplete EXPECT_THAT removed)"
+                out.append(f"{indent}// ALEX_REVIEW: {msg}\n")
+                i = end_i
+            continue
+
+        # Rule 4: orphaned chained call without preceding EXPECT_CALL in output.
+        # Only keep if the immediately preceding output line is a real (non-comment)
+        # EXPECT_CALL line; ALEX_REVIEW comments mention EXPECT_CALL in their text
+        # and must not be mistaken for a real call.
+        if re.match(r"\.(WillRepeatedly|WillOnce|DoAll)\s*\(", content) and not content.startswith("//"):
+            last_out = (out[-1] if out else "").strip()
+            is_real_expect_call = (
+                not last_out.startswith("//") and re.search(r"\bEXPECT_CALL\b", last_out) is not None
+            )
+            if not is_real_expect_call:
+                i += 1
+                continue
+
+        out.append(raw)
+        i += 1
+
+    return "".join(out)
 
 
 def _fill_section_labels(code: str, given: str, when: str, then: str) -> str:
@@ -572,7 +756,12 @@ def _fill_section_labels(code: str, given: str, when: str, then: str) -> str:
     return re.compile(r"([ \t]*)//\s*(Given|When|Then)\s*:\s*$", re.MULTILINE).sub(_rep, code)
 
 
-def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> str:
+def normalize_testf_snippet(
+    snippet: str,
+    row: dict[str, Any] | None = None,
+    *,
+    memory_content: str = "",
+) -> str:
     """Normalize comment style in a generated TEST_F snippet.
 
     - If a design block comment (containing testcase_id/event/Given/When/Then)
@@ -583,12 +772,24 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
     - Code body (EXPECT_CALL, igsw_Main_Run, EXPECT_THAT) is not modified.
     - ``@alex:begin`` / ``@alex:spec_hash`` lines (if already present) are
       preserved above the block comment.
+    - ``memory_content`` — raw project memory markdown.  When provided, output
+      signals with an explicit condition/code entry are preserved through the
+      sanitizer (Rule 5 is skipped for those signals).
 
     Returns the snippet unchanged when there is nothing to normalize.
     """
     row = row or {}
     if not snippet:
         return snippet
+
+    # Compute which output signals are memory-mapped (exempt from sanitizer Rule 5).
+    _mapped_out_sigs: frozenset[str] = frozenset()
+    if memory_content:
+        from web.project_testcode_memory import get_mapped_output_signals
+        _row_eo_for_map = str(row.get("expected_output") or "").strip()
+        if _row_eo_for_map:
+            _mapped_out_sigs = get_mapped_output_signals(memory_content, _row_eo_for_map)
+
     testf_m = re.search(r"\bTEST_?F?\s*\(", snippet)
     if not testf_m:
         return snippet
@@ -624,8 +825,20 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
             if f2.get("testcase_id") or f2.get("given"):
                 fields = f2
 
-    # Nothing to normalize if no design block comment found anywhere
+    # No design block comment found — still apply body sanitizer for policy safety.
     if not inner_bc and not pre_bc:
+        _row_ei0 = str(row.get("expected_input") or "").strip()
+        _has_exec_when0 = False
+        if _row_ei0:
+            _, _rw0 = _extract_given_when(_row_ei0)
+            _has_exec_when0 = bool(_rw0) and bool(_EXECUTABLE_WHEN_RE.search(_rw0))
+        sanitized_inner = sanitize_generated_cpp_body(
+            body[head_end:],
+            has_explicit_when=_has_exec_when0,
+            mapped_output_signals=_mapped_out_sigs,
+        )
+        if sanitized_inner != body[head_end:]:
+            return pre + body[:head_end] + sanitized_inner
         return snippet
 
     # Rebuild fields from row metadata — row spec is authoritative when available.
@@ -634,14 +847,20 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
     # Operation is NAMESPACE METADATA ONLY — never used as When.
     _row_cid = str(row.get("candidate_id") or row.get("id") or "").strip()
     _row_event = str(row.get("event") or row.get("test_function") or "").strip()
+    _row_test_group = str(row.get("test_group") or "").strip()
     _row_ei = str(row.get("expected_input") or "").strip()
     _row_eo = str(row.get("expected_output") or "").strip()
 
     if _row_cid:
         fields["testcase_id"] = _row_cid
+    if _row_test_group:
+        fields["test_group"] = _row_test_group
     if _row_event:
         fields["event"] = _row_event
-    _has_explicit_when = False
+    _has_explicit_when = False    # any When text found in spec
+    _has_executable_when = False  # When text implies an actual function call
+    # when_source: TESTSPEC_EXPLICIT when row expected_input provides When text; NONE otherwise.
+    # Project memory / style example / default template When text is not authoritative.
     if _row_ei:
         _rg, _rw = _extract_given_when(_row_ei)
         if _rg:
@@ -649,22 +868,17 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
         if _rw:
             fields["when"] = _rw
             _has_explicit_when = True
+            _has_executable_when = bool(_EXECUTABLE_WHEN_RE.search(_rw))
         else:
             # No explicit When in spec — clear any Operation-derived When from generated comment.
             fields["when"] = ""
+    else:
+        # No expected_input at all — block-comment-derived When text is not testspec-authoritative.
+        fields["when"] = ""
     if _row_eo:
         _rt = _extract_then(_row_eo)
         if _rt:
             fields["then"] = _rt
-
-    # Generate test_design from spec data if not already present
-    if not fields.get("test_design"):
-        _g1 = str(fields.get("given") or "").split(";")[0].strip()[:60].rstrip(".")
-        _t1 = str(fields.get("then") or "").split(";")[0].strip()[:80].rstrip(".")
-        if _t1 and _g1:
-            fields["test_design"] = f"Verify that {_t1} when {_g1}."
-        elif _t1:
-            fields["test_design"] = f"Verify that {_t1}."
 
     canonical = _compact_block_comment(fields)
 
@@ -678,19 +892,25 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
         inner_clean = re.sub(r"^(\s*\n)+", "\n", inner_clean)
         body = body[:head_end] + inner_clean
 
-    # Strip // When: body comment lines that were generated from Operation metadata.
-    # Operation is namespace-only — any // When: in the body is invalid unless the spec
-    # has an explicit executable When field.
-    if not _has_explicit_when:
-        inner_body = body[head_end:]
-        # Remove "// When: ..." line and the igsw_Main_Run(); call immediately following it
-        # (both are injected from Operation + default_main_function, not from executable spec).
+    # The testspec row is the sole authority for the When section.
+    # Unconditionally overwrite any Copilot-generated // When: line (from style examples,
+    # project memory, or default templates) with the canonical testspec When text.
+    # Also removes any trailing bare igsw_Main_Run(); call that follows the comment.
+    _when_auth = str(fields.get("when") or "")
+    inner_body = body[head_end:]
+    if _when_auth:
         inner_body = re.sub(
-            r"[ \t]*//[ \t]*When\s*:[^\n]*\n(?:[ \t]*igsw_Main_Run\s*\([^)]*\)\s*;\s*\n)?",
-            "",
+            r"([ \t]*)//[ \t]*When\s*:[^\n]*\n(?:[ \t]*igsw_Main_Run\s*\([^)]*\)\s*;\s*\n)?",
+            lambda m: f"{m.group(1)}// When: {_when_auth}\n",
             inner_body,
         )
-        body = body[:head_end] + inner_body
+    else:
+        inner_body = re.sub(
+            r"([ \t]*)//[ \t]*When\s*:[^\n]*\n(?:[ \t]*igsw_Main_Run\s*\([^)]*\)\s*;\s*\n)?",
+            r"\1// When: no explicit action in testspec\n",
+            inner_body,
+        )
+    body = body[:head_end] + inner_body
 
     # Fill empty section labels
     body = _fill_section_labels(
@@ -700,15 +920,43 @@ def normalize_testf_snippet(snippet: str, row: dict[str, Any] | None = None) -> 
         str(fields.get("then") or ""),
     )
 
-    # Reassemble: preserve @alex lines, then canonical block, then TEST_F
-    alex_lines: list[str] = []
-    other_lines: list[str] = []
-    for line in pre.splitlines():
-        (alex_lines if line.strip().startswith("// @alex:") else other_lines).append(line)
+    # When text exists but is a passive condition (not an executable call): add ALEX_REVIEW
+    # after the // When: line so engineers know no action mapping is needed.
+    if _has_explicit_when and not _has_executable_when:
+        inner_body = body[head_end:]
+        inner_body = re.sub(
+            r"([ \t]*)//\s*When\s*:([^\n]*)\n",
+            lambda m: (
+                f"{m.group(1)}// When:{m.group(2)}\n"
+                f"{m.group(1)}// ALEX_REVIEW: no executable action mapping for"
+                f" When condition:{m.group(2)}\n"
+            ),
+            inner_body,
+            count=1,
+        )
+        body = body[:head_end] + inner_body
+
+    # Sanitize inner body: remove markdown bullets, bare igsw_Main_Run calls,
+    # incomplete EXPECT_CALL blocks, and raw-signal EXPECT_THAT calls.
+    # Memory-mapped output signals are exempt from the raw-signal Rule 5 replacement.
+    inner_body = body[head_end:]
+    inner_body = sanitize_generated_cpp_body(
+        inner_body,
+        has_explicit_when=_has_executable_when,
+        mapped_output_signals=_mapped_out_sigs,
+    )
+    body = body[:head_end] + inner_body
+
+    # Collapse 3+ consecutive blank lines in the TEST_F body to at most one blank line.
+    inner_body = body[head_end:]
+    inner_body = re.sub(r"\n{3,}", "\n\n", inner_body)
+    body = body[:head_end] + inner_body
+
+    # Reassemble: drop @alex: internal markers (they are not part of the
+    # formatted output — save_draft re-adds them via wrap_markers at persist time).
+    other_lines = [ln for ln in pre.splitlines() if not ln.strip().startswith("// @alex:")]
 
     parts: list[str] = []
-    if alex_lines:
-        parts.append("\n".join(alex_lines))
     if other_lines:
         parts.append("\n".join(ln for ln in other_lines if ln.strip()))
     parts.append(canonical)
