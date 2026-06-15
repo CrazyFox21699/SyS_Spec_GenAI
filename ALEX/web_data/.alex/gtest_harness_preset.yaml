@@ -1,0 +1,23 @@
+kind: alex_gtest_preset
+harness:
+  fixture_class: PowerModeTest
+  inputs_member: in
+  outputs_member: out
+  state_member: state
+  state_enum: PowerModeState
+  evaluate_fn: EvaluatePowerMode
+  include_header: '#include <gtest/gtest.h>'
+  helpers:
+    set_signal: SetSignal
+    advance_time: RunForMs
+code_variable_map: {}
+code_style_samples: []
+exported_at: '2026-05-25T16:39:13+00:00'
+project_memory:
+  io_variable_map: {}
+  signal_roles: {}
+  shared_preconditions: []
+  verification_patterns: []
+  copilot_hints:
+    prefer_reuse_patterns: true
+    max_patterns_in_prompt: 5
